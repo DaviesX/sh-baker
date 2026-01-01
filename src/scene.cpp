@@ -43,6 +43,9 @@ RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
         3 * sizeof(uint32_t),  // Stride for one triangle (3 indices)
         geo.indices.size() / 3);
 
+    rtcSetGeometryUserData(rtc_geo, (void*)&geo);
+
+    rtcAttachGeometry(rtc_scene, rtc_geo);
     rtcCommitGeometry(rtc_geo);
 
     // rtcAttachGeometry increments the ref count, so we can release our local
