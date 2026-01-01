@@ -34,15 +34,13 @@ struct Material {
 
 // --- Geometry ---
 struct Geometry {
-  uint32_t geometryID = 0;  // The ID returned by Embree
-
   std::vector<Eigen::Vector3f> vertices;
   std::vector<Eigen::Vector3f> normals;
   std::vector<Eigen::Vector2f> uvs;
 
   std::vector<uint32_t> indices;
 
-  uint32_t materialID = 0;  // Index into Scene::materials
+  uint32_t material_id = 0;  // Index into Scene::materials
   Eigen::Affine3f transform = Eigen::Affine3f::Identity();
 };
 
@@ -76,7 +74,7 @@ struct Scene {
 };
 
 // Builds an Embree BVH from the scene geometries.
-RTCScene BuildBVH(Scene& scene, RTCDevice device);
+RTCScene BuildBVH(const Scene& scene, RTCDevice device);
 
 }  // namespace sh_baker
 

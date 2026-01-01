@@ -4,6 +4,7 @@
 #include <embree4/rtcore.h>
 
 #include <Eigen/Dense>
+#include <optional>
 
 namespace sh_baker {
 
@@ -14,9 +15,16 @@ struct Ray {
   float tfar = std::numeric_limits<float>::infinity();
 };
 
-// Returns true if the ray is occluded by the scene.
+struct Occlusion {
+  Eigen::Vector3f position;
+  Eigen::Vector2f uv;
+  Eigen::Vector3f normal;
+  int material_id;
+};
+
+// Returns occlusion information if the ray hits the scene.
 // "scene" must be a committed RTCScene.
-bool IsOccluded(RTCScene scene, const Ray& ray);
+std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray);
 
 }  // namespace sh_baker
 
