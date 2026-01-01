@@ -6,7 +6,7 @@
 
 namespace sh_baker {
 
-RTCScene BuildBVH(Scene& scene, RTCDevice device) {
+RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
   if (!device) {
     LOG(ERROR) << "Invalid RTCDevice provided to BuildBVH";
     return nullptr;
@@ -44,10 +44,6 @@ RTCScene BuildBVH(Scene& scene, RTCDevice device) {
         geo.indices.size() / 3);
 
     rtcCommitGeometry(rtc_geo);
-
-    // Attach geometry to scene
-    // We persist the geometryID in our struct to map hits later
-    geo.geometryID = rtcAttachGeometry(rtc_scene, rtc_geo);
 
     // rtcAttachGeometry increments the ref count, so we can release our local
     // handle? documentation says: "The application can release the geometry

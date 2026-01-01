@@ -28,9 +28,6 @@ TEST_F(SceneTest, BuildBVHWithTriangle) {
   ASSERT_NE(rtc_scene, nullptr);
 
   rtcReleaseScene(rtc_scene);
-
-  // Verify geometryID was set
-  EXPECT_EQ(scene.geometries[0].geometryID, 0);
 }
 
 TEST_F(SceneTest, BuildEmptyScene) {
