@@ -52,7 +52,7 @@ void ProcessPrimitive(const tinygltf::Model& model,
                       const Eigen::Affine3f& transform, Scene* scene) {
   Geometry geo;
   geo.transform = transform;
-  geo.materialID = std::max(0, primitive.material);  // Default to 0 if -1
+  geo.material_id = std::max(0, primitive.material);  // Default to 0 if -1
 
   // Get Position
   if (primitive.attributes.find("POSITION") == primitive.attributes.end()) {
