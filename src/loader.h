@@ -1,9 +1,8 @@
-#ifndef SH_BAKER_SRC_IO_H_
-#define SH_BAKER_SRC_IO_H_
+#ifndef SH_BAKER_SRC_LOADER_H_
+#define SH_BAKER_SRC_LOADER_H_
 
 #include <filesystem>
 #include <optional>
-#include <string>
 
 #include "scene.h"
 
@@ -15,4 +14,4 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file);
 
 }  // namespace sh_baker
 
-#endif  // SH_BAKER_SRC_IO_H_
+#endif  // SH_BAKER_SRC_LOADER_H_

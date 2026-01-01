@@ -42,3 +42,6 @@
 
 # ignore build directory
 build
+
+# ignore cache directory
+.cache
