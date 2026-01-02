@@ -35,7 +35,7 @@ TEST(LoaderTest, LoadCube) {
   // Vertices might be 24 or 36 depending on flat shading export
   EXPECT_GT(geo.vertices.size(), 0);
   EXPECT_EQ(geo.vertices.size(), geo.normals.size());
-  EXPECT_EQ(geo.vertices.size(), geo.uvs.size());
+  EXPECT_EQ(geo.vertices.size(), geo.texture_uvs.size());
 
   // Check material
   ASSERT_EQ(scene->materials.size(), 1);

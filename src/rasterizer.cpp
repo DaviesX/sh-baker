@@ -54,9 +54,9 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
       uint32_t idx1 = geo.indices[i * 3 + 1];
       uint32_t idx2 = geo.indices[i * 3 + 2];
 
-      Eigen::Vector2f uv0 = geo.uvs[idx0];
-      Eigen::Vector2f uv1 = geo.uvs[idx1];
-      Eigen::Vector2f uv2 = geo.uvs[idx2];
+      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
       // Bounding box in UV space
       float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});

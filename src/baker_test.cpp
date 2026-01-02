@@ -16,7 +16,8 @@ TEST(BakerTest, BakeSimpleQuad) {
   Geometry quad;
   quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
-  quad.uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
   quad.indices = {0, 1, 2, 0, 2, 3};
   quad.material_id = 0;
 

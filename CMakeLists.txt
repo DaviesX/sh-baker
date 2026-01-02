@@ -17,6 +17,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tinygltf)
 
+# xatlas
+FetchContent_Declare(
+  xatlas
+  GIT_REPOSITORY https://github.com/jpcy/xatlas.git
+  GIT_TAG        master
+)
+FetchContent_MakeAvailable(xatlas)
+
 # glog
 find_package(glog REQUIRED)
 
@@ -50,6 +58,8 @@ set(SOURCES
     src/sh_coeffs.cpp
     src/saver.cpp
     src/baker.cpp
+    src/atlas.cpp
+    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
     src/rasterizer.cpp
     src/material.cpp
     src/dilation.cpp
@@ -76,6 +86,7 @@ target_include_directories(sh_baker PRIVATE
     src 
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
+    ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
 target_link_libraries(sh_baker PRIVATE
@@ -111,12 +122,16 @@ add_executable(sh_baker_test
     src/dilation.cpp
     src/material_test.cpp
     src/material.cpp
+    src/atlas_test.cpp
+    src/atlas.cpp
+    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
 )
 
 target_include_directories(sh_baker_test PRIVATE 
     src 
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
+    ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
 target_link_libraries(sh_baker_test PRIVATE

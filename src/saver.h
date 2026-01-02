@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "scene.h"
 #include "sh_coeffs.h"
 
 namespace sh_baker {
@@ -20,6 +21,11 @@ struct SHTexture {
 // Returns true on success.
 bool SaveSHLightMap(const SHTexture& sh_texture,
                     const std::filesystem::path& path);
+
+// Saves the Scene to a glTF file.
+// Serializes geometry with both texture_uvs (TEXCOORD_0) and lightmap_uvs
+// (TEXCOORD_1).
+bool SaveScene(const Scene& scene, const std::filesystem::path& path);
 
 }  // namespace sh_baker
 
