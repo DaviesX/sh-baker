@@ -51,6 +51,7 @@ set(SOURCES
     src/saver.cpp
     src/baker.cpp
     src/rasterizer.cpp
+    src/material.cpp
     src/dilation.cpp
     src/tinyexr_impl.cpp
     src/miniz.c
@@ -108,6 +109,8 @@ add_executable(sh_baker_test
     src/rasterizer.cpp
     src/dilation_test.cpp
     src/dilation.cpp
+    src/material_test.cpp
+    src/material.cpp
 )
 
 target_include_directories(sh_baker_test PRIVATE 
