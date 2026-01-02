@@ -102,4 +102,13 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
   return surface_map;
 }
 
+std::vector<uint8_t> CreateValidityMask(
+    const std::vector<SurfacePoint>& points) {
+  std::vector<uint8_t> mask(points.size());
+  for (size_t i = 0; i < points.size(); ++i) {
+    mask[i] = points[i].valid ? 1 : 0;
+  }
+  return mask;
+}
+
 }  // namespace sh_baker

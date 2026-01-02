@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "rasterizer.h"
 #include "sh_coeffs.h"
 
 namespace sh_baker {
@@ -41,18 +42,30 @@ TEST(BakerTest, BakeSimpleQuad) {
   scene.sky.sun_color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
   scene.sky.sun_direction = Eigen::Vector3f(0, 0, 1);
 
+  // Create dummy surface points
+  std::vector<SurfacePoint> surface_points(16);  // 4x4
+  RasterConfig raster_config;
+  raster_config.width = 4;
+  raster_config.height = 4;
+
+  // Center pixel (1, 1) -> index 5
+  // UV 0.375, 0.375. Position -0.25, -0.25, 0. Normal 0, 0, 1.
+  surface_points[5].valid = true;
+  surface_points[5].position = Eigen::Vector3f(-0.25f, -0.25f, 0.0f);
+  surface_points[5].normal = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+  // Tangents
+  surface_points[5].tangent = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+  surface_points[5].bitangent = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+
   BakeConfig config;
-  config.width = 4;
-  config.height = 4;
   config.samples = 64;
   config.bounces = 0;  // Direct light only
 
-  SHTexture output = BakeSHLightMap(scene, config);
+  SHTexture output =
+      BakeSHLightMap(scene, surface_points, raster_config, config);
 
   // Check center pixel
-  // Index 5 (1,1) or similar.
-  // We expect non-zero result.
-  SHCoeffs result = output.pixels[0];
+  SHCoeffs result = output.pixels[5];
   EXPECT_GT(result.coeffs[0].x(), 0.1f);
 }
 

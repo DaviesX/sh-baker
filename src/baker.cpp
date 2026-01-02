@@ -149,28 +149,25 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
 
 }  // namespace
 
-SHTexture BakeSHLightMap(const Scene& scene, const BakeConfig& config) {
+SHTexture BakeSHLightMap(const Scene& scene,
+                         const std::vector<SurfacePoint>& surface_points,
+                         const RasterConfig& raster_config,
+                         const BakeConfig& config) {
   SHTexture output;
-  output.width = config.width;
-  output.height = config.height;
-  output.pixels.resize(config.width * config.height);
+  output.width = raster_config.width;
+  output.height = raster_config.height;
+  output.pixels.resize(raster_config.width * raster_config.height);
 
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
-
-  // Rasterize UVs
-  RasterConfig raster_config;
-  raster_config.width = config.width;
-  raster_config.height = config.height;
-  std::vector<SurfacePoint> surface_map = RasterizeScene(scene, raster_config);
 
   // Bake
   std::mt19937 rng(12345);
 
   float inv_pdf_uniform = 2.0f * M_PI;
 
-  for (int idx = 0; idx < surface_map.size(); ++idx) {
-    SurfacePoint& sp = surface_map[idx];
+  for (int idx = 0; idx < surface_points.size(); ++idx) {
+    const SurfacePoint& sp = surface_points[idx];
     if (!sp.valid) continue;
 
     SHCoeffs sh_accum;

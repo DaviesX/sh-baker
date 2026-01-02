@@ -29,6 +29,10 @@ struct SurfacePoint {
 std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                                          const RasterConfig& config);
 
+// Extracts a validity mask (1 for valid, 0 for invalid) from surface points.
+std::vector<uint8_t> CreateValidityMask(
+    const std::vector<SurfacePoint>& points);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_RASTERIZER_H_

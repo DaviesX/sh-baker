@@ -38,4 +38,19 @@ TEST(RasterizerTest, RasterizeQuad) {
   EXPECT_NEAR(result[5].normal.z(), 1.0f, 0.001f);
 }
 
+TEST(RasterizerTest, ValidityMask) {
+  // Create dummy points
+  std::vector<SurfacePoint> points(3);
+  points[0].valid = true;
+  points[1].valid = false;
+  points[2].valid = true;
+
+  std::vector<uint8_t> mask = CreateValidityMask(points);
+
+  EXPECT_EQ(mask.size(), 3);
+  EXPECT_EQ(mask[0], 1);
+  EXPECT_EQ(mask[1], 0);
+  EXPECT_EQ(mask[2], 1);
+}
+
 }  // namespace sh_baker
