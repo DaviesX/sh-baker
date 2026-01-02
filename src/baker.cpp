@@ -1,0 +1,210 @@
+#include "baker.h"
+
+#include <embree4/rtcore.h>
+#include <glog/logging.h>
+
+#include <algorithm>
+#include <cmath>
+#include <random>
+
+#include "occlusion.h"
+#include "rasterizer.h"
+
+namespace sh_baker {
+
+namespace {
+
+// Uniform sample on hemisphere
+Eigen::Vector3f SampleHemisphereUniform(float u1, float u2) {
+  float r = std::sqrt(1.0f - u1 * u1);
+  float phi = 2.0f * M_PI * u2;
+  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
+}
+
+Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv) {
+  // Simple diffuse only + emission
+  // Retrieve albedo from texture if present
+  Eigen::Vector3f albedo(0.8f, 0.8f, 0.8f);  // Default gray
+  if (!mat.albedo.pixel_data.empty()) {
+    // Bilinear sample or nearest? Nearest is fine for now.
+    int tx = std::clamp((int)(uv.x() * mat.albedo.width), 0,
+                        (int)mat.albedo.width - 1);
+    int ty = std::clamp((int)(uv.y() * mat.albedo.height), 0,
+                        (int)mat.albedo.height - 1);
+    int idx = (ty * mat.albedo.width + tx) * mat.albedo.channels;
+    float r = mat.albedo.pixel_data[idx] / 255.0f;
+    float g = mat.albedo.pixel_data[idx + 1] / 255.0f;
+    float b = mat.albedo.pixel_data[idx + 2] / 255.0f;
+    albedo = Eigen::Vector3f(r, g, b);
+  }
+
+  // Emission
+  if (mat.emission_intensity > 0.0f) {
+    return albedo * mat.emission_intensity;
+  }
+  return albedo;
+}
+
+// Check alpha for transparency
+float GetAlpha(const Material& mat, const Eigen::Vector2f& uv) {
+  if (mat.albedo.pixel_data.empty()) return 1.0f;
+  if (mat.albedo.channels < 4) return 1.0f;
+
+  int tx = std::clamp((int)(uv.x() * mat.albedo.width), 0,
+                      (int)mat.albedo.width - 1);
+  int ty = std::clamp((int)(uv.y() * mat.albedo.height), 0,
+                      (int)mat.albedo.height - 1);
+  int idx = (ty * mat.albedo.width + tx) * mat.albedo.channels;
+  return mat.albedo.pixel_data[idx + 3] / 255.0f;
+}
+
+// Trace path using Occlusion helper
+Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
+                      const Eigen::Vector3f& origin, const Eigen::Vector3f& dir,
+                      int depth, int max_depth, std::mt19937& rng) {
+  if (depth > max_depth) return Eigen::Vector3f::Zero();
+
+  Ray ray;
+  ray.origin = origin;
+  ray.direction = dir;
+  ray.tnear = 0.001f;
+
+  std::optional<Occlusion> occ = FindOcclusion(rtc_scene, ray);
+
+  if (!occ.has_value()) {
+    // Sky
+    float sun = std::max(0.0f, dir.dot(scene.sky.sun_direction));
+    // Blazing sun + ambient
+    return scene.sky.sun_color * scene.sky.sun_intensity * sun +
+           Eigen::Vector3f(0.05f, 0.05f, 0.05f);  // ambient
+  }
+
+  // Hit surface
+  const Material& mat = scene.materials[occ->material_id];
+  float alpha = GetAlpha(mat, occ->uv);
+
+  Eigen::Vector3f color = Eigen::Vector3f::Zero();
+
+  // If alpha < 1.0, continue ray
+  if (alpha < 1.0f) {
+    // Transmission
+    // New origin is hit position + epsilon * dir?
+    // FindOcclusion returns exact hit position.
+    Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
+    Eigen::Vector3f transmission =
+        Trace(rtc_scene, scene, hit_pos, dir, depth, max_depth, rng);
+
+    color += (1.0f - alpha) * transmission;
+  }
+
+  if (alpha > 0.0f) {
+    // Evaluate surface
+    // Emission
+    if (mat.emission_intensity > 0.0f) {
+      color += alpha * EvalMaterial(mat, occ->uv);
+    } else {
+      // Reflection (Lambertian)
+      // Normal from occlusion
+      Eigen::Vector3f hit_normal = occ->normal;
+
+      // Cosine weighted sample for Lambertian
+      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+      float r1 = dist(rng);
+      float r2 = dist(rng);
+
+      // Cosine sample hemisphere
+      float phi = 2.0f * M_PI * r1;
+      float theta = std::acos(std::sqrt(r2));
+      float sin_theta = std::sin(theta);
+      Eigen::Vector3f bounce_dir_local(std::cos(phi) * sin_theta,
+                                       std::sin(phi) * sin_theta,
+                                       std::cos(theta));  // Z-up local
+
+      // Basis
+      Eigen::Vector3f t, b;
+      if (std::abs(hit_normal.x()) > std::abs(hit_normal.z())) {
+        t = Eigen::Vector3f(-hit_normal.y(), hit_normal.x(), 0.0f);
+      } else {
+        t = Eigen::Vector3f(0.0f, -hit_normal.z(), hit_normal.y());
+      }
+      t.normalize();
+      b = hit_normal.cross(t);
+
+      Eigen::Vector3f bounce_dir = t * bounce_dir_local.x() +
+                                   b * bounce_dir_local.y() +
+                                   hit_normal * bounce_dir_local.z();
+
+      Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
+
+      Eigen::Vector3f incoming = Trace(rtc_scene, scene, hit_pos, bounce_dir,
+                                       depth + 1, max_depth, rng);
+
+      Eigen::Vector3f albedo = EvalMaterial(mat, occ->uv);
+      color += alpha * albedo.cwiseProduct(incoming);
+    }
+  }
+
+  return color;
+}
+
+}  // namespace
+
+SHTexture BakeSHLightMap(const Scene& scene, const BakeConfig& config) {
+  SHTexture output;
+  output.width = config.width;
+  output.height = config.height;
+  output.pixels.resize(config.width * config.height);
+
+  RTCDevice device = rtcNewDevice(nullptr);
+  RTCScene rtc_scene = BuildBVH(scene, device);
+
+  // Rasterize UVs
+  RasterConfig raster_config;
+  raster_config.width = config.width;
+  raster_config.height = config.height;
+  std::vector<SurfacePoint> surface_map = RasterizeScene(scene, raster_config);
+
+  // Bake
+  std::mt19937 rng(12345);
+
+  float inv_pdf_uniform = 2.0f * M_PI;
+
+  for (int idx = 0; idx < surface_map.size(); ++idx) {
+    SurfacePoint& sp = surface_map[idx];
+    if (!sp.valid) continue;
+
+    SHCoeffs sh_accum;
+
+    // Offset position to avoid self-intersection
+    Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
+
+    for (int s = 0; s < config.samples; ++s) {
+      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+      float u1 = dist(rng);
+      float u2 = dist(rng);
+
+      Eigen::Vector3f dir_local = SampleHemisphereUniform(u1, u2);  // Z is up
+
+      // Transform to World
+      Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
+                                  sp.bitangent * dir_local.y() +
+                                  sp.normal * dir_local.z();
+
+      Eigen::Vector3f Li =
+          Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces, rng);
+
+      AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+    }
+
+    // Average
+    output.pixels[idx] = sh_accum * (1.0f / config.samples);
+  }
+
+  // Clean up
+  rtcReleaseScene(rtc_scene);
+  rtcReleaseDevice(device);
+
+  return output;
+}
+
+}  // namespace sh_baker

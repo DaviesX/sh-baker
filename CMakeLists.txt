@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(sh_baker CXX)
+project(sh_baker CXX C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -47,12 +47,22 @@ set(SOURCES
     src/loader.cpp
     src/scene.cpp
     src/occlusion.cpp
+    src/sh_coeffs.cpp
+    src/saver.cpp
+    src/baker.cpp
+    src/rasterizer.cpp
+    src/tinyexr_impl.cpp
+    src/miniz.c
 )
 
 set(HEADERS
     src/scene.h
     src/loader.h
     src/occlusion.h
+    src/sh_coeffs.h
+    src/saver.h
+    src/baker.h
+    src/rasterizer.h
 )
 
 # --- Executable ---
@@ -84,6 +94,16 @@ add_executable(sh_baker_test
     src/scene.cpp
     src/occlusion_test.cpp
     src/occlusion.cpp
+    src/sh_coeffs_test.cpp
+    src/sh_coeffs.cpp
+    src/saver_test.cpp
+    src/saver.cpp
+    src/tinyexr_impl.cpp
+    src/miniz.c
+    src/baker_test.cpp
+    src/baker.cpp
+    src/rasterizer_test.cpp
+    src/rasterizer.cpp
 )
 
 target_include_directories(sh_baker_test PRIVATE 
