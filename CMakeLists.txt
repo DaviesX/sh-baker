@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(sh_baker CXX)
+project(sh_baker CXX C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -16,6 +16,14 @@ FetchContent_Declare(
   GIT_TAG        release
 )
 FetchContent_MakeAvailable(tinygltf)
+
+# xatlas
+FetchContent_Declare(
+  xatlas
+  GIT_REPOSITORY https://github.com/jpcy/xatlas.git
+  GIT_TAG        master
+)
+FetchContent_MakeAvailable(xatlas)
 
 # glog
 find_package(glog REQUIRED)
@@ -47,12 +55,27 @@ set(SOURCES
     src/loader.cpp
     src/scene.cpp
     src/occlusion.cpp
+    src/sh_coeffs.cpp
+    src/saver.cpp
+    src/baker.cpp
+    src/atlas.cpp
+    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
+    src/rasterizer.cpp
+    src/material.cpp
+    src/dilation.cpp
+    src/tinyexr_impl.cpp
+    src/miniz.c
 )
 
 set(HEADERS
     src/scene.h
     src/loader.h
     src/occlusion.h
+    src/sh_coeffs.h
+    src/saver.h
+    src/baker.h
+    src/rasterizer.h
+    src/dilation.h
 )
 
 # --- Executable ---
@@ -63,6 +86,7 @@ target_include_directories(sh_baker PRIVATE
     src 
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
+    ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
 target_link_libraries(sh_baker PRIVATE
@@ -84,12 +108,30 @@ add_executable(sh_baker_test
     src/scene.cpp
     src/occlusion_test.cpp
     src/occlusion.cpp
+    src/sh_coeffs_test.cpp
+    src/sh_coeffs.cpp
+    src/saver_test.cpp
+    src/saver.cpp
+    src/tinyexr_impl.cpp
+    src/miniz.c
+    src/baker_test.cpp
+    src/baker.cpp
+    src/rasterizer_test.cpp
+    src/rasterizer.cpp
+    src/dilation_test.cpp
+    src/dilation.cpp
+    src/material_test.cpp
+    src/material.cpp
+    src/atlas_test.cpp
+    src/atlas.cpp
+    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
 )
 
 target_include_directories(sh_baker_test PRIVATE 
     src 
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
+    ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
 target_link_libraries(sh_baker_test PRIVATE

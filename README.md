@@ -29,10 +29,3 @@ To run the unit tests:
 ```bash
 ./build/sh_baker_test
 ```
-
-Alternatively, you can use CTest (though detailed output might be hidden unless configured):
-
-```bash
-cd build
-ctest --output-on-failure
-```

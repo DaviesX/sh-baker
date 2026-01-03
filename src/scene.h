@@ -36,7 +36,8 @@ struct Material {
 struct Geometry {
   std::vector<Eigen::Vector3f> vertices;
   std::vector<Eigen::Vector3f> normals;
-  std::vector<Eigen::Vector2f> uvs;
+  std::vector<Eigen::Vector2f> texture_uvs;
+  std::vector<Eigen::Vector2f> lightmap_uvs;
 
   std::vector<uint32_t> indices;
 
