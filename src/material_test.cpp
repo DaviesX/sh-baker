@@ -32,7 +32,7 @@ TEST(MaterialTest, GetAlbedo) {
 
   Eigen::Vector3f res = GetAlbedo(mat, Eigen::Vector2f(0.5f, 0.5f));
   EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
-  EXPECT_NEAR(res.y(), 128.0f / 255.0f, 1e-5f);
+  EXPECT_NEAR(res.y(), 0.21586f, 1e-3f);
   EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
 }
 

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <random>
 
+#include "colorspace.h"
+
 namespace sh_baker {
 
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv) {
@@ -14,9 +16,11 @@ Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv) {
     int ty = std::clamp((int)(uv.y() * mat.albedo.height), 0,
                         (int)mat.albedo.height - 1);
     int idx = (ty * mat.albedo.width + tx) * mat.albedo.channels;
-    float r = mat.albedo.pixel_data[idx] / 255.0f;
-    float g = mat.albedo.pixel_data[idx + 1] / 255.0f;
-    float b = mat.albedo.pixel_data[idx + 2] / 255.0f;
+
+    // Convert sRGB -> Linear
+    float r = SRGBToLinear(mat.albedo.pixel_data[idx]);
+    float g = SRGBToLinear(mat.albedo.pixel_data[idx + 1]);
+    float b = SRGBToLinear(mat.albedo.pixel_data[idx + 2]);
     albedo = Eigen::Vector3f(r, g, b);
   }
   return albedo;

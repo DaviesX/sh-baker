@@ -3,8 +3,13 @@
 #include <glog/logging.h>
 #include <tiny_gltf.h>
 
+#include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <map>
+#include <unordered_map>
 
+#include "colorspace.h"
 #include "tinyexr.h"
 
 namespace sh_baker {
@@ -12,12 +17,12 @@ namespace sh_baker {
 namespace {
 
 // Helpers for buffer management
-void AddBufferView(tinygltf::Model& model, const void* data, size_t size,
-                   size_t stride, int target, int& view_index) {
-  if (model.buffers.empty()) {
-    model.buffers.emplace_back();
+void AddBufferView(const void* data, size_t size, size_t stride, int target,
+                   int& view_index, tinygltf::Model* model) {
+  if (model->buffers.empty()) {
+    model->buffers.emplace_back();
   }
-  tinygltf::Buffer& buffer = model.buffers[0];
+  tinygltf::Buffer& buffer = model->buffers[0];
 
   // Align to 4 bytes
   size_t padding = 0;
@@ -36,13 +41,13 @@ void AddBufferView(tinygltf::Model& model, const void* data, size_t size,
   view.byteLength = size;
   view.byteStride = stride;
   view.target = target;
-  model.bufferViews.push_back(view);
-  view_index = static_cast<int>(model.bufferViews.size() - 1);
+  model->bufferViews.push_back(view);
+  view_index = static_cast<int>(model->bufferViews.size() - 1);
 }
 
-int AddAccessor(tinygltf::Model& model, int buffer_view, int component_type,
-                size_t count, int type, const std::vector<double>& min_vals,
-                const std::vector<double>& max_vals) {
+int AddAccessor(int buffer_view, int component_type, size_t count, int type,
+                const std::vector<double>& min_vals,
+                const std::vector<double>& max_vals, tinygltf::Model* model) {
   tinygltf::Accessor acc;
   acc.bufferView = buffer_view;
   acc.byteOffset = 0;
@@ -51,8 +56,48 @@ int AddAccessor(tinygltf::Model& model, int buffer_view, int component_type,
   acc.type = type;
   acc.minValues = min_vals;
   acc.maxValues = max_vals;
-  model.accessors.push_back(acc);
-  return static_cast<int>(model.accessors.size() - 1);
+  model->accessors.push_back(acc);
+  return static_cast<int>(model->accessors.size() - 1);
+}
+
+std::optional<int> AddOrReuseTexture(
+    const std::filesystem::path& from_uri,
+    const std::filesystem::path& output_dir, tinygltf::Model* model,
+    std::unordered_map<std::string, int>* texture_allocations) {
+  // Copy the file to the same directory as the output file.
+  // We use the filename as the relative URI in the glTF.
+  std::filesystem::path filename = from_uri.filename();
+  std::filesystem::path destination = output_dir / filename;
+
+  std::string uri_key = filename.string();
+  auto texture_index_it = texture_allocations->find(uri_key);
+  if (texture_index_it != texture_allocations->end()) {
+    return texture_index_it->second;
+  }
+
+  try {
+    // to_uri is usually unique, but just in case we have a collision we
+    // will overwrite the file.
+    std::filesystem::copy_file(
+        from_uri, destination,
+        std::filesystem::copy_options::overwrite_existing);
+  } catch (const std::filesystem::filesystem_error& e) {
+    LOG(ERROR) << "Failed to copy file from " << from_uri << " to "
+               << destination << ". Cause: " << e.what();
+    return std::nullopt;
+  }
+
+  tinygltf::Image img;
+  img.uri = uri_key;
+  model->images.push_back(img);
+
+  tinygltf::Texture tex;
+  tex.source = static_cast<int>(model->images.size() - 1);
+  model->textures.push_back(tex);
+
+  texture_index_it =
+      texture_allocations->emplace(uri_key, model->textures.size() - 1).first;
+  return texture_index_it->second;
 }
 
 // Coefficient names for file suffixes or channel prefixes
@@ -242,11 +287,42 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
   model.asset.generator = "sh_baker";
   model.asset.version = "2.0";
 
-  // TODO: Export Materials (basic)
-  // For now, we skip material export or create dummy ones to match indices
+  // Export Materials
+  // We need to allocate the textures a unique index as we push them into
+  // the model. This is because glTF references the textures by index in the
+  // material nodes.
+  std::unordered_map<std::string, int> texture_allocations;
+
   for (const auto& mat : scene.materials) {
     tinygltf::Material gmat;
     gmat.name = mat.name;
+
+    // Preserve metallic/roughness if we had them (not stored in simple Material
+    // unfortunately, actually Material struct HAS roughness/metallic! line
+    // 34/35 in scene.h). Let's populate them too while we are at it.
+    gmat.pbrMetallicRoughness.roughnessFactor = mat.roughness;
+    gmat.pbrMetallicRoughness.metallicFactor = mat.metallic;
+
+    if (mat.albedo.file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.albedo.file_path, path.parent_path(), &model,
+                            &texture_allocations);
+      if (!texture_index.has_value()) {
+        return false;
+      }
+      gmat.pbrMetallicRoughness.baseColorTexture.index = *texture_index;
+    } else if (mat.albedo.width == 1 && mat.albedo.height == 1 &&
+               mat.albedo.pixel_data.size() >= 4) {
+      // 1x1 Texture -> baseColorFactor (Linear)
+      // Convert sRGB -> Linear
+      std::vector<double> color(4);
+      for (int i = 0; i < 3; ++i) {
+        color[i] = SRGBToLinear(mat.albedo.pixel_data[i]);
+      }
+      color[3] = mat.albedo.pixel_data[3] / 255.0f;  // Alpha
+      gmat.pbrMetallicRoughness.baseColorFactor = color;
+    }
+
     model.materials.push_back(gmat);
   }
 
@@ -281,12 +357,11 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
         if (v.y() > max_v[1]) max_v[1] = v.y();
         if (v.z() > max_v[2]) max_v[2] = v.z();
       }
-      AddBufferView(model, buffer_data.data(),
-                    buffer_data.size() * sizeof(float), 12,
-                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx);
-      prim.attributes["POSITION"] =
-          AddAccessor(model, view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
-                      geo.vertices.size(), TINYGLTF_TYPE_VEC3, min_v, max_v);
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 12,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
+      prim.attributes["POSITION"] = AddAccessor(
+          view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT, geo.vertices.size(),
+          TINYGLTF_TYPE_VEC3, min_v, max_v, &model);
     }
 
     // Normal
@@ -299,12 +374,11 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
         buffer_data.push_back(n.y());
         buffer_data.push_back(n.z());
       }
-      AddBufferView(model, buffer_data.data(),
-                    buffer_data.size() * sizeof(float), 12,
-                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx);
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 12,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
       prim.attributes["NORMAL"] =
-          AddAccessor(model, view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
-                      geo.normals.size(), TINYGLTF_TYPE_VEC3, {}, {});
+          AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
+                      geo.normals.size(), TINYGLTF_TYPE_VEC3, {}, {}, &model);
     }
 
     // Texcoord 0 (Texture UVs)
@@ -316,12 +390,11 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
         buffer_data.push_back(uv.x());
         buffer_data.push_back(uv.y());
       }
-      AddBufferView(model, buffer_data.data(),
-                    buffer_data.size() * sizeof(float), 8,
-                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx);
-      prim.attributes["TEXCOORD_0"] =
-          AddAccessor(model, view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
-                      geo.texture_uvs.size(), TINYGLTF_TYPE_VEC2, {}, {});
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 8,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
+      prim.attributes["TEXCOORD_0"] = AddAccessor(
+          view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT, geo.texture_uvs.size(),
+          TINYGLTF_TYPE_VEC2, {}, {}, &model);
     }
 
     // Texcoord 1 (Lightmap UVs)
@@ -333,23 +406,21 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
         buffer_data.push_back(uv.x());
         buffer_data.push_back(uv.y());
       }
-      AddBufferView(model, buffer_data.data(),
-                    buffer_data.size() * sizeof(float), 8,
-                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx);
-      prim.attributes["TEXCOORD_1"] =
-          AddAccessor(model, view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
-                      geo.lightmap_uvs.size(), TINYGLTF_TYPE_VEC2, {}, {});
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 8,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
+      prim.attributes["TEXCOORD_1"] = AddAccessor(
+          view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT, geo.lightmap_uvs.size(),
+          TINYGLTF_TYPE_VEC2, {}, {}, &model);
     }
 
     // Indices
     {
       int view_idx;
-      AddBufferView(model, geo.indices.data(),
-                    geo.indices.size() * sizeof(uint32_t), 0,
-                    TINYGLTF_TARGET_ELEMENT_ARRAY_BUFFER, view_idx);
+      AddBufferView(geo.indices.data(), geo.indices.size() * sizeof(uint32_t),
+                    0, TINYGLTF_TARGET_ELEMENT_ARRAY_BUFFER, view_idx, &model);
       prim.indices =
-          AddAccessor(model, view_idx, TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT,
-                      geo.indices.size(), TINYGLTF_TYPE_SCALAR, {}, {});
+          AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT,
+                      geo.indices.size(), TINYGLTF_TYPE_SCALAR, {}, {}, &model);
     }
 
     mesh.primitives.push_back(prim);
@@ -373,8 +444,11 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
   model.defaultScene = 0;
 
   tinygltf::TinyGLTF loader;
-  return loader.WriteGltfSceneToFile(&model, path.string(), false, true, true,
-                                     false);
+  return loader.WriteGltfSceneToFile(&model, path.string(),
+                                     /*embed_images=*/false,
+                                     /*embed_textures=*/false,
+                                     /*embed_buffers=*/false,
+                                     /*embed_binary=*/false);
 }
 
 }  // namespace sh_baker
