@@ -50,4 +50,37 @@ TEST(LoaderTest, MissingFile) {
   EXPECT_FALSE(scene.has_value());
 }
 
+TEST(LoaderTest, LoadBoxFallbackColor) {
+  std::filesystem::path input_path =
+      "/Users/daviswen/sh-baker/data/box/Box.gltf";
+  if (!std::filesystem::exists(input_path)) {
+    input_path = "data/box/Box.gltf";
+    if (!std::filesystem::exists(input_path)) {
+      input_path = "../data/box/Box.gltf";
+    }
+  }
+
+  ASSERT_TRUE(std::filesystem::exists(input_path))
+      << "Test file not found: " << input_path;
+
+  std::optional<Scene> scene = LoadScene(input_path);
+  ASSERT_TRUE(scene.has_value());
+
+  ASSERT_EQ(scene->materials.size(), 1);
+  const auto& mat = scene->materials[0];
+  EXPECT_EQ(mat.name, "Red");
+
+  // Verify 1x1 fallback texture creation
+  EXPECT_EQ(mat.albedo.width, 1);
+  EXPECT_EQ(mat.albedo.height, 1);
+  EXPECT_EQ(mat.albedo.channels, 4);
+  ASSERT_EQ(mat.albedo.pixel_data.size(), 4);
+
+  // Verify color (0.8 * 255 = 204)
+  EXPECT_NEAR(mat.albedo.pixel_data[0], 204, 1);
+  EXPECT_EQ(mat.albedo.pixel_data[1], 0);
+  EXPECT_EQ(mat.albedo.pixel_data[2], 0);
+  EXPECT_EQ(mat.albedo.pixel_data[3], 255);
+}
+
 }  // namespace sh_baker
