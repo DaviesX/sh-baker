@@ -220,15 +220,12 @@ void ProcessMaterials(const tinygltf::Model& model,
         mat.albedo.channels = img.component;
         mat.albedo.pixel_data = img.image;  // Copy data
         if (!img.uri.empty()) {
-          // Check if it is a data URI
-          if (img.uri.find("data:") != 0) {
-            std::filesystem::path uri_path(img.uri);
-            if (uri_path.is_absolute()) {
-              mat.albedo.file_path = uri_path;
-            } else {
-              mat.albedo.file_path =
-                  std::filesystem::absolute(base_path / uri_path);
-            }
+          std::filesystem::path uri_path(img.uri);
+          if (uri_path.is_absolute()) {
+            mat.albedo.file_path = uri_path;
+          } else {
+            mat.albedo.file_path =
+                std::filesystem::absolute(base_path / uri_path);
           }
         }
         texture_loaded = true;

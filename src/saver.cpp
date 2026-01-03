@@ -82,7 +82,8 @@ std::optional<int> AddOrReuseTexture(
         from_uri, destination,
         std::filesystem::copy_options::overwrite_existing);
   } catch (const std::filesystem::filesystem_error& e) {
-    LOG(ERROR) << "Failed to copy file: " << e.what();
+    LOG(ERROR) << "Failed to copy file from " << from_uri << " to "
+               << destination << ". Cause: " << e.what();
     return std::nullopt;
   }
 
