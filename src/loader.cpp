@@ -208,6 +208,7 @@ void ProcessMaterials(const tinygltf::Model& model, Scene* scene) {
 
     // Texture (Base Color)
     int tex_idx = gltf_mat.pbrMetallicRoughness.baseColorTexture.index;
+    bool texture_loaded = false;
     if (tex_idx >= 0 && tex_idx < model.textures.size()) {
       int img_idx = model.textures[tex_idx].source;
       if (img_idx >= 0 && img_idx < model.images.size()) {
@@ -216,6 +217,30 @@ void ProcessMaterials(const tinygltf::Model& model, Scene* scene) {
         mat.albedo.height = img.height;
         mat.albedo.channels = img.component;
         mat.albedo.pixel_data = img.image;  // Copy data
+        texture_loaded = true;
+      }
+    }
+
+    if (!texture_loaded) {
+      // Create 1x1 texture from baseColorFactor
+      const auto& color = gltf_mat.pbrMetallicRoughness.baseColorFactor;
+      mat.albedo.width = 1;
+      mat.albedo.height = 1;
+      mat.albedo.channels = 4;
+      mat.albedo.pixel_data.resize(4);
+      // baseColorFactor is RGBA (4 items)
+      if (color.size() == 4) {
+        mat.albedo.pixel_data[0] =
+            static_cast<unsigned char>(std::clamp(color[0], 0.0, 1.0) * 255.0);
+        mat.albedo.pixel_data[1] =
+            static_cast<unsigned char>(std::clamp(color[1], 0.0, 1.0) * 255.0);
+        mat.albedo.pixel_data[2] =
+            static_cast<unsigned char>(std::clamp(color[2], 0.0, 1.0) * 255.0);
+        mat.albedo.pixel_data[3] =
+            static_cast<unsigned char>(std::clamp(color[3], 0.0, 1.0) * 255.0);
+      } else {
+        // Fallback white
+        mat.albedo.pixel_data = {255, 255, 255, 255};
       }
     }
 
