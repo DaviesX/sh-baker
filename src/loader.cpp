@@ -154,7 +154,7 @@ void ProcessPrimitive(const tinygltf::Model& model,
   // Vertices
   geo.vertices.reserve(vertex_count);
   geo.normals.reserve(vertex_count);
-  geo.uvs.reserve(vertex_count);
+  geo.texture_uvs.reserve(vertex_count);
 
   for (size_t i = 0; i < vertex_count; ++i) {
     geo.vertices.emplace_back(pos_data[i * pos_stride + 0],
@@ -170,10 +170,10 @@ void ProcessPrimitive(const tinygltf::Model& model,
     }
 
     if (uv_data) {
-      geo.uvs.emplace_back(uv_data[i * uv_stride + 0],
-                           uv_data[i * uv_stride + 1]);
+      geo.texture_uvs.emplace_back(uv_data[i * uv_stride + 0],
+                                   uv_data[i * uv_stride + 1]);
     } else {
-      geo.uvs.emplace_back(0, 0);
+      geo.texture_uvs.emplace_back(0, 0);
     }
   }
 

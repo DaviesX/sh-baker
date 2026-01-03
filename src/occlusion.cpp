@@ -74,10 +74,10 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
       }
 
       // Interpolate UVs
-      if (!geom->uvs.empty()) {
-        Eigen::Vector2f uv0 = geom->uvs[idx0];
-        Eigen::Vector2f uv1 = geom->uvs[idx1];
-        Eigen::Vector2f uv2 = geom->uvs[idx2];
+      if (!geom->texture_uvs.empty()) {
+        Eigen::Vector2f uv0 = geom->texture_uvs[idx0];
+        Eigen::Vector2f uv1 = geom->texture_uvs[idx1];
+        Eigen::Vector2f uv2 = geom->texture_uvs[idx2];
         occ.uv = w * uv0 + u * uv1 + v * uv2;
       } else {
         occ.uv = Eigen::Vector2f::Zero();
