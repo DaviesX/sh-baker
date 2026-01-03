@@ -43,6 +43,10 @@ TEST(LoaderTest, LoadCube) {
   // Check if texture loaded (Cube.gltf references Cube_BaseColor.png)
   EXPECT_GT(scene->materials[0].albedo.width, 0);
   EXPECT_GT(scene->materials[0].albedo.height, 0);
+
+  // Verify file_path is populated and absolute
+  ASSERT_TRUE(scene->materials[0].albedo.file_path.has_value());
+  EXPECT_TRUE(scene->materials[0].albedo.file_path->is_absolute());
 }
 
 TEST(LoaderTest, MissingFile) {
@@ -77,7 +81,8 @@ TEST(LoaderTest, LoadBoxFallbackColor) {
   ASSERT_EQ(mat.albedo.pixel_data.size(), 4);
 
   // Verify color (0.8 * 255 = 204)
-  EXPECT_NEAR(mat.albedo.pixel_data[0], 204, 1);
+  // Verify color (0.8 linear -> ~0.906 sRGB -> 231)
+  EXPECT_NEAR(mat.albedo.pixel_data[0], 231, 1);
   EXPECT_EQ(mat.albedo.pixel_data[1], 0);
   EXPECT_EQ(mat.albedo.pixel_data[2], 0);
   EXPECT_EQ(mat.albedo.pixel_data[3], 255);

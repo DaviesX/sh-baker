@@ -5,7 +5,9 @@
 
 #include <Eigen/Dense>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +15,10 @@ namespace sh_baker {
 
 // --- Texture ---
 struct Texture {
+  // If set, the texture is loaded from a file. This denotes the provenance of
+  // the texture.
+  std::optional<std::filesystem::path> file_path;
+
   uint32_t width = 0;
   uint32_t height = 0;
   uint32_t channels = 0;
