@@ -10,6 +10,7 @@
 
 #include <Eigen/Geometry>
 
+#include "colorspace.h"
 #include "tiny_gltf.h"
 
 namespace sh_baker {
@@ -180,7 +181,8 @@ void ProcessPrimitive(const tinygltf::Model& model,
   scene->geometries.push_back(std::move(geo));
 }
 
-void ProcessMaterials(const tinygltf::Model& model, Scene* scene) {
+void ProcessMaterials(const tinygltf::Model& model,
+                      const std::filesystem::path& base_path, Scene* scene) {
   if (model.materials.empty()) {
     Material default_mat;
     default_mat.name = "default";
@@ -217,27 +219,37 @@ void ProcessMaterials(const tinygltf::Model& model, Scene* scene) {
         mat.albedo.height = img.height;
         mat.albedo.channels = img.component;
         mat.albedo.pixel_data = img.image;  // Copy data
+        if (!img.uri.empty()) {
+          // Check if it is a data URI
+          if (img.uri.find("data:") != 0) {
+            std::filesystem::path uri_path(img.uri);
+            if (uri_path.is_absolute()) {
+              mat.albedo.file_path = uri_path;
+            } else {
+              mat.albedo.file_path =
+                  std::filesystem::absolute(base_path / uri_path);
+            }
+          }
+        }
         texture_loaded = true;
       }
     }
 
     if (!texture_loaded) {
-      // Create 1x1 texture from baseColorFactor
+      // Create 1x1 texture from baseColorFactor (Linear -> sRGB)
       const auto& color = gltf_mat.pbrMetallicRoughness.baseColorFactor;
       mat.albedo.width = 1;
       mat.albedo.height = 1;
       mat.albedo.channels = 4;
       mat.albedo.pixel_data.resize(4);
+
       // baseColorFactor is RGBA (4 items)
       if (color.size() == 4) {
-        mat.albedo.pixel_data[0] =
-            static_cast<unsigned char>(std::clamp(color[0], 0.0, 1.0) * 255.0);
-        mat.albedo.pixel_data[1] =
-            static_cast<unsigned char>(std::clamp(color[1], 0.0, 1.0) * 255.0);
-        mat.albedo.pixel_data[2] =
-            static_cast<unsigned char>(std::clamp(color[2], 0.0, 1.0) * 255.0);
-        mat.albedo.pixel_data[3] =
-            static_cast<unsigned char>(std::clamp(color[3], 0.0, 1.0) * 255.0);
+        mat.albedo.pixel_data[0] = LinearToSRGB(static_cast<float>(color[0]));
+        mat.albedo.pixel_data[1] = LinearToSRGB(static_cast<float>(color[1]));
+        mat.albedo.pixel_data[2] = LinearToSRGB(static_cast<float>(color[2]));
+        mat.albedo.pixel_data[3] = static_cast<unsigned char>(
+            std::rint(std::clamp(color[3], 0.0, 1.0) * 255.0));
       } else {
         // Fallback white
         mat.albedo.pixel_data = {255, 255, 255, 255};
@@ -372,7 +384,7 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
 
   Scene scene;
 
-  ProcessMaterials(model, &scene);
+  ProcessMaterials(model, gltf_file.parent_path(), &scene);
 
   const tinygltf::Scene& gltf_scene =
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
