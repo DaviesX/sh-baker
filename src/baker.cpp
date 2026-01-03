@@ -15,8 +15,15 @@ namespace sh_baker {
 
 namespace {
 
-// Uniform sample on hemisphere
-// Moved to material.h/cpp
+Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  float u1 = dist(rng);
+  float u2 = dist(rng);
+
+  float r = std::sqrt(1.0f - u1 * u1);
+  float phi = 2.0f * M_PI * u2;
+  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
+}
 
 // Trace path using Occlusion helper
 Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
@@ -57,50 +64,37 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
     color += (1.0f - alpha) * transmission;
   }
 
-  if (alpha > 0.0f) {
-    // Evaluate surface
-    // Emission
-    if (mat.emission_intensity > 0.0f) {
-      color += alpha * EvalMaterial(mat, occ->uv);
-    } else {
-      // Reflection (Lambertian)
-      // Normal from occlusion
-      Eigen::Vector3f hit_normal = occ->normal;
+  if (alpha == 0.0f) {
+    // Short circuit. We don't need to evaluate surface.
+    return color;
+  }
 
-      // Cosine weighted sample for Lambertian
-      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-      float r1 = dist(rng);
-      float r2 = dist(rng);
+  // Evaluate surface
+  // Emission
+  Eigen::Vector3f emission = GetEmission(mat, occ->uv);
+  if (!emission.isZero()) {
+    color += alpha * emission;
+  } else {
+    // Reflection
+    // Normal from occlusion
+    Eigen::Vector3f hit_normal = occ->normal;
+    Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
 
-      // Cosine sample hemisphere
-      float phi = 2.0f * M_PI * r1;
-      float theta = std::acos(std::sqrt(r2));
-      float sin_theta = std::sin(theta);
-      Eigen::Vector3f bounce_dir_local(std::cos(phi) * sin_theta,
-                                       std::sin(phi) * sin_theta,
-                                       std::cos(theta));  // Z-up local
+    // Sample Material
+    ReflectionSample sample =
+        SampleMaterial(mat, occ->uv, hit_normal, dir, rng);
 
-      // Basis
-      Eigen::Vector3f t, b;
-      if (std::abs(hit_normal.x()) > std::abs(hit_normal.z())) {
-        t = Eigen::Vector3f(-hit_normal.y(), hit_normal.x(), 0.0f);
-      } else {
-        t = Eigen::Vector3f(0.0f, -hit_normal.z(), hit_normal.y());
-      }
-      t.normalize();
-      b = hit_normal.cross(t);
+    Eigen::Vector3f incoming = Trace(
+        rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth, rng);
 
-      Eigen::Vector3f bounce_dir = t * bounce_dir_local.x() +
-                                   b * bounce_dir_local.y() +
-                                   hit_normal * bounce_dir_local.z();
+    Eigen::Vector3f brdf =
+        EvalMaterial(mat, occ->uv, hit_normal, dir, sample.direction);
 
-      Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
+    float cosine_term = std::max(0.0f, hit_normal.dot(sample.direction));
 
-      Eigen::Vector3f incoming = Trace(rtc_scene, scene, hit_pos, bounce_dir,
-                                       depth + 1, max_depth, rng);
-
-      Eigen::Vector3f albedo = EvalMaterial(mat, occ->uv);
-      color += alpha * albedo.cwiseProduct(incoming);
+    // Estimator: L_i * f_r * cos / pdf
+    if (sample.pdf > 1e-6f) {
+      color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
     }
   }
 
@@ -136,11 +130,7 @@ SHTexture BakeSHLightMap(const Scene& scene,
     Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
 
     for (int s = 0; s < config.samples; ++s) {
-      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-      float u1 = dist(rng);
-      float u2 = dist(rng);
-
-      Eigen::Vector3f dir_local = SampleHemisphereUniform(u1, u2);  // Z is up
+      Eigen::Vector3f dir_local = SampleHemisphereUniform(rng);  // Z is up
 
       // Transform to World
       Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
