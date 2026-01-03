@@ -19,6 +19,8 @@ DEFINE_int32(bounces, 3, "Number of bounces.");
 DEFINE_int32(dilation, 0, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
+DEFINE_bool(split_channels, false,
+            "If true, output 9 separate EXR files for SH coefficients.");
 
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
@@ -98,7 +100,10 @@ int main(int argc, char* argv[]) {
     std::filesystem::create_directories(output_path);
     std::filesystem::path lightmap_path = output_path / kLightmapFileName;
     std::filesystem::path gltf_path = output_path / kGLTFFileName;
-    if (!sh_baker::SaveSHLightMap(texture, lightmap_path)) {
+    sh_baker::SaveMode mode = FLAGS_split_channels
+                                  ? sh_baker::SaveMode::kSplitChannels
+                                  : sh_baker::SaveMode::kCombined;
+    if (!sh_baker::SaveSHLightMap(texture, lightmap_path, mode)) {
       LOG(ERROR) << "Failed to save output.";
       return 1;
     }
