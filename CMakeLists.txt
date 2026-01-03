@@ -42,6 +42,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb_image)
 
+# GLFW
+find_package(glfw3 REQUIRED)
+
+# OpenGL
+find_package(OpenGL REQUIRED)
+
 # Embree (Expected to be installed on system)
 find_package(embree 4 REQUIRED)
 
@@ -144,4 +150,38 @@ target_link_libraries(sh_baker_test PRIVATE
 )
 
 include(GoogleTest)
+include(GoogleTest)
 gtest_discover_tests(sh_baker_test)
+
+# --- Visualizer ---
+
+add_executable(visualizer
+    src/visualizer_main.cpp
+    src/loader.cpp
+    src/scene.cpp
+    src/occlusion.cpp   # Scene dependency? No, loader depends on tinygltf. Scene logic might need it? 
+                        # Actually scene.cpp only has minimal logic.
+                        # Loader uses tinygltf.
+    src/tinyexr_impl.cpp
+    src/miniz.c
+    src/atlas.cpp
+    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
+)
+
+target_include_directories(visualizer PRIVATE 
+    src 
+    ${tinygltf_SOURCE_DIR}
+    ${stb_image_SOURCE_DIR}
+    ${xatlas_SOURCE_DIR}/source/xatlas
+)
+
+target_link_libraries(visualizer PRIVATE
+    tinygltf
+    glog::glog
+    gflags
+    embree # Loader/Scene might depend on Embree types (RTCScene) in headers? 
+           # Yes, scene.h includes embree4/rtcore.h.
+    Eigen3::Eigen
+    glfw
+    OpenGL::GL
+)
