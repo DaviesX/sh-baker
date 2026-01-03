@@ -14,11 +14,6 @@ namespace {
 // Helpers for buffer management
 void AddBufferView(tinygltf::Model& model, const void* data, size_t size,
                    size_t stride, int target, int& view_index) {
-  // If we have a current buffer, use it, or create new one?
-  // Simplest strategy: One big buffer or one buffer per view.
-  // Let's just append to a single buffer for simplicity, or one per attribute.
-  // tinygltf::Model usually has a list of buffers.
-
   if (model.buffers.empty()) {
     model.buffers.emplace_back();
   }
@@ -39,8 +34,8 @@ void AddBufferView(tinygltf::Model& model, const void* data, size_t size,
   view.buffer = 0;
   view.byteOffset = byte_offset;
   view.byteLength = size;
-  view.byteStride = stride;  // 0 for tightly packed usually? or actual stride
-  view.target = target;      // ARRAY_BUFFER or ELEMENT_ARRAY_BUFFER
+  view.byteStride = stride;
+  view.target = target;
   model.bufferViews.push_back(view);
   view_index = static_cast<int>(model.bufferViews.size() - 1);
 }
@@ -60,16 +55,13 @@ int AddAccessor(tinygltf::Model& model, int buffer_view, int component_type,
   return static_cast<int>(model.accessors.size() - 1);
 }
 
-}  // namespace
+// Coefficient names for file suffixes or channel prefixes
+// Order: L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22
+const char* kCoeffNames[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
+                             "L2m1", "L20",  "L21", "L22"};
 
-bool SaveSHLightMap(const SHTexture& sh_texture,
-                    const std::filesystem::path& path) {
-  if (sh_texture.pixels.empty() || sh_texture.width <= 0 ||
-      sh_texture.height <= 0) {
-    LOG(ERROR) << "Invalid SHTexture dimensions or empty pixels.";
-    return false;
-  }
-
+bool SaveCombined(const SHTexture& sh_texture,
+                  const std::filesystem::path& path) {
   EXRHeader header;
   InitEXRHeader(&header);
 
@@ -78,32 +70,39 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
 
   image.num_channels = 27;  // 9 coeffs * 3 (RGB)
 
-  const char* channel_names[] = {
-      "L0.R",   "L0.G",   "L0.B",    // 0
-      "L1m1.R", "L1m1.G", "L1m1.B",  // 1
-      "L10.R",  "L10.G",  "L10.B",   // 2
-      "L11.R",  "L11.G",  "L11.B",   // 3
-      "L2m2.R", "L2m2.G", "L2m2.B",  // 4
-      "L2m1.R", "L2m1.G", "L2m1.B",  // 5
-      "L20.R",  "L20.G",  "L20.B",   // 6
-      "L21.R",  "L21.G",  "L21.B",   // 7
-      "L22.R",  "L22.G",  "L22.B"    // 8
-  };
+  // Channel names
+  std::vector<std::string> channel_names;
+  // We need C-strings for header.channels[i].name, so keep the strings alive
+  channel_names.reserve(27);
+
+  // Band 0: L0
+  // Band 1: L1m1, L10, L11
+  // Band 2: L2m2, L2m1, L20, L21, L22
+  const char* rgb_suffix[] = {".R", ".G", ".B"};
+
+  for (int i = 0; i < 9; ++i) {
+    for (int c = 0; c < 3; ++c) {
+      channel_names.push_back(std::string(kCoeffNames[i]) + rgb_suffix[c]);
+    }
+  }
 
   std::vector<float> channels[27];
   float* image_ptr[27];
   header.channels =
       (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * image.num_channels);
 
+  // Allocate pixel types
   header.pixel_types = (int*)malloc(sizeof(int) * image.num_channels);
   header.requested_pixel_types = (int*)malloc(sizeof(int) * image.num_channels);
 
   int num_pixels = sh_texture.width * sh_texture.height;
 
+  // Split SoA
   for (int i = 0; i < 27; ++i) {
     channels[i].resize(num_pixels);
     image_ptr[i] = channels[i].data();
 
+    // Map i to (coeff_idx, rgb_idx)
     int coeff_idx = i / 3;
     int rgb_idx = i % 3;
 
@@ -116,7 +115,8 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
         channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].z();
     }
 
-    strncpy(header.channels[i].name, channel_names[i], 255);
+    // Set header info
+    strncpy(header.channels[i].name, channel_names[i].c_str(), 255);
     header.pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
     header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
   }
@@ -126,7 +126,7 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
   image.height = sh_texture.height;
 
   header.num_channels = image.num_channels;
-  header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+  header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
 
   const char* err = nullptr;
   int ret = SaveEXRImageToFile(&image, &header, path.string().c_str(), &err);
@@ -143,6 +143,98 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
   }
 
   return true;
+}
+
+bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
+  // path is "dir/filename.exr". We want "dir/filename_L0.exr" etc.
+  std::filesystem::path parent = path.parent_path();
+  std::string stem = path.stem().string();
+  std::string extension = path.extension().string();
+
+  int num_pixels = sh_texture.width * sh_texture.height;
+
+  for (int i = 0; i < 9; ++i) {
+    std::string coeff_name = kCoeffNames[i];
+    std::string filename = stem + "_" + coeff_name + extension;
+    std::filesystem::path sub_path = parent / filename;
+
+    // Save as standard RGB EXR
+    EXRHeader header;
+    InitEXRHeader(&header);
+    EXRImage image;
+    InitEXRImage(&image);
+
+    image.num_channels = 3;
+
+    std::vector<float> channels[3];
+    float* image_ptr[3];
+    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 3);
+    header.pixel_types = (int*)malloc(sizeof(int) * 3);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * 3);
+
+    for (int c = 0; c < 3; ++c) {
+      channels[c].resize(num_pixels);
+      image_ptr[c] = channels[c].data();
+
+      // Collect data
+      for (int p = 0; p < num_pixels; ++p) {
+        if (c == 0)
+          channels[c][p] = sh_texture.pixels[p].coeffs[i].x();
+        else if (c == 1)
+          channels[c][p] = sh_texture.pixels[p].coeffs[i].y();
+        else
+          channels[c][p] = sh_texture.pixels[p].coeffs[i].z();
+      }
+
+      // Channel names: R, G, B
+      const char* names[] = {"R", "G", "B"};
+      strncpy(header.channels[c].name, names[c], 255);
+      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
+      header.requested_pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
+    }
+
+    image.images = (unsigned char**)image_ptr;
+    image.width = sh_texture.width;
+    image.height = sh_texture.height;
+
+    header.num_channels = 3;
+    header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
+
+    const char* err = nullptr;
+    int ret =
+        SaveEXRImageToFile(&image, &header, sub_path.string().c_str(), &err);
+
+    free(header.channels);
+    free(header.pixel_types);
+    free(header.requested_pixel_types);
+
+    if (ret != TINYEXR_SUCCESS) {
+      LOG(ERROR) << "SaveEXRImageToFile failed for " << sub_path << ": "
+                 << (err ? err : "Unknown error");
+      FreeEXRErrorMessage(err);
+      return false;
+    }
+    LOG(INFO) << "Saved: " << sub_path;
+  }
+
+  return true;
+}
+
+}  // namespace
+
+bool SaveSHLightMap(const SHTexture& sh_texture,
+                    const std::filesystem::path& path, SaveMode mode) {
+  if (sh_texture.pixels.empty() || sh_texture.width <= 0 ||
+      sh_texture.height <= 0) {
+    LOG(ERROR) << "Invalid SHTexture dimensions or empty pixels.";
+    return false;
+  }
+
+  if (mode == SaveMode::kCombined) {
+    return SaveCombined(sh_texture, path);
+  } else {
+    return SaveSplit(sh_texture, path);
+  }
 }
 
 bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
