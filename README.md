@@ -27,7 +27,8 @@ cmake --build build
 To run the unit tests:
 
 ```bash
-./build/sh_baker_test
+cd build
+./sh_baker_test
 ```
 
 ## Usage
@@ -67,3 +68,18 @@ To visualize the baked lightmap in Blender:
    ```
    Note: Point to the base name (e.g., `lightmap.exr`), the script will automatically append `_L0.exr` etc.
 5. Run the script. It will create a shader node tree in the specified material that reconstructs the SH lighting.
+
+### OpenGL Visualization
+
+To use the standalone OpenGL visualizer:
+
+```bash
+./build/visualizer --input scene.gltf --sh_input out/lightmap_L0.exr
+```
+
+- `--input`: Path to the input glTF file.
+- `--sh_input`: Path to the **L0** lightmap file (e.g. `lightmap_L0.exr`). The visualizer expects the other 8 coefficient files (L1m1...L22) to be in the same directory with the same naming convention.
+
+Controls:
+- **Left Mouse Drag**: Orbit camera.
+- **Scroll**: Zoom.

@@ -54,10 +54,9 @@ find_package(embree 4 REQUIRED)
 # Eigen3 (Expected to be installed on system)
 find_package(Eigen3 REQUIRED)
 
-# --- Sources ---
+# --- Library (sh_baker_lib) ---
 
-set(SOURCES
-    src/main.cpp
+set(LIB_SOURCES
     src/loader.cpp
     src/scene.cpp
     src/occlusion.cpp
@@ -73,7 +72,7 @@ set(SOURCES
     src/miniz.c
 )
 
-set(HEADERS
+set(LIB_HEADERS
     src/scene.h
     src/loader.h
     src/occlusion.h
@@ -82,26 +81,31 @@ set(HEADERS
     src/baker.h
     src/rasterizer.h
     src/dilation.h
+    src/material.h
+    src/atlas.h
 )
 
-# --- Executable ---
+add_library(sh_baker_lib SHARED ${LIB_SOURCES} ${LIB_HEADERS})
 
-add_executable(sh_baker ${SOURCES} ${HEADERS})
-
-target_include_directories(sh_baker PRIVATE 
+target_include_directories(sh_baker_lib PUBLIC 
     src 
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
     ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
-target_link_libraries(sh_baker PRIVATE
+target_link_libraries(sh_baker_lib PUBLIC
     tinygltf
     glog::glog
     gflags
     embree
     Eigen3::Eigen
 )
+
+# --- Executable (sh_baker) ---
+
+add_executable(sh_baker src/main.cpp)
+target_link_libraries(sh_baker PRIVATE sh_baker_lib)
 
 # --- Tests ---
 
@@ -109,79 +113,31 @@ enable_testing()
 
 add_executable(sh_baker_test
     src/loader_test.cpp
-    src/loader.cpp
     src/scene_test.cpp
-    src/scene.cpp
     src/occlusion_test.cpp
-    src/occlusion.cpp
     src/sh_coeffs_test.cpp
-    src/sh_coeffs.cpp
     src/saver_test.cpp
-    src/saver.cpp
-    src/tinyexr_impl.cpp
-    src/miniz.c
     src/baker_test.cpp
-    src/baker.cpp
     src/rasterizer_test.cpp
-    src/rasterizer.cpp
     src/dilation_test.cpp
-    src/dilation.cpp
     src/material_test.cpp
-    src/material.cpp
     src/atlas_test.cpp
-    src/atlas.cpp
-    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
-)
-
-target_include_directories(sh_baker_test PRIVATE 
-    src 
-    ${tinygltf_SOURCE_DIR}
-    ${stb_image_SOURCE_DIR}
-    ${xatlas_SOURCE_DIR}/source/xatlas
 )
 
 target_link_libraries(sh_baker_test PRIVATE
+    sh_baker_lib
     GTest::gtest_main
-    tinygltf
-    glog::glog
-    gflags
-    embree
-    Eigen3::Eigen
 )
 
-include(GoogleTest)
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)
 
 # --- Visualizer ---
 
-add_executable(visualizer
-    src/visualizer_main.cpp
-    src/loader.cpp
-    src/scene.cpp
-    src/occlusion.cpp   # Scene dependency? No, loader depends on tinygltf. Scene logic might need it? 
-                        # Actually scene.cpp only has minimal logic.
-                        # Loader uses tinygltf.
-    src/tinyexr_impl.cpp
-    src/miniz.c
-    src/atlas.cpp
-    ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
-)
-
-target_include_directories(visualizer PRIVATE 
-    src 
-    ${tinygltf_SOURCE_DIR}
-    ${stb_image_SOURCE_DIR}
-    ${xatlas_SOURCE_DIR}/source/xatlas
-)
+add_executable(visualizer src/visualizer_main.cpp)
 
 target_link_libraries(visualizer PRIVATE
-    tinygltf
-    glog::glog
-    gflags
-    embree # Loader/Scene might depend on Embree types (RTCScene) in headers? 
-           # Yes, scene.h includes embree4/rtcore.h.
-    Eigen3::Eigen
+    sh_baker_lib
     glfw
     OpenGL::GL
 )
