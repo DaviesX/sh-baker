@@ -7,6 +7,7 @@
 #include <cmath>
 #include <random>
 
+#include "light.h"
 #include "material.h"
 #include "occlusion.h"
 #include "rasterizer.h"
@@ -28,7 +29,8 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
 // Trace path using Occlusion helper
 Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
                       const Eigen::Vector3f& origin, const Eigen::Vector3f& dir,
-                      int depth, int max_depth, std::mt19937& rng) {
+                      int depth, int max_depth, int num_light_samples,
+                      std::mt19937& rng) {
   if (depth > max_depth) return Eigen::Vector3f::Zero();
 
   Ray ray;
@@ -41,9 +43,19 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   if (!occ.has_value()) {
     // Sky
     float sun = std::max(0.0f, dir.dot(scene.sky.sun_direction));
-    // Blazing sun + ambient
-    return scene.sky.sun_color * scene.sky.sun_intensity * sun +
-           Eigen::Vector3f(0.05f, 0.05f, 0.05f);  // ambient
+    Eigen::Vector3f sky_radiance =
+        scene.sky.sun_color * scene.sky.sun_intensity * sun +
+        Eigen::Vector3f(0.05f, 0.05f, 0.05f);  // ambient
+
+    if (depth == 0) {
+      // Primary rays see the sky/sun directly
+      return sky_radiance;
+    } else {
+      // Secondary rays (Indirect):
+      // Sun is handled by NEE (EvaluateLights), so we excluded it here to avoid
+      // double counting. We only return the ambient component.
+      return Eigen::Vector3f(0.05f, 0.05f, 0.05f);
+    }
   }
 
   // Hit surface
@@ -55,44 +67,63 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   // If alpha < 1.0, continue ray
   if (alpha < 1.0f) {
     // Transmission
-    // New origin is hit position + epsilon * dir?
-    // FindOcclusion returns exact hit position.
     Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
-    Eigen::Vector3f transmission =
-        Trace(rtc_scene, scene, hit_pos, dir, depth, max_depth, rng);
+    Eigen::Vector3f transmission = Trace(rtc_scene, scene, hit_pos, dir, depth,
+                                         max_depth, num_light_samples, rng);
 
     color += (1.0f - alpha) * transmission;
   }
 
   if (alpha == 0.0f) {
-    // Short circuit. We don't need to evaluate surface.
     return color;
   }
 
-  // Evaluate surface
-  // Emission
+  // Check if material is emissive
   Eigen::Vector3f emission = GetEmission(mat, occ->uv);
   if (!emission.isZero()) {
-    color += alpha * emission;
-  } else {
-    // Reflection
-    // Normal from occlusion
+    // If depth == 0, we see the emissive surface directly (Le).
+    // If depth > 0, we are bouncing. In NEE, we sample lights explicitly,
+    // so we ignore implicit hits on emissive surfaces to avoid double counting.
+    if (depth == 0) {
+      color += alpha * emission;
+    }
+  }
+
+  // Direct Lighting (NEE)
+  {
     Eigen::Vector3f hit_normal = occ->normal;
     Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
+    // View direction is -dir
+    Eigen::Vector3f wo = -dir;
 
-    // Sample Material
+    // 1. Sample Lights
+    auto samples =
+        SampleLights(scene, hit_pos, hit_normal, num_light_samples, rng);
+
+    // 2. Evaluate Direct Light (NEE)
+    // EvaluateLights returns L_direct (Sum(Li * f_r * cos / pdf))
+    Eigen::Vector3f L_direct = EvaluateLights(
+        scene.sky, samples, hit_pos, hit_normal, dir, mat, occ->uv, rtc_scene);
+
+    color += alpha * L_direct;
+  }
+
+  // Indirect Lighting (Recursive)
+  {
+    Eigen::Vector3f hit_normal = occ->normal;
+    Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
     ReflectionSample sample =
         SampleMaterial(mat, occ->uv, hit_normal, dir, rng);
 
-    Eigen::Vector3f incoming = Trace(
-        rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth, rng);
+    Eigen::Vector3f incoming =
+        Trace(rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth,
+              num_light_samples, rng);
 
     Eigen::Vector3f brdf =
         EvalMaterial(mat, occ->uv, hit_normal, dir, sample.direction);
 
     float cosine_term = std::max(0.0f, hit_normal.dot(sample.direction));
 
-    // Estimator: L_i * f_r * cos / pdf
     if (sample.pdf > 1e-6f) {
       color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
     }
@@ -137,8 +168,8 @@ SHTexture BakeSHLightMap(const Scene& scene,
                                   sp.bitangent * dir_local.y() +
                                   sp.normal * dir_local.z();
 
-      Eigen::Vector3f Li =
-          Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces, rng);
+      Eigen::Vector3f Li = Trace(rtc_scene, scene, origin, dir_world, 0,
+                                 config.bounces, config.num_light_samples, rng);
 
       AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
     }
