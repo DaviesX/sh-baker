@@ -5,6 +5,7 @@
 #include <iostream>
 #include <numeric>
 
+#include "material.h"
 #include "occlusion.h"
 
 namespace sh_baker {
@@ -53,7 +54,8 @@ Eigen::Vector3f EvaluateLights(
     const SkyModel& sky_model,
     const std::vector<light_internal::LightSample>& light_samples,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    RTCScene rtc_scene) {
+    const Eigen::Vector3f& reflected, const Material& mat,
+    const Eigen::Vector2f& uv, RTCScene rtc_scene) {
   using namespace light_internal;
   Eigen::Vector3f total_radiance = Eigen::Vector3f::Zero();
 
@@ -62,8 +64,10 @@ Eigen::Vector3f EvaluateLights(
     float n_dot_l = hit_point_normal.dot(sky_model.sun_direction);
     if (n_dot_l > 0.0f) {
       if (CheckVisibilityDir(rtc_scene, hit_point, sky_model.sun_direction)) {
-        total_radiance +=
-            sky_model.sun_color * sky_model.sun_intensity * n_dot_l;
+        Eigen::Vector3f brdf = EvalMaterial(mat, uv, hit_point_normal,
+                                            reflected, sky_model.sun_direction);
+        total_radiance += sky_model.sun_color.cwiseProduct(brdf) *
+                          sky_model.sun_intensity * n_dot_l;
       }
     }
   }
@@ -162,8 +166,10 @@ Eigen::Vector3f EvaluateLights(
     }
 
     if (!Li.isZero()) {
-      // Contribution: Li * cos_theta / PDF
-      total_radiance += Li * (cos_theta / sample.pdf);
+      // Contribution: Li * f_r * cos_theta / PDF
+      Eigen::Vector3f brdf =
+          EvalMaterial(mat, uv, hit_point_normal, reflected, dir);
+      total_radiance += Li.cwiseProduct(brdf) * (cos_theta / sample.pdf);
     }
   }
 

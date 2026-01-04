@@ -26,7 +26,8 @@ Eigen::Vector3f EvaluateLights(
     const SkyModel& sky_model,
     const std::vector<light_internal::LightSample>& light_samples,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    RTCScene rtc_scene);
+    const Eigen::Vector3f& reflected, const Material& mat,
+    const Eigen::Vector2f& uv, RTCScene rtc_scene);
 
 // Samples lights in the scene based on a heuristic (flux / dist^2).
 // Returns a set of lights to be evaluated.
