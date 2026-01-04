@@ -53,7 +53,7 @@ struct Geometry {
 
 // --- Light ---
 struct Light {
-  enum class Type { Point, Directional, Spot };
+  enum class Type { Point, Directional, Spot, Area };
   Type type;
 
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
@@ -63,6 +63,14 @@ struct Light {
 
   float inner_cone_angle = 0.0f;
   float outer_cone_angle = 0.785398f;  // pi/4
+
+  // Area Light
+  Eigen::Vector3f center = Eigen::Vector3f::Zero();
+  Eigen::Vector3f normal = Eigen::Vector3f(0, 1, 0);
+  // Area Light Parameters
+  float area = 0.0f;
+  float flux = 0.0f;
+  int geometry_index = -1;  // Index into Scene::geometries
 };
 
 // --- SkyModel ---
