@@ -74,15 +74,15 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
 
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
-                             const Eigen::Vector3f& incident,
-                             const Eigen::Vector3f& reflected) {
+                             const Eigen::Vector3f& reflected,
+                             const Eigen::Vector3f& incident) {
   // Lambertian BRDF: rho / PI
-  // Note: incident direction is not used for perfect Lambertian
-  // reflected direction is also not strictly needed if we assume valid
+  // Note: reflected direction is not used for perfect Lambertian
+  // incident direction is also not strictly needed if we assume valid
   // hemisphere
 
-  // Check if reflected is in the same hemisphere as normal
-  if (normal.dot(reflected) <= 0.0f) {
+  // Check if incident is in the same hemisphere as normal
+  if (normal.dot(incident) <= 0.0f) {
     return Eigen::Vector3f::Zero();
   }
 

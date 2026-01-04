@@ -8,8 +8,9 @@
 namespace sh_baker {
 
 struct BakeConfig {
-  int samples = 128;  // Rays per texel
-  int bounces = 3;    // Max path depth
+  int samples = 128;          // Rays per texel
+  int bounces = 3;            // Max path depth
+  int num_light_samples = 1;  // Number of light samples for NEE
 };
 
 // Bakes the SH Lightmap for the given scene.

@@ -24,14 +24,15 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                                 const Eigen::Vector3f& incident,
                                 std::mt19937& rng);
 
-// Evaluates the material BRDF f_r(p, wi, wo).
+// Evaluates the material BRDF f_r(p, wr, wi).
 // Returns the BRDF value (color).
-// incident: vector pointing towards the surface.
-// reflected: vector pointing away from the surface (next path segment).
+// incident: incoming direction, away from the surface (from light/previous
+// bounce). reflected: outgoing direction, away from the surface (next path
+// segment).
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
-                             const Eigen::Vector3f& incident,
-                             const Eigen::Vector3f& reflected);
+                             const Eigen::Vector3f& reflected,
+                             const Eigen::Vector3f& incident);
 
 // Helper to retrieve albedo from texture or default.
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv);
