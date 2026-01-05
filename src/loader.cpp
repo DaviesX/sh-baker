@@ -188,22 +188,15 @@ void ProcessPrimitive(const tinygltf::Model& model,
   if (mat.emission_intensity > 0.0f) {
     Light area_light;
     area_light.type = Light::Type::Area;
+    // We can safely reference the material because it has been populated
+    // altogether, but it isn't the case for geometry. We will assign the
+    // pointer once all geometries are added.
+    area_light.material = &mat;
     area_light.geometry_index = static_cast<int>(scene->geometries.size()) - 1;
 
-    // 1. Centroid and Average Normal
-    Eigen::Vector3f sum_pos = Eigen::Vector3f::Zero();
-    Eigen::Vector3f sum_norm = Eigen::Vector3f::Zero();
-    for (const auto& v : added_geo.vertices) sum_pos += v;
-    for (const auto& n : added_geo.normals) sum_norm += n;
-
-    if (!added_geo.vertices.empty()) {
-      area_light.center =
-          sum_pos / static_cast<float>(added_geo.vertices.size());
-      area_light.normal = sum_norm.normalized();
-    }
-
-    // 2. Surface Area
+    // Surface Area
     float total_area = 0.0f;
+
     for (size_t i = 0; i < added_geo.indices.size(); i += 3) {
       uint32_t i0 = added_geo.indices[i];
       uint32_t i1 = added_geo.indices[i + 1];
@@ -214,38 +207,15 @@ void ProcessPrimitive(const tinygltf::Model& model,
         const Eigen::Vector3f& v0 = added_geo.vertices[i0];
         const Eigen::Vector3f& v1 = added_geo.vertices[i1];
         const Eigen::Vector3f& v2 = added_geo.vertices[i2];
-        total_area += 0.5f * (v1 - v0).cross(v2 - v0).norm();
+
+        float tri_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
+        total_area += tri_area;
       }
     }
     area_light.area = total_area;
 
-    // 3. Radius/Size (Optional, but useful for heuristics if needed)
-    // For now, we rely on 'area'.
-
-    // 4. Color and Intensity
-    // Fetch original color from glTF model
+    // Intensity. Color will come from the material's albedo texture.
     area_light.intensity = mat.emission_intensity;
-    area_light.color = Eigen::Vector3f::Ones();  // Default white
-
-    if (primitive.material >= 0 &&
-        primitive.material < static_cast<int>(model.materials.size())) {
-      const auto& gltf_mat = model.materials[primitive.material];
-      if (gltf_mat.emissiveFactor.size() == 3) {
-        Eigen::Vector3f emissive_factor(
-            static_cast<float>(gltf_mat.emissiveFactor[0]),
-            static_cast<float>(gltf_mat.emissiveFactor[1]),
-            static_cast<float>(gltf_mat.emissiveFactor[2]));
-
-        if (area_light.intensity > 1e-6f) {
-          area_light.color = emissive_factor / area_light.intensity;
-        }
-      }
-    }
-
-    // 5. Flux (Approximate Lambertian emission)
-    // Flux = pi * Area * Luminance(Intensity)
-    area_light.flux =
-        static_cast<float>(M_PI) * area_light.area * area_light.intensity;
 
     scene->lights.push_back(std::move(area_light));
   }
@@ -269,13 +239,17 @@ void ProcessMaterials(const tinygltf::Model& model,
         static_cast<float>(gltf_mat.pbrMetallicRoughness.metallicFactor);
 
     // Emission
-    // Check KHR_materials_emissive_strength if needed, or just use
-    // emissiveFactor
-    if (gltf_mat.emissiveFactor.size() == 3) {
-      float max_e = std::max({(float)gltf_mat.emissiveFactor[0],
-                              (float)gltf_mat.emissiveFactor[1],
-                              (float)gltf_mat.emissiveFactor[2]});
-      mat.emission_intensity = max_e;
+    // Our ioquake3 exporter will ensure that the
+    // KHR_materials_emissive_strength extension is used for all emissive
+    // materials.
+    auto emissive_strength_it =
+        gltf_mat.extensions.find("KHR_materials_emissive_strength");
+    if (emissive_strength_it != gltf_mat.extensions.end()) {
+      const auto& emissive_strength = emissive_strength_it->second;
+      if (emissive_strength.Has("emissiveStrength")) {
+        mat.emission_intensity = float(
+            emissive_strength.Get("emissiveStrength").GetNumberAsDouble());
+      }
     }
 
     // Texture (Base Color)
@@ -372,12 +346,16 @@ void ProcessLight(const tinygltf::Model& model,
 
   if (l.type == Light::Type::Spot && light_obj.Has("spot")) {
     const auto& spot = light_obj.Get("spot");
-    if (spot.Has("innerConeAngle"))
-      l.inner_cone_angle =
+    if (spot.Has("innerConeAngle")) {
+      float inner_cone_angle =
           static_cast<float>(spot.Get("innerConeAngle").Get<double>());
-    if (spot.Has("outerConeAngle"))
-      l.outer_cone_angle =
+      l.cos_inner_cone = std::cos(inner_cone_angle);
+    }
+    if (spot.Has("outerConeAngle")) {
+      float outer_cone_angle =
           static_cast<float>(spot.Get("outerConeAngle").Get<double>());
+      l.cos_outer_cone = std::cos(outer_cone_angle);
+    }
   }
 
   scene->lights.push_back(std::move(l));
@@ -401,8 +379,9 @@ void TraverseNodes(const tinygltf::Model& model, int node_index,
   // The extension is defined on the node as "extensions": {
   // "KHR_lights_punctual": { "light": 0 }
   // }
-  if (node.extensions.find("KHR_lights_punctual") != node.extensions.end()) {
-    const auto& ext = node.extensions.at("KHR_lights_punctual");
+  auto lights_punctual_it = node.extensions.find("KHR_lights_punctual");
+  if (lights_punctual_it != node.extensions.end()) {
+    const auto& ext = lights_punctual_it->second;
     if (ext.Has("light")) {
       int light_idx = ext.Get("light").Get<int>();
       if (model.extensions.find("KHR_lights_punctual") !=
@@ -457,6 +436,14 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
   for (int node_index : gltf_scene.nodes) {
     TraverseNodes(model, node_index, Eigen::Affine3f::Identity(), &scene);
+  }
+
+  // Set geometry pointers for area lights because all geometries have been
+  // added. The geometry vector is frozen from this point on.
+  for (auto& light : scene.lights) {
+    if (light.geometry_index >= 0) {
+      light.geometry = &scene.geometries[light.geometry_index];
+    }
   }
 
   return scene;

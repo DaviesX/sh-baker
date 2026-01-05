@@ -20,11 +20,11 @@ Phase 4: Optimization - low-hanging fruit
 1. Implement the next-event estimation (NEE) algorithm to reduce the number of samples needed to bake the lightmap.
     a. Exclude the back-facing directional lights and spot lights that are out of cone.
     b. Sample the sunlight if it is front-facing.
-    c. Sample the punctual light sources based on a heuristic derived from their flux and inverse-square law. The score can be used to form a PDF for sampling.
+    c. Sample the punctual light sources based on a heuristic derived from their radiance and inverse-square law. The score can be used to form a PDF for sampling.
     d. Add a new light type: Area Light. Add corresponding parameters that describes the area light (i.e. center, normal, area, flux, geometry index) to the Light struct. Change the loader to add emissive geometry to the scene and add corresponding light parameters to the Light struct.
-    e. Sample the area light based on a heuristic derived from their flux and inverse-square law. Merge the score with those in c.
+    e. Sample the area light based on a heuristic derived from their radiance and inverse-square law. Merge the score with those in c.
     f. Add a light module (light.h, light.cpp and light_test.cpp) to the project. It should contain the light sampling and transport functions needed for the next-event estimation.
-    e. Change the SH Baker to use the next-event estimation algorithm.
+    g. Change the SH Baker to use the next-event estimation algorithm.
 2. Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.

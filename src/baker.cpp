@@ -26,19 +26,40 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
   return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
 }
 
-// Trace path using Occlusion helper
+// Computes a Monte Carlo path and return a radiance sample.
+// Rendering equation:
+// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{\Omega} f_r(x, \omega_i,
+// \omega_o) * L_i(x, \omega_i) * cos(\omega_i) d\omega_i
+//
+// where L_o is the radiance at the camera, f_r is the BRDF, L_i is the
+// radiance from the light, and \omega_i is the direction from the light to the
+// surface.
+//
+// To drastically reduce variance, we partition the paths into 2 disjoint sets:
+// 1. Primary rays: see the sky/sun directly
+// 2. Secondary rays: bounce off a surface
+//
+// Formally,
+// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{A_e} ...Le(x, x')...dA_e(x') +
+// \int_{\Omega \setminus A_e} ...L_i(x, \omega_i)...d\omega_i
+//
+// where Le(x, x') is the radiance from the light, L_i(x, \omega_i) is the
+// radiance from the environment, and \omega_i is the direction from the light
+// to the surface.
+//
+// This is also known as a technique called next event estimation (NEE).
 Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
                       const Eigen::Vector3f& origin, const Eigen::Vector3f& dir,
                       int depth, int max_depth, int num_light_samples,
                       std::mt19937& rng) {
   if (depth > max_depth) return Eigen::Vector3f::Zero();
 
-  Ray ray;
-  ray.origin = origin;
-  ray.direction = dir;
-  ray.tnear = 0.001f;
+  Ray visibility_ray;
+  visibility_ray.origin = origin;
+  visibility_ray.direction = dir;
+  visibility_ray.tnear = 0.001f;
 
-  std::optional<Occlusion> occ = FindOcclusion(rtc_scene, ray);
+  std::optional<Occlusion> occ = FindOcclusion(rtc_scene, visibility_ray);
 
   if (!occ.has_value()) {
     // Sky
@@ -96,14 +117,11 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
     // View direction is -dir
     Eigen::Vector3f wo = -dir;
 
-    // 1. Sample Lights
-    auto samples =
-        SampleLights(scene, hit_pos, hit_normal, num_light_samples, rng);
-
-    // 2. Evaluate Direct Light (NEE)
-    // EvaluateLights returns L_direct (Sum(Li * f_r * cos / pdf))
-    Eigen::Vector3f L_direct = EvaluateLights(
-        scene.sky, samples, hit_pos, hit_normal, dir, mat, occ->uv, rtc_scene);
+    // Evaluate Direct Light (NEE)
+    // EvaluateLights returns L_e(x, x')
+    Eigen::Vector3f L_direct = EvaluateLightSamples(
+        scene.sky, scene.lights, rtc_scene, hit_pos, hit_normal, wo, mat,
+        occ->uv, num_light_samples, rng);
 
     color += alpha * L_direct;
   }

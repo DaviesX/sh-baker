@@ -61,21 +61,20 @@ struct Light {
   Eigen::Vector3f color = Eigen::Vector3f::Ones();
   float intensity = 1.0f;
 
-  float inner_cone_angle = 0.0f;
-  float outer_cone_angle = 0.785398f;  // pi/4
+  float cos_inner_cone = 1.0f;
+  float cos_outer_cone = 0.70710678118654752440f;  // cos(pi/4)
 
-  // Area Light
-  Eigen::Vector3f center = Eigen::Vector3f::Zero();
-  Eigen::Vector3f normal = Eigen::Vector3f(0, 1, 0);
   // Area Light Parameters
   float area = 0.0f;
-  float flux = 0.0f;
-  int geometry_index = -1;  // Index into Scene::geometries
+  const Material* material = nullptr;
+  const Geometry* geometry = nullptr;
+  int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
 // --- SkyModel ---
 struct SkyModel {
-  Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0).normalized();
+  Eigen::Vector3f sun_direction =
+      Eigen::Vector3f(0, 1, 0).normalized();  // Points from surface to sun.
   Eigen::Vector3f sun_color = Eigen::Vector3f::Ones();
   float sun_intensity = 1.0f;
 };
