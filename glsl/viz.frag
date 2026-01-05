@@ -21,6 +21,11 @@ uniform sampler2D u_L20;
 uniform sampler2D u_L21;
 uniform sampler2D u_L22;
 
+uniform int u_UsePackedLuminance;
+uniform sampler2D u_PackedTex0;
+uniform sampler2D u_PackedTex1;
+uniform sampler2D u_PackedTex2;
+
 void main() {
     // 1. Albedo
     vec3 albedo = u_AlbedoColor;
@@ -71,15 +76,43 @@ void main() {
     float b8 = c5 * (x * x - y * y);
 
     // 3. Sample SH Coefficients
-    vec3 L0 = texture(u_L0, vTexCoord1).rgb;
-    vec3 L1m1 = texture(u_L1m1, vTexCoord1).rgb;
-    vec3 L10 = texture(u_L10, vTexCoord1).rgb;
-    vec3 L11 = texture(u_L11, vTexCoord1).rgb;
-    vec3 L2m2 = texture(u_L2m2, vTexCoord1).rgb;
-    vec3 L2m1 = texture(u_L2m1, vTexCoord1).rgb;
-    vec3 L20 = texture(u_L20, vTexCoord1).rgb;
-    vec3 L21 = texture(u_L21, vTexCoord1).rgb;
-    vec3 L22 = texture(u_L22, vTexCoord1).rgb;
+    vec3 L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22;
+
+    if (u_UsePackedLuminance == 1) {
+        vec4 p0 = texture(u_PackedTex0, vTexCoord1); // L0.rgb, L1m1.Y
+        vec4 p1 = texture(u_PackedTex1, vTexCoord1); // L10, L11, L2m2, L2m1
+        vec4 p2 = texture(u_PackedTex2, vTexCoord1); // L20, L21, L22, pad
+
+        L0 = p0.rgb;
+        
+        // Compute Chromaticity from L0
+        float L0_lum = dot(L0, vec3(0.2126, 0.7152, 0.0722));
+        vec3 chroma = vec3(1.0);
+        if (L0_lum > 0.000001) {
+            chroma = L0 / L0_lum;
+        }
+
+        // Expand luminance coefficients to RGB
+        L1m1 = vec3(p0.a) * chroma;
+        L10  = vec3(p1.r) * chroma;
+        L11  = vec3(p1.g) * chroma;
+        L2m2 = vec3(p1.b) * chroma;
+        L2m1 = vec3(p1.a) * chroma;
+        L20  = vec3(p2.r) * chroma;
+        L21  = vec3(p2.g) * chroma;
+        L22  = vec3(p2.b) * chroma;
+
+    } else {
+        L0 = texture(u_L0, vTexCoord1).rgb;
+        L1m1 = texture(u_L1m1, vTexCoord1).rgb;
+        L10 = texture(u_L10, vTexCoord1).rgb;
+        L11 = texture(u_L11, vTexCoord1).rgb;
+        L2m2 = texture(u_L2m2, vTexCoord1).rgb;
+        L2m1 = texture(u_L2m1, vTexCoord1).rgb;
+        L20 = texture(u_L20, vTexCoord1).rgb;
+        L21 = texture(u_L21, vTexCoord1).rgb;
+        L22 = texture(u_L22, vTexCoord1).rgb;
+    }
 
     // 4. Reconstruct Irradiance/Radiance
     vec3 irradiance = L0 * b0 +

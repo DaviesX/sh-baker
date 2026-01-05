@@ -266,6 +266,111 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
   return true;
 }
 
+bool SavePackedLuminance(const SHTexture& sh_texture,
+                         const std::filesystem::path& path) {
+  // We will save 3 RGBA files:
+  // _packed_0.exr: L0.rgb, L1m1.Y
+  // _packed_1.exr: L10.Y, L11.Y, L2m2.Y, L2m1.Y
+  // _packed_2.exr: L20.Y, L21.Y, L22.Y, 1.0 (Alpha/Unused)
+
+  std::filesystem::path parent = path.parent_path();
+  std::string stem = path.stem().string();
+  std::string extension = path.extension().string();
+
+  int num_pixels = sh_texture.width * sh_texture.height;
+
+  // L1/L2 Luminance weights (Rec. 709)
+  const Eigen::Vector3f kLumWeights(0.2126f, 0.7152f, 0.0722f);
+
+  // We have 3 output files.
+  for (int file_idx = 0; file_idx < 3; ++file_idx) {
+    std::string filename =
+        stem + "_packed_" + std::to_string(file_idx) + extension;
+    std::filesystem::path sub_path = parent / filename;
+
+    EXRHeader header;
+    InitEXRHeader(&header);
+    EXRImage image;
+    InitEXRImage(&image);
+
+    image.num_channels = 4;
+
+    std::vector<float> channels[4];
+    float* image_ptr[4];
+    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 4);
+    header.pixel_types = (int*)malloc(sizeof(int) * 4);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * 4);
+
+    for (int c = 0; c < 4; ++c) {
+      channels[c].resize(num_pixels);
+      image_ptr[c] = channels[c].data();
+
+      // Channel mapping logic
+      for (int p = 0; p < num_pixels; ++p) {
+        float val = 0.0f;
+        const auto& coeffs = sh_texture.pixels[p].coeffs;
+
+        if (file_idx == 0) {
+          // File 0: L0.r, L0.g, L0.b, L1m1.Y (indices 0, 1)
+          if (c < 3) {
+            // L0 RGB
+            val = coeffs[0][c];  // x, y, z
+          } else {
+            // L1m1 Luminance
+            val = coeffs[1].dot(kLumWeights);
+          }
+        } else if (file_idx == 1) {
+          // File 1: L10.Y, L11.Y, L2m2.Y, L2m1.Y (indices 2, 3, 4, 5)
+          int sh_idx = 2 + c;
+          val = coeffs[sh_idx].dot(kLumWeights);
+        } else if (file_idx == 2) {
+          // File 2: L20.Y, L21.Y, L22.Y, Unused (indices 6, 7, 8)
+          if (c < 3) {
+            int sh_idx = 6 + c;
+            val = coeffs[sh_idx].dot(kLumWeights);
+          } else {
+            val = 1.0f;  // Padding (Alpha)
+          }
+        }
+        channels[c][p] = val;
+      }
+
+      // Channel names: R, G, B, A
+      const char* names[] = {"R", "G", "B", "A"};
+      strncpy(header.channels[c].name, names[c], 255);
+
+      // Use HALF float for bandwidth optimization
+      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+      header.requested_pixel_types[c] =
+          TINYEXR_PIXELTYPE_HALF;  // Storage is half
+    }
+
+    image.images = (unsigned char**)image_ptr;
+    image.width = sh_texture.width;
+    image.height = sh_texture.height;
+
+    header.num_channels = 4;
+    header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
+
+    const char* err = nullptr;
+    int ret =
+        SaveEXRImageToFile(&image, &header, sub_path.string().c_str(), &err);
+
+    free(header.channels);
+    free(header.pixel_types);
+    free(header.requested_pixel_types);
+
+    if (ret != TINYEXR_SUCCESS) {
+      LOG(ERROR) << "SaveEXRImageToFile failed for " << sub_path << ": "
+                 << (err ? err : "Unknown error");
+      FreeEXRErrorMessage(err);
+      return false;
+    }
+    LOG(INFO) << "Saved packed SH: " << sub_path;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool SaveSHLightMap(const SHTexture& sh_texture,
@@ -278,6 +383,8 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
 
   if (mode == SaveMode::kCombined) {
     return SaveCombined(sh_texture, path);
+  } else if (mode == SaveMode::kLuminancePacked) {
+    return SavePackedLuminance(sh_texture, path);
   } else {
     return SaveSplit(sh_texture, path);
   }

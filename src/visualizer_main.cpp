@@ -116,7 +116,7 @@ GLuint LoadTexture(const sh_baker::Texture& tex) {
   return tid;
 }
 
-GLuint LoadEXRTexture(const std::string& path) {
+GLuint LoadEXRTexture(const std::string& path, bool use_half) {
   float* out;
   int width;
   int height;
@@ -134,9 +134,12 @@ GLuint LoadEXRTexture(const std::string& path) {
   GLuint tid;
   glGenTextures(1, &tid);
   glBindTexture(GL_TEXTURE_2D, tid);
+
+  GLint internal_fmt = use_half ? GL_RGBA16F : GL_RGB32F;
+
   // Upload as RGB float
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGBA, GL_FLOAT,
-               out);
+  glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, width, height, 0, GL_RGBA,
+               GL_FLOAT, out);
   // Linear filter usually, but for coefficients nearest might show pixels
   // better? Let's use Linear.
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -303,15 +306,33 @@ int main(int argc, char* argv[]) {
   const char* kCoeffSuffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
                                   "L2m1", "L20",  "L21", "L22"};
 
-  for (int i = 0; i < 9; ++i) {
-    std::string filename =
-        "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
-    std::filesystem::path p = input_dir / filename;
-    GLuint tid = LoadEXRTexture(p.string());
-    if (tid == 0) {
-      LOG(WARNING) << "Failed to load SH texture: " << p;
+  bool use_packed_luminance = false;
+
+  // Check if packed file exists
+  if (std::filesystem::exists(input_dir / "lightmap_packed_0.exr")) {
+    use_packed_luminance = true;
+    LOG(INFO) << "Detected Packed Luminance SH Lightmaps.";
+
+    for (int i = 0; i < 3; ++i) {
+      std::string filename = "lightmap_packed_" + std::to_string(i) + ".exr";
+      std::filesystem::path p = input_dir / filename;
+      // Optimized loading: request half float internal format
+      GLuint tid = LoadEXRTexture(p.string(), true);
+      if (tid == 0) LOG(WARNING) << "Failed to load SH texture: " << p;
+      g_SHTextures.push_back(tid);
     }
-    g_SHTextures.push_back(tid);
+  } else {
+    LOG(INFO) << "Using Standard SH Lightmaps (9 files).";
+    for (int i = 0; i < 9; ++i) {
+      std::string filename =
+          "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
+      std::filesystem::path p = input_dir / filename;
+      GLuint tid = LoadEXRTexture(p.string(), false);
+      if (tid == 0) {
+        LOG(WARNING) << "Failed to load SH texture: " << p;
+      }
+      g_SHTextures.push_back(tid);
+    }
   }
 
   // --- Shader ---
@@ -333,6 +354,10 @@ int main(int argc, char* argv[]) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(g_ShaderProgram);
+
+    // Set Mode Uniform
+    glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_UsePackedLuminance"),
+                use_packed_luminance ? 1 : 0);
 
     // Camera Matrix
     Eigen::Vector3f cam_pos_cartesian;
@@ -377,11 +402,23 @@ int main(int argc, char* argv[]) {
     Eigen::Matrix4f vp = proj * view;
 
     // Bind SH Textures
-    for (int i = 0; i < 9; ++i) {
-      glActiveTexture(GL_TEXTURE1 + i);
-      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-      std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
-      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+    if (use_packed_luminance) {
+      for (int i = 0; i < 3; ++i) {
+        glActiveTexture(GL_TEXTURE1 + i);
+        glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+        // Binding to slots 1, 2, 3 for packed
+        std::string u_name = "u_PackedTex" + std::to_string(i);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()),
+                    1 + i);
+      }
+    } else {
+      for (int i = 0; i < 9; ++i) {
+        glActiveTexture(GL_TEXTURE1 + i);
+        glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+        std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()),
+                    1 + i);
+      }
     }
 
     // Draw Meshes
