@@ -27,8 +27,7 @@ cmake --build build
 To run the unit tests:
 
 ```bash
-cd build
-./sh_baker_test
+./build/sh_baker_test
 ```
 
 ## Usage

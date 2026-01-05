@@ -1,5 +1,8 @@
 #include "rasterizer.h"
 
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -43,62 +46,84 @@ void BuildBasis(const Eigen::Vector3f& n, Eigen::Vector3f& t,
 
 std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                                          const RasterConfig& config) {
-  std::vector<SurfacePoint> surface_map(config.width * config.height);
+  int scaled_width = config.width * config.supersample_scale;
+  int scaled_height = config.height * config.supersample_scale;
+  std::vector<SurfacePoint> surface_map(scaled_width * scaled_height);
 
-  for (size_t geom_idx = 0; geom_idx < scene.geometries.size(); ++geom_idx) {
-    const auto& geo = scene.geometries[geom_idx];
-    size_t tri_count = geo.indices.size() / 3;
+  // We parallelize over geometries. TBB's work stealing should balance it?
+  // If a geometry is huge, we should parallelize inside it.
+  // Let's use a nested parallel structure.
 
-    for (size_t i = 0; i < tri_count; ++i) {
-      uint32_t idx0 = geo.indices[i * 3 + 0];
-      uint32_t idx1 = geo.indices[i * 3 + 1];
-      uint32_t idx2 = geo.indices[i * 3 + 2];
+  tbb::parallel_for(
+      tbb::blocked_range<size_t>(0, scene.geometries.size()),
+      [&](const tbb::blocked_range<size_t>& r_geom) {
+        for (size_t geom_idx = r_geom.begin(); geom_idx != r_geom.end();
+             ++geom_idx) {
+          const auto& geo = scene.geometries[geom_idx];
+          size_t tri_count = geo.indices.size() / 3;
 
-      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
-      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
-      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+          // Inner parallelism for triangles
+          tbb::parallel_for(
+              tbb::blocked_range<size_t>(0, tri_count),
+              [&](const tbb::blocked_range<size_t>& r_tri) {
+                for (size_t i = r_tri.begin(); i != r_tri.end(); ++i) {
+                  uint32_t idx0 = geo.indices[i * 3 + 0];
+                  uint32_t idx1 = geo.indices[i * 3 + 1];
+                  uint32_t idx2 = geo.indices[i * 3 + 2];
 
-      // Bounding box in UV space
-      float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});
-      float max_u = std::max({uv0.x(), uv1.x(), uv2.x()});
-      float min_v = std::min({uv0.y(), uv1.y(), uv2.y()});
-      float max_v = std::max({uv0.y(), uv1.y(), uv2.y()});
+                  Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+                  Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+                  Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      int min_x = std::max(0, (int)(min_u * config.width));
-      int max_x =
-          std::min(config.width - 1, (int)(std::ceil(max_u * config.width)));
-      int min_y = std::max(0, (int)(min_v * config.height));
-      int max_y =
-          std::min(config.height - 1, (int)(std::ceil(max_v * config.height)));
+                  // Bounding box in UV space
+                  float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});
+                  float max_u = std::max({uv0.x(), uv1.x(), uv2.x()});
+                  float min_v = std::min({uv0.y(), uv1.y(), uv2.y()});
+                  float max_v = std::max({uv0.y(), uv1.y(), uv2.y()});
 
-      for (int y = min_y; y <= max_y; ++y) {
-        for (int x = min_x; x <= max_x; ++x) {
-          Eigen::Vector2f p((x + 0.5f) / config.width,
-                            (y + 0.5f) / config.height);
-          float u, v, w;
-          if (Barycentric(p, uv0, uv1, uv2, u, v, w)) {
-            int pixel_idx = y * config.width + x;
-            // Store surface point
-            SurfacePoint& sp = surface_map[pixel_idx];
-            sp.valid = true;
-            sp.material_id = geo.material_id;
+                  int min_x = std::max(0, (int)(min_u * scaled_width));
+                  int max_x = std::min(scaled_width - 1,
+                                       (int)(std::ceil(max_u * scaled_width)));
+                  int min_y = std::max(0, (int)(min_v * scaled_height));
+                  int max_y = std::min(scaled_height - 1,
+                                       (int)(std::ceil(max_v * scaled_height)));
 
-            Eigen::Vector3f pos0 = geo.vertices[idx0];
-            Eigen::Vector3f pos1 = geo.vertices[idx1];
-            Eigen::Vector3f pos2 = geo.vertices[idx2];
-            sp.position = pos0 * u + pos1 * v + pos2 * w;
+                  for (int y = min_y; y <= max_y; ++y) {
+                    for (int x = min_x; x <= max_x; ++x) {
+                      Eigen::Vector2f p((x + 0.5f) / scaled_width,
+                                        (y + 0.5f) / scaled_height);
+                      float u, v, w;
+                      if (Barycentric(p, uv0, uv1, uv2, u, v, w)) {
+                        int pixel_idx = y * scaled_width + x;
+                        // Store surface point.
+                        // Note: This is a read-modify-write if we had blending,
+                        // but here we just overwrite.
+                        // Potential race with shared edges, but deterministic
+                        // enough for now.
+                        SurfacePoint sp;
+                        sp.valid = true;
+                        sp.material_id = geo.material_id;
 
-            Eigen::Vector3f n0 = geo.normals[idx0];
-            Eigen::Vector3f n1 = geo.normals[idx1];
-            Eigen::Vector3f n2 = geo.normals[idx2];
-            sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
+                        Eigen::Vector3f pos0 = geo.vertices[idx0];
+                        Eigen::Vector3f pos1 = geo.vertices[idx1];
+                        Eigen::Vector3f pos2 = geo.vertices[idx2];
+                        sp.position = pos0 * u + pos1 * v + pos2 * w;
 
-            BuildBasis(sp.normal, sp.tangent, sp.bitangent);
-          }
+                        Eigen::Vector3f n0 = geo.normals[idx0];
+                        Eigen::Vector3f n1 = geo.normals[idx1];
+                        Eigen::Vector3f n2 = geo.normals[idx2];
+                        sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
+
+                        BuildBasis(sp.normal, sp.tangent, sp.bitangent);
+
+                        surface_map[pixel_idx] = sp;
+                      }
+                    }
+                  }
+                }
+              });
         }
-      }
-    }
-  }
+      });
   return surface_map;
 }
 

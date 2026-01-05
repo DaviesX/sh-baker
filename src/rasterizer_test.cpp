@@ -39,6 +39,32 @@ TEST(RasterizerTest, RasterizeQuad) {
   EXPECT_NEAR(result[5].normal.z(), 1.0f, 0.001f);
 }
 
+TEST(RasterizerTest, RasterizeQuadSupersampled) {
+  Scene scene;
+  Geometry quad;
+  // Full 0-1 UV quad
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+  quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.indices = {0, 1, 2, 0, 2, 3};
+  scene.geometries.push_back(quad);
+
+  RasterConfig config;
+  config.width = 4;
+  config.height = 4;
+  config.supersample_scale = 2;  // 8x8 result
+
+  std::vector<SurfacePoint> result = RasterizeScene(scene, config);
+
+  EXPECT_EQ(result.size(), 64);  // 8x8
+
+  // All should be valid
+  for (int i = 0; i < 64; ++i) {
+    EXPECT_TRUE(result[i].valid) << "Pixel " << i << " should be covered.";
+  }
+}
+
 TEST(RasterizerTest, ValidityMask) {
   // Create dummy points
   std::vector<SurfacePoint> points(3);

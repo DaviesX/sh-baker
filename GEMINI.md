@@ -25,7 +25,44 @@ Phase 4: Optimization - low-hanging fruit
     e. Sample the area light based on a heuristic derived from their radiance and inverse-square law. Merge the score with those in c.
     f. Add a light module (light.h, light.cpp and light_test.cpp) to the project. It should contain the light sampling and transport functions needed for the next-event estimation.
     g. Change the SH Baker to use the next-event estimation algorithm.
-2. Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
+2. Jittered Sampling
+    We can use a jittered sampling pattern on each lightmap texel to avoid aliasing (a type of supersampling).
+3. Parallelization
+    We know that Embree depends on TBB for task scheduling. We can use TBB to parallelize the lightmap baking process.
+
+Phase 5: Accurate PBR Material Handling
+1. Load the normal map and tangent space from the glTF file. If the tangent vertex attribute is not present, we will compute it through MikkTSpace https://github.com/mmikk/MikkTSpace.
+2. Load the metalic roughness map from the glTF file.
+3. Update the SH Baker's material module to implement the glTF PBR BRDF (Reference: BRDF Implementation: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#appendix-b-brdf-implementation).
+4. Update the saver module to copy the normal map and metalic roughness map to the output directory.
+5. Luminance only L1 and L2 SH Coefficients
+    - We can add an option to save the luminance only L1 and L2 SH coefficients. This should save a lot of space.
+    - Pack the coefficients in few textures?
+    - Update the visualizer to support this mode (additional fragment shader?).
+
+
+Phase 6 Better Visualizer
+1. Implement normal mapping with SH coefficients.
+2. Implement metalic roughness mapping with SH coefficients.
+hint:
+```glsl
+// 1. Get Diffuse SH (sampled along Normal)
+vec3 diffuse = SampleSH(v_Normal, u_L0, u_L1, u_L2);
+
+// 2. Get Specular SH (sampled along Reflection)
+vec3 specular = SampleSH(R, u_L0, u_L1, u_L2);
+
+// 3. Combine using Fresnel (Schlick's approximation)
+vec3 F = FresnelSchlick(max(dot(v_Normal, V), 0.0), F0);
+vec3 ks = F;
+vec3 kd = 1.0 - ks;
+kd *= 1.0 - u_Metallic;	  
+
+vec3 finalColor = (kd * diffuse * albedo) + (ks * specular);
+```
+
+Phase 7 Visibility-Aware Importance Sampling
+Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.
         - Before the main bake, iterate through every cell in the grid.

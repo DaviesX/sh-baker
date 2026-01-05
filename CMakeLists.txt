@@ -54,6 +54,9 @@ find_package(embree 4 REQUIRED)
 # Eigen3 (Expected to be installed on system)
 find_package(Eigen3 REQUIRED)
 
+# TBB
+find_package(TBB REQUIRED)
+
 # --- Library (sh_baker_lib) ---
 
 set(LIB_SOURCES
@@ -102,6 +105,7 @@ target_link_libraries(sh_baker_lib PUBLIC
     gflags
     embree
     Eigen3::Eigen
+    TBB::tbb
 )
 
 # --- Executable (sh_baker) ---
