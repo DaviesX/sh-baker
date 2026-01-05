@@ -12,10 +12,99 @@
 #include <Eigen/Geometry>
 
 #include "colorspace.h"
+#include "mikktspace.h"
 #include "tiny_gltf.h"
 
 namespace sh_baker {
 namespace {
+
+// MikkTSpace Interface
+struct MikkTSpaceContext {
+  Geometry* geometry;
+};
+
+int GetNumFaces(const SMikkTSpaceContext* pContext) {
+  auto* ctx = static_cast<MikkTSpaceContext*>(pContext->m_pUserData);
+  return static_cast<int>(ctx->geometry->indices.size() / 3);
+}
+
+int GetNumVerticesOfFace(const SMikkTSpaceContext* pContext, const int iFace) {
+  return 3;
+}
+
+void GetPosition(const SMikkTSpaceContext* pContext, float fvPosOut[],
+                 const int iFace, const int iVert) {
+  auto* ctx = static_cast<MikkTSpaceContext*>(pContext->m_pUserData);
+  uint32_t idx = ctx->geometry->indices[iFace * 3 + iVert];
+  const auto& v = ctx->geometry->vertices[idx];
+  fvPosOut[0] = v.x();
+  fvPosOut[1] = v.y();
+  fvPosOut[2] = v.z();
+}
+
+void GetNormal(const SMikkTSpaceContext* pContext, float fvNormOut[],
+               const int iFace, const int iVert) {
+  auto* ctx = static_cast<MikkTSpaceContext*>(pContext->m_pUserData);
+  uint32_t idx = ctx->geometry->indices[iFace * 3 + iVert];
+  const auto& n = ctx->geometry->normals[idx];
+  fvNormOut[0] = n.x();
+  fvNormOut[1] = n.y();
+  fvNormOut[2] = n.z();
+}
+
+void GetTexCoord(const SMikkTSpaceContext* pContext, float fvTexcOut[],
+                 const int iFace, const int iVert) {
+  auto* ctx = static_cast<MikkTSpaceContext*>(pContext->m_pUserData);
+  uint32_t idx = ctx->geometry->indices[iFace * 3 + iVert];
+  // If no UVs, provide 0,0
+  if (ctx->geometry->texture_uvs.empty()) {
+    fvTexcOut[0] = 0.0f;
+    fvTexcOut[1] = 0.0f;
+  } else {
+    const auto& uv = ctx->geometry->texture_uvs[idx];
+    fvTexcOut[0] = uv.x();
+    fvTexcOut[1] = uv.y();
+  }
+}
+
+void SetTSpaceBasic(const SMikkTSpaceContext* pContext, const float fvTangent[],
+                    const float fSign, const int iFace, const int iVert) {
+  auto* ctx = static_cast<MikkTSpaceContext*>(pContext->m_pUserData);
+  uint32_t idx = ctx->geometry->indices[iFace * 3 + iVert];
+  // Since we might share vertices, this simple assignment might overwrite
+  // if vertices are shared but have different tangent spaces (UV seams/hard
+  // edges). However, tinygltf usually duplicates vertices for split attributes.
+  // We assume vertices are already split correctly for UVs/Normals.
+  if (idx >= ctx->geometry->tangents.size()) {
+    ctx->geometry->tangents.resize(ctx->geometry->vertices.size());
+  }
+  ctx->geometry->tangents[idx] =
+      Eigen::Vector4f(fvTangent[0], fvTangent[1], fvTangent[2], fSign);
+}
+
+void GenerateTangents(Geometry* geo) {
+  if (!geo->tangents.empty()) return;
+
+  // Resize to match vertices, initial zero
+  geo->tangents.resize(geo->vertices.size(), Eigen::Vector4f::Zero());
+
+  MikkTSpaceContext ctx;
+  ctx.geometry = geo;
+
+  SMikkTSpaceInterface iface = {};
+  iface.m_getNumFaces = GetNumFaces;
+  iface.m_getNumVerticesOfFace = GetNumVerticesOfFace;
+  iface.m_getPosition = GetPosition;
+  iface.m_getNormal = GetNormal;
+  iface.m_getTexCoord = GetTexCoord;
+  iface.m_setTSpaceBasic = SetTSpaceBasic;
+
+  SMikkTSpaceContext context = {};
+  context.m_pInterface = &iface;
+  context.m_pUserData = &ctx;
+
+  genTangSpaceDefault(&context);
+}
 
 // Helper to convert array to Eigen matrix/vector
 Eigen::Affine3f NodeToTransform(const tinygltf::Node& node) {
@@ -49,7 +138,7 @@ Eigen::Affine3f NodeToTransform(const tinygltf::Node& node) {
   return transform;
 }
 
-void ProcessPrimitive(const tinygltf::Model& model,
+bool ProcessPrimitive(const tinygltf::Model& model,
                       const tinygltf::Primitive& primitive,
                       const Eigen::Affine3f& transform, Scene* scene) {
   Geometry geo;
@@ -59,7 +148,13 @@ void ProcessPrimitive(const tinygltf::Model& model,
   // Get Position
   if (primitive.attributes.find("POSITION") == primitive.attributes.end()) {
     DLOG(WARNING) << "Primitive missing POSITION attribute";
-    return;
+    return false;
+  }
+
+  if (primitive.attributes.find("NORMAL") == primitive.attributes.end()) {
+    LOG(ERROR) << "Primitive missing NORMAL attribute. Baking requires Vertex "
+                  "Normals.";
+    return false;
   }
 
   const tinygltf::Accessor& pos_accessor =
@@ -122,6 +217,22 @@ void ProcessPrimitive(const tinygltf::Model& model,
                      : 2;
   }
 
+  // Get Tangent
+  const float* tan_data = nullptr;
+  int tan_stride = 0;
+  if (primitive.attributes.find("TANGENT") != primitive.attributes.end()) {
+    const tinygltf::Accessor& tan_accessor =
+        model.accessors[primitive.attributes.at("TANGENT")];
+    const tinygltf::BufferView& tan_view =
+        model.bufferViews[tan_accessor.bufferView];
+    const tinygltf::Buffer& tan_buffer = model.buffers[tan_view.buffer];
+    tan_data = reinterpret_cast<const float*>(
+        &tan_buffer.data[tan_view.byteOffset + tan_accessor.byteOffset]);
+    tan_stride = tan_accessor.ByteStride(tan_view)
+                     ? (tan_accessor.ByteStride(tan_view) / sizeof(float))
+                     : 4;
+  }
+
   // Indices
   if (primitive.indices > -1) {
     const tinygltf::Accessor& index_accessor =
@@ -157,6 +268,7 @@ void ProcessPrimitive(const tinygltf::Model& model,
   if (uv1_data) {
     geo.lightmap_uvs.reserve(vertex_count);
   }
+  geo.tangents.reserve(vertex_count);
 
   for (size_t i = 0; i < vertex_count; ++i) {
     geo.vertices.emplace_back(pos_data[i * pos_stride + 0],
@@ -168,6 +280,19 @@ void ProcessPrimitive(const tinygltf::Model& model,
                                norm_data[i * norm_stride + 1],
                                norm_data[i * norm_stride + 2]);
     } else {
+      // Normals are critical for baking.
+      // We could try to generate them from face normals?
+      // User says: "return std::nullopt if ... normal attribute exists" ->
+      // imply strict check at Scene level. But ProcessPrimitive returns void.
+      // We need to handle this. For now, let's log error and rely on LoadScene
+      // to fail if scene is empty/invalid? Actually, user wants strict check.
+      // Better to check outside or flag error. Since function is void, let's
+      // assume valid normals for now or fill dummy to avoid crash, but strict
+      // check is requested. Let's stick to user request: "return std::nullopt
+      // if the precondition that the normal attribute exists"
+      // -> We need to propagage error up.
+      // For now, let's keep the fallback (0,1,0) but LOG(ERROR) so it's
+      // visible? Or: The Loop below generates tangents.
       geo.normals.emplace_back(0, 1, 0);
     }
 
@@ -181,6 +306,38 @@ void ProcessPrimitive(const tinygltf::Model& model,
     if (uv1_data) {
       geo.lightmap_uvs.emplace_back(uv1_data[i * uv1_stride + 0],
                                     uv1_data[i * uv1_stride + 1]);
+    }
+
+    if (tan_data) {
+      geo.tangents.emplace_back(
+          tan_data[i * tan_stride + 0], tan_data[i * tan_stride + 1],
+          tan_data[i * tan_stride + 2], tan_data[i * tan_stride + 3]);
+    }
+  }
+
+  // Tangent Generation Logic
+  if (geo.tangents.empty()) {
+    if (!geo.texture_uvs.empty() && uv0_data != nullptr) {
+      // Has UVs -> Use MikkTSpace
+      GenerateTangents(&geo);
+    }
+
+    // If MikkTSpace failed or no UVs, fallback to geometric tangent
+    if (geo.tangents.empty()) {
+      geo.tangents.resize(vertex_count);
+      for (size_t i = 0; i < vertex_count; ++i) {
+        const Eigen::Vector3f& n = geo.normals[i];
+        // Arbitrary tangent basis
+        Eigen::Vector3f t;
+        if (std::abs(n.x()) < 0.9f) {
+          t = Eigen::Vector3f(1, 0, 0);
+        } else {
+          t = Eigen::Vector3f(0, 1, 0);
+        }
+        Eigen::Vector3f tangent = (t - n * n.dot(t)).normalized();
+        geo.tangents[i] =
+            Eigen::Vector4f(tangent.x(), tangent.y(), tangent.z(), 1.0f);
+      }
     }
   }
 
@@ -224,6 +381,32 @@ void ProcessPrimitive(const tinygltf::Model& model,
 
     scene->lights.push_back(std::move(area_light));
   }
+  return true;
+}
+
+// Helper to load a texture
+void LoadTexture(const tinygltf::Model& model, int tex_idx,
+                 const std::filesystem::path& base_path, Texture* out_tex,
+                 bool srgb = true) {
+  if (tex_idx >= 0 && tex_idx < model.textures.size()) {
+    int img_idx = model.textures[tex_idx].source;
+    if (img_idx >= 0 && img_idx < model.images.size()) {
+      const auto& img = model.images[img_idx];
+      out_tex->width = img.width;
+      out_tex->height = img.height;
+      out_tex->channels = img.component;
+      out_tex->pixel_data = img.image;  // Copy data
+      if (!img.uri.empty()) {
+        std::filesystem::path uri_path(img.uri);
+        if (uri_path.is_absolute()) {
+          out_tex->file_path = uri_path;
+        } else {
+          out_tex->file_path = std::filesystem::absolute(base_path / uri_path);
+        }
+      }
+      return;
+    }
+  }
 }
 
 void ProcessMaterials(const tinygltf::Model& model,
@@ -231,6 +414,25 @@ void ProcessMaterials(const tinygltf::Model& model,
   if (model.materials.empty()) {
     Material default_mat;
     default_mat.name = "default";
+    // Default 1x1 white albedo
+    default_mat.albedo.width = 1;
+    default_mat.albedo.height = 1;
+    default_mat.albedo.channels = 4;
+    default_mat.albedo.pixel_data = {255, 255, 255, 255};
+
+    // Default 1x1 normal (0.5, 0.5, 1.0) -> (128, 128, 255)
+    default_mat.normal_texture.width = 1;
+    default_mat.normal_texture.height = 1;
+    default_mat.normal_texture.channels = 3;
+    default_mat.normal_texture.pixel_data = {128, 128, 255};
+
+    // Default 1x1 metallic-roughness (roughness=1, metallic=1) -> G=255, B=255
+    default_mat.metallic_roughness_texture.width = 1;
+    default_mat.metallic_roughness_texture.height = 1;
+    default_mat.metallic_roughness_texture.channels = 3;
+    default_mat.metallic_roughness_texture.pixel_data = {0, 255,
+                                                         255};  // R unused
+
     scene->materials.push_back(default_mat);
     return;
   }
@@ -244,9 +446,6 @@ void ProcessMaterials(const tinygltf::Model& model,
         static_cast<float>(gltf_mat.pbrMetallicRoughness.metallicFactor);
 
     // Emission
-    // Our ioquake3 exporter will ensure that the
-    // KHR_materials_emissive_strength extension is used for all emissive
-    // materials.
     auto emissive_strength_it =
         gltf_mat.extensions.find("KHR_materials_emissive_strength");
     if (emissive_strength_it != gltf_mat.extensions.end()) {
@@ -258,30 +457,10 @@ void ProcessMaterials(const tinygltf::Model& model,
     }
 
     // Texture (Base Color)
-    int tex_idx = gltf_mat.pbrMetallicRoughness.baseColorTexture.index;
-    bool texture_loaded = false;
-    if (tex_idx >= 0 && tex_idx < model.textures.size()) {
-      int img_idx = model.textures[tex_idx].source;
-      if (img_idx >= 0 && img_idx < model.images.size()) {
-        const auto& img = model.images[img_idx];
-        mat.albedo.width = img.width;
-        mat.albedo.height = img.height;
-        mat.albedo.channels = img.component;
-        mat.albedo.pixel_data = img.image;  // Copy data
-        if (!img.uri.empty()) {
-          std::filesystem::path uri_path(img.uri);
-          if (uri_path.is_absolute()) {
-            mat.albedo.file_path = uri_path;
-          } else {
-            mat.albedo.file_path =
-                std::filesystem::absolute(base_path / uri_path);
-          }
-        }
-        texture_loaded = true;
-      }
-    }
+    int albedo_idx = gltf_mat.pbrMetallicRoughness.baseColorTexture.index;
+    LoadTexture(model, albedo_idx, base_path, &mat.albedo, true);
 
-    if (!texture_loaded) {
+    if (mat.albedo.pixel_data.empty()) {
       // Create 1x1 texture from baseColorFactor (Linear -> sRGB)
       const auto& color = gltf_mat.pbrMetallicRoughness.baseColorFactor;
       mat.albedo.width = 1;
@@ -300,6 +479,38 @@ void ProcessMaterials(const tinygltf::Model& model,
         // Fallback white
         mat.albedo.pixel_data = {255, 255, 255, 255};
       }
+    }
+
+    // Normal Texture
+    int norm_idx = gltf_mat.normalTexture.index;
+    LoadTexture(model, norm_idx, base_path, &mat.normal_texture, false);
+
+    if (mat.normal_texture.pixel_data.empty()) {
+      // Default 1x1 normal (0.5, 0.5, 1.0) -> (128, 128, 255)
+      mat.normal_texture.width = 1;
+      mat.normal_texture.height = 1;
+      mat.normal_texture.channels = 3;
+      mat.normal_texture.pixel_data = {128, 128, 255};
+    }
+
+    // Metallic-Roughness Texture
+    int mr_idx = gltf_mat.pbrMetallicRoughness.metallicRoughnessTexture.index;
+    LoadTexture(model, mr_idx, base_path, &mat.metallic_roughness_texture,
+                false);
+
+    if (mat.metallic_roughness_texture.pixel_data.empty()) {
+      // Default 1x1 using factors
+      // Metallic is stored in B, Roughness in G
+      unsigned char m = static_cast<unsigned char>(
+          std::clamp(mat.metallic, 0.0f, 1.0f) * 255.0f);
+      unsigned char r = static_cast<unsigned char>(
+          std::clamp(mat.roughness, 0.0f, 1.0f) * 255.0f);
+
+      mat.metallic_roughness_texture.width = 1;
+      mat.metallic_roughness_texture.height = 1;
+      mat.metallic_roughness_texture.channels = 3;
+      // R is unused, G=Roughness, B=Metallic
+      mat.metallic_roughness_texture.pixel_data = {0, r, m};
     }
 
     scene->materials.push_back(std::move(mat));
@@ -366,7 +577,7 @@ void ProcessLight(const tinygltf::Model& model,
   scene->lights.push_back(std::move(l));
 }
 
-void TraverseNodes(const tinygltf::Model& model, int node_index,
+bool TraverseNodes(const tinygltf::Model& model, int node_index,
                    const Eigen::Affine3f& parent_transform, Scene* scene) {
   const tinygltf::Node& node = model.nodes[node_index];
 
@@ -376,7 +587,9 @@ void TraverseNodes(const tinygltf::Model& model, int node_index,
   if (node.mesh >= 0) {
     const tinygltf::Mesh& mesh = model.meshes[node.mesh];
     for (const auto& primitive : mesh.primitives) {
-      ProcessPrimitive(model, primitive, global_transform, scene);
+      if (!ProcessPrimitive(model, primitive, global_transform, scene)) {
+        return false;
+      }
     }
   }
 
@@ -404,8 +617,9 @@ void TraverseNodes(const tinygltf::Model& model, int node_index,
   }
 
   for (int child : node.children) {
-    TraverseNodes(model, child, global_transform, scene);
+    if (!TraverseNodes(model, child, global_transform, scene)) return false;
   }
+  return true;
 }
 
 }  // namespace
@@ -440,7 +654,11 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
   const tinygltf::Scene& gltf_scene =
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
   for (int node_index : gltf_scene.nodes) {
-    TraverseNodes(model, node_index, Eigen::Affine3f::Identity(), &scene);
+    if (!TraverseNodes(model, node_index, Eigen::Affine3f::Identity(),
+                       &scene)) {
+      LOG(ERROR) << "Failed to process scene graph.";
+      return std::nullopt;
+    }
   }
 
   // Set geometry pointers for area lights because all geometries have been

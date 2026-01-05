@@ -31,8 +31,8 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
 // segment).
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
-                             const Eigen::Vector3f& reflected,
-                             const Eigen::Vector3f& incident);
+                             const Eigen::Vector3f& incident,
+                             const Eigen::Vector3f& reflected);
 
 // Helper to retrieve albedo from texture or default.
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv);
@@ -43,6 +43,17 @@ Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv);
 // Returns the alpha (transparency) value at the given UV coordinate.
 // Returns 1.0f if the texture has no alpha channel.
 float GetAlpha(const Material& mat, const Eigen::Vector2f& uv);
+
+// Helper to retrieve metallic and roughness.
+void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
+                          float& metallic, float& roughness);
+
+// Helper to retrieve perturbed normal from normal map.
+// If no normal map, returns the geometric normal.
+Eigen::Vector3f GetNormalFromMap(const Material& mat, const Eigen::Vector2f& uv,
+                                 const Eigen::Vector3f& normal,
+                                 const Eigen::Vector3f& tangent,
+                                 const Eigen::Vector3f& bitangent);
 
 }  // namespace sh_baker
 

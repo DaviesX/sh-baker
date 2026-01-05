@@ -12,6 +12,7 @@ TEST(RasterizerTest, RasterizeQuad) {
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
   quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   quad.indices = {0, 1, 2, 0, 2, 3};
   scene.geometries.push_back(quad);
 
@@ -47,6 +48,7 @@ TEST(RasterizerTest, RasterizeQuadSupersampled) {
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
   quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   quad.indices = {0, 1, 2, 0, 2, 3};
   scene.geometries.push_back(quad);
 

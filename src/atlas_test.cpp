@@ -18,6 +18,7 @@ TEST(AtlasTest, SimpleQuad) {
   Geometry input_geo;
   input_geo.vertices = {{-1, -1, 0}, {1, -1, 0}, {-1, 1, 0}, {1, 1, 0}};
   input_geo.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  input_geo.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   input_geo.texture_uvs = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
   input_geo.indices = {0, 1, 2, 2, 1, 3};
 

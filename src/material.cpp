@@ -33,61 +33,228 @@ Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv) {
   return Eigen::Vector3f::Zero();
 }
 
+void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
+                          float& metallic, float& roughness) {
+  metallic = mat.metallic;
+  roughness = mat.roughness;
+
+  if (!mat.metallic_roughness_texture.pixel_data.empty()) {
+    int tx = std::clamp((int)(uv.x() * mat.metallic_roughness_texture.width), 0,
+                        (int)mat.metallic_roughness_texture.width - 1);
+    int ty = std::clamp((int)(uv.y() * mat.metallic_roughness_texture.height),
+                        0, (int)mat.metallic_roughness_texture.height - 1);
+    int idx = (ty * mat.metallic_roughness_texture.width + tx) *
+              mat.metallic_roughness_texture.channels;
+
+    // glTF: Metalness in B, Roughness in G.
+    float b_metal = mat.metallic_roughness_texture.pixel_data[idx + 2] / 255.0f;
+    float g_rough = mat.metallic_roughness_texture.pixel_data[idx + 1] / 255.0f;
+
+    metallic *= b_metal;
+    roughness *= g_rough;
+  }
+}
+
+Eigen::Vector3f GetNormalFromMap(const Material& mat, const Eigen::Vector2f& uv,
+                                 const Eigen::Vector3f& normal,
+                                 const Eigen::Vector3f& tangent,
+                                 const Eigen::Vector3f& bitangent) {
+  if (mat.normal_texture.pixel_data.empty()) return normal;
+
+  int tx = std::clamp((int)(uv.x() * mat.normal_texture.width), 0,
+                      (int)mat.normal_texture.width - 1);
+  int ty = std::clamp((int)(uv.y() * mat.normal_texture.height), 0,
+                      (int)mat.normal_texture.height - 1);
+  int idx = (ty * mat.normal_texture.width + tx) * mat.normal_texture.channels;
+
+  float r = mat.normal_texture.pixel_data[idx] / 255.0f;
+  float g = mat.normal_texture.pixel_data[idx + 1] / 255.0f;
+  float b = mat.normal_texture.pixel_data[idx + 2] / 255.0f;
+
+  // Remap [0,1] to [-1,1]
+  Eigen::Vector3f local_n(r * 2.0f - 1.0f, g * 2.0f - 1.0f, b * 2.0f - 1.0f);
+  // local_n.z should be positive? glTF says yes.
+
+  // Create TBN matrix
+  Eigen::Matrix3f tbn;
+  tbn.col(0) = tangent;
+  tbn.col(1) = bitangent;
+  tbn.col(2) = normal;
+
+  return (tbn * local_n).normalized();
+}
+
+namespace {
+// Trowbridge-Reitz GGX Normal Distribution Function
+float DistributionGGX(const Eigen::Vector3f& N, const Eigen::Vector3f& H,
+                      float roughness) {
+  float a = roughness * roughness;
+  float a2 = a * a;
+  float NdotH = std::max(0.0f, N.dot(H));
+  float NdotH2 = NdotH * NdotH;
+
+  float nom = a2;
+  float denom = (NdotH2 * (a2 - 1.0f) + 1.0f);
+  denom = M_PI * denom * denom;
+
+  return nom / denom;
+}
+
+// Smith's Schlick-GGX Geometry Shadowing Function
+float GeometrySchlickGGX(float NdotV, float roughness) {
+  float r = (roughness + 1.0f);
+  float k = (r * r) / 8.0f;
+
+  float nom = NdotV;
+  float denom = NdotV * (1.0f - k) + k;
+
+  return nom / denom;
+}
+
+float GeometrySmith(const Eigen::Vector3f& N, const Eigen::Vector3f& V,
+                    const Eigen::Vector3f& L, float roughness) {
+  float NdotV = std::max(0.0f, N.dot(V));
+  float NdotL = std::max(0.0f, N.dot(L));
+  float ggx1 = GeometrySchlickGGX(NdotV, roughness);
+  float ggx2 = GeometrySchlickGGX(NdotL, roughness);
+
+  return ggx1 * ggx2;
+}
+
+// Fresnel Schlick
+Eigen::Vector3f FresnelSchlick(float cosTheta, const Eigen::Vector3f& F0) {
+  return F0 + (Eigen::Vector3f::Ones() - F0) * std::pow(1.0f - cosTheta, 5.0f);
+}
+}  // namespace
+
 ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                                 const Eigen::Vector3f& normal,
                                 const Eigen::Vector3f& incident,
                                 std::mt19937& rng) {
-  // Cosine-weighted hemisphere sampling for Lambertian
+  float metallic, roughness;
+  GetMetallicRoughness(mat, uv, metallic, roughness);
+
   std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-  float r1 = dist(rng);
-  float r2 = dist(rng);
+  float r0 = dist(rng);
 
-  // Local Cosine Sample
-  float phi = 2.0f * M_PI * r1;
-  float theta = std::acos(std::sqrt(r2));
-  float sin_theta = std::sin(theta);
-  Eigen::Vector3f local_dir(std::cos(phi) * sin_theta,
-                            std::sin(phi) * sin_theta, std::cos(theta));
+  // F0 mix
+  Eigen::Vector3f albedo = GetAlbedo(mat, uv);
+  Eigen::Vector3f F0 = Eigen::Vector3f(0.04f, 0.04f, 0.04f);
+  F0 = F0 * (1.0f - metallic) + albedo * metallic;
 
-  // Transform to World
-  Eigen::Vector3f t, b;
-  if (std::abs(normal.x()) > std::abs(normal.z())) {
-    t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
+  float spec_prob = std::clamp(F0.mean(), 0.1f, 0.9f);
+  if (metallic > 0.5f) spec_prob = 0.9f;
+
+  if (r0 < spec_prob) {
+    // Specular Sample (GGX)
+    float r1 = dist(rng);
+    float r2 = dist(rng);
+
+    float a = roughness * roughness;
+    float phi = 2.0f * M_PI * r1;
+    float cos_theta = std::sqrt((1.0f - r2) / (1.0f + (a * a - 1.0f) * r2));
+    float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+
+    Eigen::Vector3f H_local(sin_theta * std::cos(phi),
+                            sin_theta * std::sin(phi), cos_theta);
+
+    // Transform H to World
+    Eigen::Vector3f t, b;
+    if (std::abs(normal.x()) > std::abs(normal.z())) {
+      t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
+    } else {
+      t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
+    }
+    t.normalize();
+    b = normal.cross(t);
+
+    Eigen::Vector3f H =
+        (t * H_local.x() + b * H_local.y() + normal * H_local.z()).normalized();
+
+    // L = 2(V.H)H - V
+    Eigen::Vector3f V = -incident;
+    Eigen::Vector3f L = (2.0f * V.dot(H) * H - V).normalized();
+
+    ReflectionSample sample;
+    sample.direction = L;
+
+    float D = DistributionGGX(normal, H, roughness);
+    float NdotH = std::max(0.0f, normal.dot(H));
+    float HdotV = std::max(0.0f, H.dot(V));
+    float pdf_desc = (D * NdotH) / (4.0f * HdotV + 0.0001f);
+
+    sample.pdf = pdf_desc * spec_prob;
+
+    return sample;
   } else {
-    t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
+    // Diffuse Sample (Cosine)
+    float r1 = dist(rng);
+    float r2 = dist(rng);
+    float phi = 2.0f * M_PI * r1;
+    float theta = std::acos(std::sqrt(r2));
+    float sin_theta = std::sin(theta);
+
+    Eigen::Vector3f local_dir(std::cos(phi) * sin_theta,
+                              std::sin(phi) * sin_theta, std::cos(theta));
+
+    // Transform to World
+    Eigen::Vector3f t, b;
+    if (std::abs(normal.x()) > std::abs(normal.z())) {
+      t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
+    } else {
+      t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
+    }
+    t.normalize();
+    b = normal.cross(t);
+
+    Eigen::Vector3f world_dir =
+        t * local_dir.x() + b * local_dir.y() + normal * local_dir.z();
+
+    ReflectionSample sample;
+    sample.direction = world_dir.normalized();
+    sample.pdf = (local_dir.z() / M_PI) * (1.0f - spec_prob);
+    return sample;
   }
-  t.normalize();
-  b = normal.cross(t);
-
-  Eigen::Vector3f world_dir =
-      t * local_dir.x() + b * local_dir.y() + normal * local_dir.z();
-
-  ReflectionSample sample;
-  sample.direction = world_dir.normalized();
-  // PDF = cos(theta) / PI
-  // cos(theta) is local_dir.z()
-  sample.pdf = local_dir.z() / M_PI;
-  if (sample.pdf < 1e-6f) sample.pdf = 1e-6f;
-
-  return sample;
 }
 
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
-                             const Eigen::Vector3f& reflected,
-                             const Eigen::Vector3f& incident) {
-  // Lambertian BRDF: rho / PI
-  // Note: reflected direction is not used for perfect Lambertian
-  // incident direction is also not strictly needed if we assume valid
-  // hemisphere
+                             const Eigen::Vector3f& incident,
+                             const Eigen::Vector3f& reflected) {
+  Eigen::Vector3f V = -incident;
+  Eigen::Vector3f L = reflected;
+  Eigen::Vector3f N = normal;
 
-  // Check if incident is in the same hemisphere as normal
-  if (normal.dot(incident) <= 0.0f) {
+  if (N.dot(V) <= 0.0f || N.dot(L) <= 0.0f) {
     return Eigen::Vector3f::Zero();
   }
 
+  float metallic, roughness;
+  GetMetallicRoughness(mat, uv, metallic, roughness);
   Eigen::Vector3f albedo = GetAlbedo(mat, uv);
-  return albedo * (1.0f / M_PI);
+
+  Eigen::Vector3f H = (V + L).normalized();
+
+  float D = DistributionGGX(N, H, roughness);
+  float G = GeometrySmith(N, V, L, roughness);
+
+  Eigen::Vector3f F0 = Eigen::Vector3f(0.04f, 0.04f, 0.04f);
+  F0 = F0 * (1.0f - metallic) + albedo * metallic;
+
+  Eigen::Vector3f F = FresnelSchlick(std::max(0.0f, H.dot(V)), F0);
+
+  Eigen::Vector3f numerator = D * G * F;
+  float denominator =
+      4.0f * std::max(0.0f, N.dot(V)) * std::max(0.0f, N.dot(L)) + 0.0001f;
+  Eigen::Vector3f specular = numerator / denominator;
+
+  Eigen::Vector3f kS = F;
+  Eigen::Vector3f kD = Eigen::Vector3f::Ones() - kS;
+  kD *= (1.0f - metallic);
+
+  Eigen::Vector3f diffuse = kD.cwiseProduct(albedo) / M_PI;
+
+  return diffuse + specular;
 }
 
 float GetAlpha(const Material& mat, const Eigen::Vector2f& uv) {

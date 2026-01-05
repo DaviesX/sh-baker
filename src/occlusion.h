@@ -19,6 +19,8 @@ struct Occlusion {
   Eigen::Vector3f position;
   Eigen::Vector2f uv;
   Eigen::Vector3f normal;
+  Eigen::Vector3f tangent;
+  Eigen::Vector3f bitangent;
   int material_id;
 };
 

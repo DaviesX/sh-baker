@@ -1,6 +1,7 @@
 #include "saver.h"
 
 #include <glog/logging.h>
+#include <stb_image_write.h>
 #include <tiny_gltf.h>
 
 #include <cmath>
@@ -314,13 +315,46 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     } else if (mat.albedo.width == 1 && mat.albedo.height == 1 &&
                mat.albedo.pixel_data.size() >= 4) {
       // 1x1 Texture -> baseColorFactor (Linear)
-      // Convert sRGB -> Linear
       std::vector<double> color(4);
       for (int i = 0; i < 3; ++i) {
         color[i] = SRGBToLinear(mat.albedo.pixel_data[i]);
       }
       color[3] = mat.albedo.pixel_data[3] / 255.0f;  // Alpha
       gmat.pbrMetallicRoughness.baseColorFactor = color;
+    }
+
+    // Normal Texture
+    if (mat.normal_texture.file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.normal_texture.file_path, path.parent_path(),
+                            &model, &texture_allocations);
+      if (texture_index.has_value()) {
+        gmat.normalTexture.index = *texture_index;
+      }
+    }
+    // If 1x1 normal map (fallback), we skip it as it likely represents flat
+    // normal
+
+    // Metallic-Roughness Texture
+    if (mat.metallic_roughness_texture.file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.metallic_roughness_texture.file_path,
+                            path.parent_path(), &model, &texture_allocations);
+      if (texture_index.has_value()) {
+        gmat.pbrMetallicRoughness.metallicRoughnessTexture.index =
+            *texture_index;
+      }
+    } else if (mat.metallic_roughness_texture.width == 1 &&
+               mat.metallic_roughness_texture.height == 1 &&
+               mat.metallic_roughness_texture.pixel_data.size() >= 3) {
+      // Extract factors
+      // B = Metallic, G = Roughness
+      // We assume the stored pixel data is correct (PBR convention)
+      unsigned char g = mat.metallic_roughness_texture.pixel_data[1];
+      unsigned char b = mat.metallic_roughness_texture.pixel_data[2];
+
+      gmat.pbrMetallicRoughness.roughnessFactor = g / 255.0;
+      gmat.pbrMetallicRoughness.metallicFactor = b / 255.0;
     }
 
     model.materials.push_back(gmat);
@@ -379,6 +413,24 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       prim.attributes["NORMAL"] =
           AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
                       geo.normals.size(), TINYGLTF_TYPE_VEC3, {}, {}, &model);
+    }
+
+    // Tangent
+    if (!geo.tangents.empty()) {
+      int view_idx;
+      std::vector<float> buffer_data;
+      buffer_data.reserve(geo.tangents.size() * 4);
+      for (const auto& t : geo.tangents) {
+        buffer_data.push_back(t.x());
+        buffer_data.push_back(t.y());
+        buffer_data.push_back(t.z());
+        buffer_data.push_back(t.w());
+      }
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 16,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
+      prim.attributes["TANGENT"] =
+          AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
+                      geo.tangents.size(), TINYGLTF_TYPE_VEC4, {}, {}, &model);
     }
 
     // Texcoord 0 (Texture UVs)

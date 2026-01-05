@@ -1,5 +1,6 @@
 #include "rasterizer.h"
 
+#include <glog/logging.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -114,7 +115,20 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                         Eigen::Vector3f n2 = geo.normals[idx2];
                         sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
 
-                        BuildBasis(sp.normal, sp.tangent, sp.bitangent);
+                        CHECK(!geo.tangents.empty());
+                        Eigen::Vector4f t0 = geo.tangents[idx0];
+                        Eigen::Vector4f t1 = geo.tangents[idx1];
+                        Eigen::Vector4f t2 = geo.tangents[idx2];
+                        Eigen::Vector4f interpolated_tan =
+                            t0 * u + t1 * v + t2 * w;
+
+                        Eigen::Vector3f t = interpolated_tan.head<3>();
+                        // Gram-Schmidt orthogonalization
+                        sp.tangent =
+                            (t - sp.normal * sp.normal.dot(t)).normalized();
+                        // Calculate bitangent (using w for handedness)
+                        sp.bitangent =
+                            sp.normal.cross(sp.tangent) * interpolated_tan.w();
 
                         surface_map[pixel_idx] = sp;
                       }

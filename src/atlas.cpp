@@ -72,6 +72,7 @@ std::vector<Geometry> CreateAtlasGeometries(
     new_geo.normals.resize(new_vertex_count);
     new_geo.texture_uvs.resize(new_vertex_count);
     new_geo.lightmap_uvs.resize(new_vertex_count);
+    new_geo.tangents.resize(new_vertex_count);
 
     // Fill vertices
     for (uint32_t v = 0; v < new_vertex_count; ++v) {
@@ -80,17 +81,20 @@ std::vector<Geometry> CreateAtlasGeometries(
 
       // Copy attributes from original mesh
       if (original_index < src_geo.vertices.size()) {
+        // Enforce invariants
+        CHECK(!src_geo.normals.empty()) << "Source geometry must have normals";
+        CHECK(!src_geo.tangents.empty())
+            << "Source geometry must have tangents";
+
         new_geo.vertices[v] = src_geo.vertices[original_index];
-        // If normals/uvs existed, copy them. If not, use defaults/zero.
-        if (!src_geo.normals.empty())
-          new_geo.normals[v] = src_geo.normals[original_index];
-        else
-          new_geo.normals[v] = Eigen::Vector3f(0, 1, 0);
+        new_geo.normals[v] = src_geo.normals[original_index];
+        new_geo.tangents[v] = src_geo.tangents[original_index];
 
         if (!src_geo.texture_uvs.empty())
           new_geo.texture_uvs[v] = src_geo.texture_uvs[original_index];
         else
           new_geo.texture_uvs[v] = Eigen::Vector2f(0, 0);
+
       } else {
         // Should not happen if xref is valid
         LOG(ERROR) << "xatlas xref out of bounds!";
