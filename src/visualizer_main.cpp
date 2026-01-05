@@ -20,10 +20,9 @@ const int kWindowWidth = 1280;
 const int kWindowHeight = 720;
 
 // --- Flags ---
-DEFINE_string(input, "", "Path to the input glTF file.");
-DEFINE_string(sh_input, "",
-              "Path to the first SH coefficient file (e.g. "
-              "output/lightmap_L0.exr). Assumes split files.");
+DEFINE_string(input, "",
+              "Path to the input folder containing scene.gltf and "
+              "lightmap_*.exr files.");
 
 // --- Globals ---
 GLuint g_ShaderProgram = 0;
@@ -190,10 +189,15 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
-  if (FLAGS_input.empty() || FLAGS_sh_input.empty()) {
-    std::cerr << "Usage: " << argv[0]
-              << " --input <scene.gltf> --sh_input <lightmap_L0.exr>"
-              << std::endl;
+  if (FLAGS_input.empty()) {
+    std::cerr << "Usage: " << argv[0] << " --input <folder>" << std::endl;
+    return 1;
+  }
+
+  std::filesystem::path input_dir(FLAGS_input);
+  if (!std::filesystem::exists(input_dir) ||
+      !std::filesystem::is_directory(input_dir)) {
+    LOG(ERROR) << "Input is not a valid directory: " << FLAGS_input;
     return 1;
   }
 
@@ -219,8 +223,10 @@ int main(int argc, char* argv[]) {
   glfwSetScrollCallback(window, ScrollCallback);
 
   // --- Load Scene ---
-  LOG(INFO) << "Loading scene: " << FLAGS_input;
-  auto scene_opt = sh_baker::LoadScene(FLAGS_input);
+  // --- Load Scene ---
+  auto scene_path = input_dir / "scene.gltf";
+  LOG(INFO) << "Loading scene: " << scene_path;
+  auto scene_opt = sh_baker::LoadScene(scene_path);
   if (!scene_opt) {
     LOG(ERROR) << "Failed to load scene";
     return 1;
@@ -294,26 +300,13 @@ int main(int argc, char* argv[]) {
   }
 
   // --- Load SH Textures ---
-  // Assumes kSplitChannels mode file names
-  // User flag provides L0.exr, we infer others
-  std::filesystem::path l0_path(FLAGS_sh_input);
-  std::string parent = l0_path.parent_path().string();
-  std::string stem = l0_path.stem().string();  // e.g., lightmap_L0
-  std::string ext = l0_path.extension().string();
-
-  // If input is literally "..._L0.exr", we remove "_L0" to find base.
-  std::string base_stem = stem;
-  if (base_stem.size() >= 3 &&
-      base_stem.substr(base_stem.size() - 3) == "_L0") {
-    base_stem = base_stem.substr(0, base_stem.size() - 3);
-  }
-
   const char* kCoeffSuffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
                                   "L2m1", "L20",  "L21", "L22"};
 
   for (int i = 0; i < 9; ++i) {
-    std::string filename = base_stem + "_" + kCoeffSuffixes[i] + ext;
-    std::filesystem::path p = std::filesystem::path(parent) / filename;
+    std::string filename =
+        "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
+    std::filesystem::path p = input_dir / filename;
     GLuint tid = LoadEXRTexture(p.string());
     if (tid == 0) {
       LOG(WARNING) << "Failed to load SH texture: " << p;

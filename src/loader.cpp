@@ -90,39 +90,36 @@ void ProcessPrimitive(const tinygltf::Model& model,
                       : 3;
   }
 
-  // Get UV
-  const float* uv_data = nullptr;
-  int uv_stride = 0;
-  std::string texcoord = "TEXCOORD_0";
-  if (primitive.attributes.find("TEXCOORD_1") != primitive.attributes.end()) {
-    // Prefer lightmap UVs if available? Or just check both?
-    // Logic: If we are baking, we need the baking UVs.
-    // Assuming TEXCOORD_1 is for lightmap if present.
-    // But for scene geometry, we might want TEXCOORD_0 for albedo?
-    // The task says "Input: glTF file (level geometry with lightmap UVs from
-    // xatlas)". Let's assume TEXCOORD_0 is standard UV and TEXCOORD_1 might be
-    // the lightmap UV. For now, let's just grab TEXCOORD_0 as "uvs" for the
-    // geometry. If we need a second set, we should add uvs2 to Geometry. But
-    // let's stick to what was there: check 1 then 0.
-    if (primitive.attributes.find("TEXCOORD_0") != primitive.attributes.end()) {
-      texcoord = "TEXCOORD_0";
-    }
-    // Actually, let's prioritize TEXCOORD_0 for material sampling.
-    // The Baker phase will likely use a specific UV channel.
-    // I'll stick to grabbing TEXCOORD_0 for now as the "Material UVs".
-  }
-
-  if (primitive.attributes.find(texcoord) != primitive.attributes.end()) {
+  // Get UV0
+  const float* uv0_data = nullptr;
+  int uv0_stride = 0;
+  if (primitive.attributes.find("TEXCOORD_0") != primitive.attributes.end()) {
     const tinygltf::Accessor& uv_accessor =
-        model.accessors[primitive.attributes.at(texcoord)];
+        model.accessors[primitive.attributes.at("TEXCOORD_0")];
     const tinygltf::BufferView& uv_view =
         model.bufferViews[uv_accessor.bufferView];
     const tinygltf::Buffer& uv_buffer = model.buffers[uv_view.buffer];
-    uv_data = reinterpret_cast<const float*>(
+    uv0_data = reinterpret_cast<const float*>(
         &uv_buffer.data[uv_view.byteOffset + uv_accessor.byteOffset]);
-    uv_stride = uv_accessor.ByteStride(uv_view)
-                    ? (uv_accessor.ByteStride(uv_view) / sizeof(float))
-                    : 2;
+    uv0_stride = uv_accessor.ByteStride(uv_view)
+                     ? (uv_accessor.ByteStride(uv_view) / sizeof(float))
+                     : 2;
+  }
+
+  // Get UV1
+  const float* uv1_data = nullptr;
+  int uv1_stride = 0;
+  if (primitive.attributes.find("TEXCOORD_1") != primitive.attributes.end()) {
+    const tinygltf::Accessor& uv_accessor =
+        model.accessors[primitive.attributes.at("TEXCOORD_1")];
+    const tinygltf::BufferView& uv_view =
+        model.bufferViews[uv_accessor.bufferView];
+    const tinygltf::Buffer& uv_buffer = model.buffers[uv_view.buffer];
+    uv1_data = reinterpret_cast<const float*>(
+        &uv_buffer.data[uv_view.byteOffset + uv_accessor.byteOffset]);
+    uv1_stride = uv_accessor.ByteStride(uv_view)
+                     ? (uv_accessor.ByteStride(uv_view) / sizeof(float))
+                     : 2;
   }
 
   // Indices
@@ -157,6 +154,9 @@ void ProcessPrimitive(const tinygltf::Model& model,
   geo.vertices.reserve(vertex_count);
   geo.normals.reserve(vertex_count);
   geo.texture_uvs.reserve(vertex_count);
+  if (uv1_data) {
+    geo.lightmap_uvs.reserve(vertex_count);
+  }
 
   for (size_t i = 0; i < vertex_count; ++i) {
     geo.vertices.emplace_back(pos_data[i * pos_stride + 0],
@@ -171,11 +171,16 @@ void ProcessPrimitive(const tinygltf::Model& model,
       geo.normals.emplace_back(0, 1, 0);
     }
 
-    if (uv_data) {
-      geo.texture_uvs.emplace_back(uv_data[i * uv_stride + 0],
-                                   uv_data[i * uv_stride + 1]);
+    if (uv0_data) {
+      geo.texture_uvs.emplace_back(uv0_data[i * uv0_stride + 0],
+                                   uv0_data[i * uv0_stride + 1]);
     } else {
       geo.texture_uvs.emplace_back(0, 0);
+    }
+
+    if (uv1_data) {
+      geo.lightmap_uvs.emplace_back(uv1_data[i * uv1_stride + 0],
+                                    uv1_data[i * uv1_stride + 1]);
     }
   }
 

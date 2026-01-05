@@ -74,11 +74,10 @@ To visualize the baked lightmap in Blender:
 To use the standalone OpenGL visualizer:
 
 ```bash
-./build/visualizer --input scene.gltf --sh_input out/lightmap_L0.exr
+./build/visualizer --input output_dir
 ```
 
-- `--input`: Path to the input glTF file.
-- `--sh_input`: Path to the **L0** lightmap file (e.g. `lightmap_L0.exr`). The visualizer expects the other 8 coefficient files (L1m1...L22) to be in the same directory with the same naming convention.
+- `--input`: Path to the input folder containing `scene.gltf` and `lightmap_*.exr` files.
 
 Controls:
 - **Left Mouse Drag**: Orbit camera.
