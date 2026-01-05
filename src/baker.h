@@ -15,10 +15,15 @@ struct BakeConfig {
 
 // Bakes the SH Lightmap for the given scene.
 // Returns an SHTexture containing the baked coefficients.
+// Bakes SH lighting for the given surface points (rasterized geometry).
+// Returns a texture of size width * height (from RasterConfig).
 SHTexture BakeSHLightMap(const Scene& scene,
                          const std::vector<SurfacePoint>& surface_points,
                          const RasterConfig& raster_config,
                          const BakeConfig& config);
+
+// Downsamples an SH texture by averaging block of scale x scale pixels.
+SHTexture DownsampleSHTexture(const SHTexture& input, int scale);
 
 }  // namespace sh_baker
 
