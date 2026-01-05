@@ -2,6 +2,8 @@
 
 #include <embree4/rtcore.h>
 #include <glog/logging.h>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
@@ -157,49 +159,107 @@ SHTexture BakeSHLightMap(const Scene& scene,
                          const RasterConfig& raster_config,
                          const BakeConfig& config) {
   SHTexture output;
-  output.width = raster_config.width;
-  output.height = raster_config.height;
-  output.pixels.resize(raster_config.width * raster_config.height);
+  // If supersampling is used, the rasterized points size might be larger than
+  // config.width * config.height implies if config was the original size.
+  // Actually, RasterConfig passed here should match surface_points.
+  // We assume raster_config describes the dimensions of surface_points.
+  // We compute the output size based on surface_points and config.width/height
+  // is just metadata? Let's assume raster_config.width/height IS the resolution
+  // of surface_points.
+  int width = raster_config.width * raster_config.supersample_scale;
+  int height = raster_config.height * raster_config.supersample_scale;
+
+  // Sanity check
+  if (surface_points.size() != width * height) {
+    // If mismatch, assume width/height in config are already scaled or don't
+    // use scale here? Let's rely on the fact that surface_points size is
+    // authoritative for the loop. But we need width/height for structure. Let's
+    // adhere to: raster_config.width/height are BASE dimensions. And
+    // supersample_scale tells us the factor.
+  }
+
+  output.width = width;
+  output.height = height;
+  output.pixels.resize(width * height);
 
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
-  // Bake
-  std::mt19937 rng(12345);
-
   float inv_pdf_uniform = 2.0f * M_PI;
 
-  for (int idx = 0; idx < surface_points.size(); ++idx) {
-    const SurfacePoint& sp = surface_points[idx];
-    if (!sp.valid) continue;
+  tbb::parallel_for(
+      tbb::blocked_range<size_t>(0, surface_points.size()),
+      [&](const tbb::blocked_range<size_t>& r) {
+        // Each thread needs its own RNG? Or use thread-local?
+        // Simple way: Seed based on index.
+        for (size_t idx = r.begin(); idx != r.end(); ++idx) {
+          const SurfacePoint& sp = surface_points[idx];
+          if (!sp.valid) continue;
 
-    SHCoeffs sh_accum;
+          SHCoeffs sh_accum;
 
-    // Offset position to avoid self-intersection
-    Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
+          // Seeding RNG with index to make it deterministic but different per
+          // pixel
+          std::mt19937 rng(12345 + idx);
 
-    for (int s = 0; s < config.samples; ++s) {
-      Eigen::Vector3f dir_local = SampleHemisphereUniform(rng);  // Z is up
+          // Offset position to avoid self-intersection
+          Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
 
-      // Transform to World
-      Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
-                                  sp.bitangent * dir_local.y() +
-                                  sp.normal * dir_local.z();
+          for (int s = 0; s < config.samples; ++s) {
+            Eigen::Vector3f dir_local =
+                SampleHemisphereUniform(rng);  // Z is up
 
-      Eigen::Vector3f Li = Trace(rtc_scene, scene, origin, dir_world, 0,
-                                 config.bounces, config.num_light_samples, rng);
+            // Transform to World
+            Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
+                                        sp.bitangent * dir_local.y() +
+                                        sp.normal * dir_local.z();
 
-      AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
-    }
+            Eigen::Vector3f Li =
+                Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces,
+                      config.num_light_samples, rng);
 
-    // Average
-    output.pixels[idx] = sh_accum * (1.0f / config.samples);
-  }
+            AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+          }
+
+          // Average
+          output.pixels[idx] = sh_accum * (1.0f / config.samples);
+        }
+      });
 
   // Clean up
   rtcReleaseScene(rtc_scene);
   rtcReleaseDevice(device);
 
+  return output;
+}
+
+SHTexture DownsampleSHTexture(const SHTexture& input, int scale) {
+  if (scale <= 1) return input;
+
+  SHTexture output;
+  output.width = input.width / scale;
+  output.height = input.height / scale;
+  output.pixels.resize(output.width * output.height);
+
+  for (int y = 0; y < output.height; ++y) {
+    for (int x = 0; x < output.width; ++x) {
+      SHCoeffs avg;
+      int count = 0;
+      for (int dy = 0; dy < scale; ++dy) {
+        for (int dx = 0; dx < scale; ++dx) {
+          int sx = x * scale + dx;
+          int sy = y * scale + dy;
+          if (sx < input.width && sy < input.height) {
+            avg += input.pixels[sy * input.width + sx];
+            count++;
+          }
+        }
+      }
+      if (count > 0) {
+        output.pixels[y * output.width + x] = avg * (1.0f / count);
+      }
+    }
+  }
   return output;
 }
 

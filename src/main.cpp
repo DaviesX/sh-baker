@@ -21,6 +21,8 @@ DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
 DEFINE_bool(split_channels, false,
             "If true, output 9 separate EXR files for SH coefficients.");
+DEFINE_int32(supersample_scale, 1,
+             "Scale factor for supersampling (e.g. 2 for 2x2).");
 
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
@@ -65,9 +67,11 @@ int main(int argc, char* argv[]) {
   sh_baker::RasterConfig raster_config;
   raster_config.width = FLAGS_width;
   raster_config.height = FLAGS_height;
+  raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"
-            << raster_config.height << ")...";
+            << raster_config.height
+            << ") scale: " << raster_config.supersample_scale << "...";
   auto surface_points = sh_baker::RasterizeScene(scene, raster_config);
 
   // Configure Baker
@@ -83,6 +87,32 @@ int main(int argc, char* argv[]) {
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
   LOG(INFO) << "Bake complete in " << elapsed.count() << " seconds.";
+
+  // Downsample if needed
+  if (FLAGS_supersample_scale > 1) {
+    LOG(INFO) << "Downsampling from scale " << FLAGS_supersample_scale << "...";
+    texture = sh_baker::DownsampleSHTexture(texture, FLAGS_supersample_scale);
+
+    // We also need to downsample surface points or recreate validity mask
+    // for dilation if we want strictly correct dilation on the final image.
+    // However, dilation is usually done on the result. Dilation needs a
+    // validity mask of the same size as the texture. Since we downsampled the
+    // texture, we need a validity mask for the downsampled texture. We can
+    // infer validity from the texture itself (if we had a flag) or we can
+    // re-create a simple validity mask from the texture content (non-black?),
+    // but better is to just downsample the validity info.
+    // Or, we can just skip dilation or implement a DownsampleValidityMask.
+    // For now, let's assume we re-calculate validity mask based on non-zero
+    // alpha? SHCoeffs doesn't have alpha. Let's implement a simple logic: if
+    // any sub-pixel was valid, the pixel is valid? Or just re-rasterize low-res
+    // for validity mask? Re-rasterizing simple low-res is cheap.
+
+    sh_baker::RasterConfig low_res_config = raster_config;
+    low_res_config.supersample_scale = 1;
+    // We don't want to carry over the large surface_points vector.
+    // Let's just re-rasterize for the mask.
+    surface_points = sh_baker::RasterizeScene(scene, low_res_config);
+  }
 
   // Dilate
   if (FLAGS_dilation > 0) {

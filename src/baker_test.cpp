@@ -70,4 +70,27 @@ TEST(BakerTest, BakeSimpleQuad) {
   EXPECT_GT(result.coeffs[0].x(), 0.1f);
 }
 
+TEST(BakerTest, DownsampleSHTexture) {
+  SHTexture input;
+  input.width = 2;
+  input.height = 2;
+  input.pixels.resize(4);
+
+  // All 1.0
+  for (int i = 0; i < 4; ++i) {
+    for (int c = 0; c < 9; ++c) {
+      input.pixels[i].coeffs[c] = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
+    }
+  }
+
+  SHTexture output = DownsampleSHTexture(input, 2);
+  EXPECT_EQ(output.width, 1);
+  EXPECT_EQ(output.height, 1);
+  EXPECT_EQ(output.pixels.size(), 1);
+
+  for (int c = 0; c < 9; ++c) {
+    EXPECT_FLOAT_EQ(output.pixels[0].coeffs[c].x(), 1.0f);
+  }
+}
+
 }  // namespace sh_baker

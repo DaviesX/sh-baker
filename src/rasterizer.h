@@ -12,6 +12,7 @@ namespace sh_baker {
 struct RasterConfig {
   int width = 1024;
   int height = 1024;
+  int supersample_scale = 1;
 };
 
 struct SurfacePoint {
