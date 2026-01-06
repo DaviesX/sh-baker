@@ -188,4 +188,42 @@ TEST(SaverTest, SaveSceneFallback1x1) {
   std::filesystem::remove_all(temp_dir);
 }
 
+TEST(SaverTest, SavePackedLuminance) {
+  SHTexture tex;
+  tex.width = 16;
+  tex.height = 16;
+  tex.pixels.resize(16 * 16);
+
+  // Fill with dummy data
+  for (auto& sh : tex.pixels) {
+    // L0 = (1.0, 0.5, 0.25)
+    sh.coeffs[0] = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
+    // L1m1 = (0.5, 0.5, 0.5)
+    sh.coeffs[1] = Eigen::Vector3f(0.5f, 0.5f, 0.5f);
+  }
+
+  std::filesystem::path test_path = "test_packed.exr";
+
+  // Cleanup
+  for (int i = 0; i < 3; ++i) {
+    std::string filename = "test_packed_packed_" + std::to_string(i) + ".exr";
+    if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
+  }
+
+  bool success = SaveSHLightMap(tex, test_path, SaveMode::kLuminancePacked);
+  EXPECT_TRUE(success);
+
+  for (int i = 0; i < 3; ++i) {
+    std::string filename = "test_packed_packed_" + std::to_string(i) + ".exr";
+    EXPECT_TRUE(std::filesystem::exists(filename)) << "Missing " << filename;
+
+    // Verify it is a valid EXR
+    int verify_ret = IsEXR(filename.c_str());
+    EXPECT_EQ(verify_ret, TINYEXR_SUCCESS);
+
+    // Clean up
+    if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
+  }
+}
+
 }  // namespace sh_baker

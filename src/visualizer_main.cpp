@@ -26,14 +26,16 @@ DEFINE_string(input, "",
 
 // --- Globals ---
 GLuint g_ShaderProgram = 0;
-GLuint g_VAO = 0;
 struct RenderMesh {
   GLuint vao;
   GLsizei count;
   int material_id;
 };
 std::vector<RenderMesh> g_Meshes;
+
 std::vector<GLuint> g_AlbedoTextures;
+std::vector<GLuint> g_NormalTextures;
+std::vector<GLuint> g_MRTextures;
 std::vector<GLuint> g_SHTextures;
 
 // Camera
@@ -134,11 +136,10 @@ GLuint LoadEXRTexture(const std::string& path) {
   GLuint tid;
   glGenTextures(1, &tid);
   glBindTexture(GL_TEXTURE_2D, tid);
+
   // Upload as RGB float
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGBA, GL_FLOAT,
-               out);
-  // Linear filter usually, but for coefficients nearest might show pixels
-  // better? Let's use Linear.
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA,
+               GL_FLOAT, out);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -223,7 +224,6 @@ int main(int argc, char* argv[]) {
   glfwSetScrollCallback(window, ScrollCallback);
 
   // --- Load Scene ---
-  // --- Load Scene ---
   auto scene_path = input_dir / "scene.gltf";
   LOG(INFO) << "Loading scene: " << scene_path;
   auto scene_opt = sh_baker::LoadScene(scene_path);
@@ -242,27 +242,27 @@ int main(int argc, char* argv[]) {
     glGenVertexArrays(1, &mesh.vao);
     glBindVertexArray(mesh.vao);
 
-    GLuint vbo[4];  // Pos, Normal, UV0, UV1
+    GLuint vbo[5];  // Pos, Normal, UV0, UV1, Tangent
     GLuint ebo;
 
-    glGenBuffers(4, vbo);
+    glGenBuffers(5, vbo);
     glGenBuffers(1, &ebo);
 
-    // Position
+    // 0: Position
     glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
     glBufferData(GL_ARRAY_BUFFER, geo.vertices.size() * sizeof(Eigen::Vector3f),
                  geo.vertices.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
 
-    // Normal
+    // 1: Normal
     glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
     glBufferData(GL_ARRAY_BUFFER, geo.normals.size() * sizeof(Eigen::Vector3f),
                  geo.normals.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
 
-    // UV0
+    // 2: UV0
     if (!geo.texture_uvs.empty()) {
       glBindBuffer(GL_ARRAY_BUFFER, vbo[2]);
       glBufferData(GL_ARRAY_BUFFER,
@@ -272,7 +272,7 @@ int main(int argc, char* argv[]) {
       glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
     }
 
-    // UV1
+    // 3: UV1
     if (!geo.lightmap_uvs.empty()) {
       glBindBuffer(GL_ARRAY_BUFFER, vbo[3]);
       glBufferData(GL_ARRAY_BUFFER,
@@ -280,6 +280,16 @@ int main(int argc, char* argv[]) {
                    geo.lightmap_uvs.data(), GL_STATIC_DRAW);
       glEnableVertexAttribArray(3);
       glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
+    }
+
+    // 4: Tangent
+    if (!geo.tangents.empty()) {
+      glBindBuffer(GL_ARRAY_BUFFER, vbo[4]);
+      glBufferData(GL_ARRAY_BUFFER,
+                   geo.tangents.size() * sizeof(Eigen::Vector4f),
+                   geo.tangents.data(), GL_STATIC_DRAW);
+      glEnableVertexAttribArray(4);
+      glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 0, (void*)0);
     }
 
     // EBO
@@ -292,10 +302,23 @@ int main(int argc, char* argv[]) {
 
   // --- Load Materials ---
   for (const auto& mat : scene.materials) {
+    // Albedo
     if (!mat.albedo.pixel_data.empty()) {
       g_AlbedoTextures.push_back(LoadTexture(mat.albedo));
     } else {
       g_AlbedoTextures.push_back(0);
+    }
+    // Normal
+    if (!mat.normal_texture.pixel_data.empty()) {
+      g_NormalTextures.push_back(LoadTexture(mat.normal_texture));
+    } else {
+      g_NormalTextures.push_back(0);
+    }
+    // Metallic/Roughness
+    if (!mat.metallic_roughness_texture.pixel_data.empty()) {
+      g_MRTextures.push_back(LoadTexture(mat.metallic_roughness_texture));
+    } else {
+      g_MRTextures.push_back(0);
     }
   }
 
@@ -303,24 +326,67 @@ int main(int argc, char* argv[]) {
   const char* kCoeffSuffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
                                   "L2m1", "L20",  "L21", "L22"};
 
-  for (int i = 0; i < 9; ++i) {
-    std::string filename =
-        "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
-    std::filesystem::path p = input_dir / filename;
-    GLuint tid = LoadEXRTexture(p.string());
-    if (tid == 0) {
-      LOG(WARNING) << "Failed to load SH texture: " << p;
+  bool use_packed_luminance = false;
+
+  // Check if packed file exists
+  if (std::filesystem::exists(input_dir / "lightmap_packed_0.exr")) {
+    use_packed_luminance = true;
+    LOG(INFO) << "Detected Packed Luminance SH Lightmaps.";
+
+    for (int i = 0; i < 3; ++i) {
+      std::string filename = "lightmap_packed_" + std::to_string(i) + ".exr";
+      std::filesystem::path p = input_dir / filename;
+      GLuint tid = LoadEXRTexture(p.string());
+      if (tid == 0) LOG(WARNING) << "Failed to load SH texture: " << p;
+      g_SHTextures.push_back(tid);
     }
-    g_SHTextures.push_back(tid);
+  } else {
+    LOG(INFO) << "Using Standard SH Lightmaps (9 files).";
+    for (int i = 0; i < 9; ++i) {
+      std::string filename =
+          "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
+      std::filesystem::path p = input_dir / filename;
+      GLuint tid = LoadEXRTexture(p.string());
+      if (tid == 0) {
+        LOG(WARNING) << "Failed to load SH texture: " << p;
+      }
+      g_SHTextures.push_back(tid);
+    }
   }
 
   // --- Shader ---
-  // Assuming shaders are in ../glsl/ relative to cwd or executable?
-  // Let's assume cwd is project root.
   g_ShaderProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
   if (!g_ShaderProgram) return 1;
 
   glEnable(GL_DEPTH_TEST);
+
+  glUseProgram(g_ShaderProgram);
+
+  // Set Mode Uniform
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_UsePackedLuminance"),
+              use_packed_luminance ? 1 : 0);
+
+  // Set Material Sampler Units (Static)
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_AlbedoTex"), 0);
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_NormalTex"), 4);
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_MRTex"), 5);
+
+  // Bind SH Textures (Static)
+  if (use_packed_luminance) {
+    for (int i = 0; i < 3; ++i) {
+      glActiveTexture(GL_TEXTURE1 + i);
+      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+      std::string u_name = "u_PackedTex" + std::to_string(i);
+      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+    }
+  } else {
+    for (int i = 0; i < 9; ++i) {
+      glActiveTexture(GL_TEXTURE1 + i);
+      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+      std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
+      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+    }
+  }
 
   // --- Main Loop ---
   while (!glfwWindowShouldClose(window)) {
@@ -332,8 +398,6 @@ int main(int argc, char* argv[]) {
     glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glUseProgram(g_ShaderProgram);
-
     // Camera Matrix
     Eigen::Vector3f cam_pos_cartesian;
     cam_pos_cartesian.x() =
@@ -341,6 +405,9 @@ int main(int argc, char* argv[]) {
     cam_pos_cartesian.z() =
         g_CamDist * std::cos(g_CamYaw) * std::cos(g_CamPitch);
     cam_pos_cartesian.y() = g_CamDist * std::sin(g_CamPitch);
+
+    // Update global camera position for shader uniform
+    g_CamPos = cam_pos_cartesian;
 
     // LookAt
     Eigen::Vector3f f = (g_CamTarget - cam_pos_cartesian).normalized();
@@ -376,50 +443,60 @@ int main(int argc, char* argv[]) {
 
     Eigen::Matrix4f vp = proj * view;
 
-    // Bind SH Textures
-    for (int i = 0; i < 9; ++i) {
-      glActiveTexture(GL_TEXTURE1 + i);
-      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-      std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
-      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
-    }
+    // Pass CamPos to Shader
+    glUniform3fv(glGetUniformLocation(g_ShaderProgram, "u_CamPos"), 1,
+                 g_CamPos.data());
 
     // Draw Meshes
     for (size_t i = 0; i < g_Meshes.size(); ++i) {
       glBindVertexArray(g_Meshes[i].vao);
 
-      // Model Matrix
-      // Assuming identity for now as loader applies transform?
-      // Wait, loader applies transform to `geo.transform`.
-      // `geo.vertices` are in object space, `geo.transform` places them in
-      // world? No, usually `Loader::LoadScene` might keep them hierarchical or
-      // flatten. `scene.h` struct Geometry has `Eigen::Affine3f transform`. But
-      // `loader.cpp` (which I didn't verify details of, but usually TinyGLTF
-      // loaders do propagation) If `geo.vertices` are raw mesh data, we need to
-      // apply `geo.transform`.
       const auto& geo = scene.geometries[i];
       Eigen::Matrix4f model = geo.transform.matrix();
       Eigen::Matrix4f mvp = vp * model;
 
       glUniformMatrix4fv(glGetUniformLocation(g_ShaderProgram, "u_MVP"), 1,
                          GL_FALSE, mvp.data());
+      glUniformMatrix4fv(glGetUniformLocation(g_ShaderProgram, "u_Model"), 1,
+                         GL_FALSE, model.data());
 
-      // Material
       int mat_id = g_Meshes[i].material_id;
-      if (mat_id >= 0 && mat_id < g_AlbedoTextures.size()) {
+      if (mat_id >= 0 && mat_id < scene.materials.size()) {
+        const auto& mat_data = scene.materials[mat_id];
+
+        // Albedo
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_AlbedoTex"), 0);
         glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasAlbedo"),
                     g_AlbedoTextures[mat_id] != 0 ? 1 : 0);
-
-        // Material color? default white
         glUniform3f(glGetUniformLocation(g_ShaderProgram, "u_AlbedoColor"), 1,
                     1, 1);
+
+        // Normal
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasNormal"),
+                    g_NormalTextures[mat_id] != 0 ? 1 : 0);
+
+        // MR
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasMR"),
+                    g_MRTextures[mat_id] != 0 ? 1 : 0);
+
+        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Metallic"),
+                    mat_data.metallic);
+        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Roughness"),
+                    mat_data.roughness);
+
       } else {
         glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasAlbedo"), 0);
         glUniform3f(glGetUniformLocation(g_ShaderProgram, "u_AlbedoColor"), 1,
-                    0, 1);  // Pink error
+                    0, 1);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasNormal"), 0);
+        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasMR"), 0);
+        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Metallic"), 0.0f);
+        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Roughness"), 0.5f);
       }
 
       glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);

@@ -25,6 +25,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(xatlas)
 
+# mikktspace
+FetchContent_Declare(
+  mikktspace
+  GIT_REPOSITORY https://github.com/mmikk/MikkTSpace.git
+  GIT_TAG        master
+)
+FetchContent_MakeAvailable(mikktspace)
+
 # glog
 find_package(glog REQUIRED)
 
@@ -68,6 +76,7 @@ set(LIB_SOURCES
     src/baker.cpp
     src/atlas.cpp
     ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp
+    ${mikktspace_SOURCE_DIR}/mikktspace.c
     src/rasterizer.cpp
     src/material.cpp
     src/dilation.cpp
@@ -97,6 +106,7 @@ target_include_directories(sh_baker_lib PUBLIC
     ${tinygltf_SOURCE_DIR}
     ${stb_image_SOURCE_DIR}
     ${xatlas_SOURCE_DIR}/source/xatlas
+    ${mikktspace_SOURCE_DIR}
 )
 
 target_link_libraries(sh_baker_lib PUBLIC

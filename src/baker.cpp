@@ -114,35 +114,50 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
 
   // Direct Lighting (NEE)
   {
-    Eigen::Vector3f hit_normal = occ->normal;
-    Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
+    // Compute Shading Normal
+    Eigen::Vector3f shading_normal = GetNormalFromMap(
+        mat, occ->uv, occ->normal, occ->tangent, occ->bitangent);
+
+    Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
     // View direction is -dir
     Eigen::Vector3f wo = -dir;
 
     // Evaluate Direct Light (NEE)
     // EvaluateLights returns L_e(x, x')
     Eigen::Vector3f L_direct = EvaluateLightSamples(
-        scene.sky, scene.lights, rtc_scene, hit_pos, hit_normal, wo, mat,
+        scene.sky, scene.lights, rtc_scene, hit_pos, shading_normal, wo, mat,
         occ->uv, num_light_samples, rng);
 
     color += alpha * L_direct;
+
+    // Note: We might want to pass shading_normal to EvaluateLightSamples
+    // but we also need to be careful about geometric visibility (hit_normal).
+    // EvaluateLightSamples generally uses normal for Cosine term and BRDF.
+    // PBR: use shading_normal.
   }
 
   // Indirect Lighting (Recursive)
   {
-    Eigen::Vector3f hit_normal = occ->normal;
-    Eigen::Vector3f hit_pos = occ->position + hit_normal * 0.001f;
+    Eigen::Vector3f shading_normal = GetNormalFromMap(
+        mat, occ->uv, occ->normal, occ->tangent, occ->bitangent);
+
+    Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
     ReflectionSample sample =
-        SampleMaterial(mat, occ->uv, hit_normal, dir, rng);
+        SampleMaterial(mat, occ->uv, shading_normal, dir, rng);
 
     Eigen::Vector3f incoming =
         Trace(rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth,
               num_light_samples, rng);
 
     Eigen::Vector3f brdf =
-        EvalMaterial(mat, occ->uv, hit_normal, dir, sample.direction);
+        EvalMaterial(mat, occ->uv, shading_normal, sample.direction, -dir);
 
-    float cosine_term = std::max(0.0f, hit_normal.dot(sample.direction));
+    // Cosine term is based on shading normal for the integral over hemisphere
+    // defined by shading normal?
+    // The rendering equation integrates over the hemisphere around the MACRO
+    // normal? Actually, usually we integrate over the hemisphere around the
+    // SHADING normal.
+    float cosine_term = std::max(0.0f, shading_normal.dot(sample.direction));
 
     if (sample.pdf > 1e-6f) {
       color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);

@@ -16,13 +16,17 @@ DEFINE_int32(width, 1024, "Width of the output image.");
 DEFINE_int32(height, 1024, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
-DEFINE_int32(dilation, 0, "Number of dilation passes.");
+DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
 DEFINE_bool(split_channels, false,
             "If true, output 9 separate EXR files for SH coefficients.");
 DEFINE_int32(supersample_scale, 1,
              "Scale factor for supersampling (e.g. 2 for 2x2).");
+
+DEFINE_bool(luminance_only, false,
+            "If true, compress Light map by storing only Luminance for L1/L2 "
+            "coefficients (Packed into 3 textures).");
 
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
@@ -59,14 +63,28 @@ int main(int argc, char* argv[]) {
 
   // Generate Atlas
   LOG(INFO) << "Generating Lightmap UVs (xatlas)...";
-  scene.geometries = sh_baker::CreateAtlasGeometries(scene.geometries);
-  LOG(INFO)
-      << "Atlas generation complete. New Geometries vertex counts adjusted.";
+  if (scene.geometries.empty()) {
+    LOG(ERROR) << "No geometries found in scene.";
+    return 1;
+  }
+
+  std::optional<sh_baker::AtlasResult> atlas_result =
+      sh_baker::CreateAtlasGeometries(scene.geometries, FLAGS_width,
+                                      FLAGS_dilation);
+  if (!atlas_result) {
+    LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
+    return 1;
+  }
+
+  scene.geometries = atlas_result->geometries;
+  LOG(INFO) << "Atlas generation complete. New Geometries vertex counts "
+               "adjusted. Resolution adjusted to: "
+            << atlas_result->width << "x" << atlas_result->height;
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
-  raster_config.width = FLAGS_width;
-  raster_config.height = FLAGS_height;
+  raster_config.width = atlas_result->width;
+  raster_config.height = atlas_result->height;
   raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"
@@ -88,37 +106,22 @@ int main(int argc, char* argv[]) {
   std::chrono::duration<double> elapsed = end_time - start_time;
   LOG(INFO) << "Bake complete in " << elapsed.count() << " seconds.";
 
+  std::vector<uint8_t> validity_mask =
+      sh_baker::CreateValidityMask(surface_points);
+
   // Downsample if needed
   if (FLAGS_supersample_scale > 1) {
     LOG(INFO) << "Downsampling from scale " << FLAGS_supersample_scale << "...";
     texture = sh_baker::DownsampleSHTexture(texture, FLAGS_supersample_scale);
-
-    // We also need to downsample surface points or recreate validity mask
-    // for dilation if we want strictly correct dilation on the final image.
-    // However, dilation is usually done on the result. Dilation needs a
-    // validity mask of the same size as the texture. Since we downsampled the
-    // texture, we need a validity mask for the downsampled texture. We can
-    // infer validity from the texture itself (if we had a flag) or we can
-    // re-create a simple validity mask from the texture content (non-black?),
-    // but better is to just downsample the validity info.
-    // Or, we can just skip dilation or implement a DownsampleValidityMask.
-    // For now, let's assume we re-calculate validity mask based on non-zero
-    // alpha? SHCoeffs doesn't have alpha. Let's implement a simple logic: if
-    // any sub-pixel was valid, the pixel is valid? Or just re-rasterize low-res
-    // for validity mask? Re-rasterizing simple low-res is cheap.
-
-    sh_baker::RasterConfig low_res_config = raster_config;
-    low_res_config.supersample_scale = 1;
-    // We don't want to carry over the large surface_points vector.
-    // Let's just re-rasterize for the mask.
-    surface_points = sh_baker::RasterizeScene(scene, low_res_config);
+    validity_mask = sh_baker::DownsampleValidityMask(
+        validity_mask, raster_config.width * raster_config.supersample_scale,
+        raster_config.height * raster_config.supersample_scale,
+        raster_config.supersample_scale);
   }
 
   // Dilate
   if (FLAGS_dilation > 0) {
     LOG(INFO) << "Dilating " << FLAGS_dilation << " passes...";
-    std::vector<uint8_t> validity_mask =
-        sh_baker::CreateValidityMask(surface_points);
     sh_baker::Dilate(texture.width, texture.height, texture.pixels,
                      validity_mask, FLAGS_dilation);
   }
@@ -130,9 +133,14 @@ int main(int argc, char* argv[]) {
     std::filesystem::create_directories(output_path);
     std::filesystem::path lightmap_path = output_path / kLightmapFileName;
     std::filesystem::path gltf_path = output_path / kGLTFFileName;
-    sh_baker::SaveMode mode = FLAGS_split_channels
-                                  ? sh_baker::SaveMode::kSplitChannels
-                                  : sh_baker::SaveMode::kCombined;
+
+    sh_baker::SaveMode mode = sh_baker::SaveMode::kCombined;
+    if (FLAGS_luminance_only) {
+      mode = sh_baker::SaveMode::kLuminancePacked;
+    } else if (FLAGS_split_channels) {
+      mode = sh_baker::SaveMode::kSplitChannels;
+    }
+
     if (!sh_baker::SaveSHLightMap(texture, lightmap_path, mode)) {
       LOG(ERROR) << "Failed to save output.";
       return 1;

@@ -31,6 +31,8 @@ struct Material {
 
   // Albedo / Transparency
   Texture albedo;
+  Texture normal_texture;
+  Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
   float roughness = 0.9f;
   float metallic = 0.0f;
 
@@ -44,6 +46,7 @@ struct Geometry {
   std::vector<Eigen::Vector3f> normals;
   std::vector<Eigen::Vector2f> texture_uvs;
   std::vector<Eigen::Vector2f> lightmap_uvs;
+  std::vector<Eigen::Vector4f> tangents;  // xyz + w (sign)
 
   std::vector<uint32_t> indices;
 

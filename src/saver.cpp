@@ -1,6 +1,7 @@
 #include "saver.h"
 
 #include <glog/logging.h>
+#include <stb_image_write.h>
 #include <tiny_gltf.h>
 
 #include <cmath>
@@ -162,8 +163,9 @@ bool SaveCombined(const SHTexture& sh_texture,
 
     // Set header info
     strncpy(header.channels[i].name, channel_names[i].c_str(), 255);
-    header.pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
-    header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
+    header.pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+    header.requested_pixel_types[i] =
+        TINYEXR_PIXELTYPE_HALF;  // Storage is half
   }
 
   image.images = (unsigned char**)image_ptr;
@@ -234,8 +236,9 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
       // Channel names: R, G, B
       const char* names[] = {"R", "G", "B"};
       strncpy(header.channels[c].name, names[c], 255);
-      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
-      header.requested_pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
+      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+      header.requested_pixel_types[c] =
+          TINYEXR_PIXELTYPE_HALF;  // Storage is half
     }
 
     image.images = (unsigned char**)image_ptr;
@@ -265,6 +268,111 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
   return true;
 }
 
+bool SavePackedLuminance(const SHTexture& sh_texture,
+                         const std::filesystem::path& path) {
+  // We will save 3 RGBA files:
+  // _packed_0.exr: L0.rgb, L1m1.Y
+  // _packed_1.exr: L10.Y, L11.Y, L2m2.Y, L2m1.Y
+  // _packed_2.exr: L20.Y, L21.Y, L22.Y, 1.0 (Alpha/Unused)
+
+  std::filesystem::path parent = path.parent_path();
+  std::string stem = path.stem().string();
+  std::string extension = path.extension().string();
+
+  int num_pixels = sh_texture.width * sh_texture.height;
+
+  // L1/L2 Luminance weights (Rec. 709)
+  const Eigen::Vector3f kLumWeights(0.2126f, 0.7152f, 0.0722f);
+
+  // We have 3 output files.
+  for (int file_idx = 0; file_idx < 3; ++file_idx) {
+    std::string filename =
+        stem + "_packed_" + std::to_string(file_idx) + extension;
+    std::filesystem::path sub_path = parent / filename;
+
+    EXRHeader header;
+    InitEXRHeader(&header);
+    EXRImage image;
+    InitEXRImage(&image);
+
+    image.num_channels = 4;
+
+    std::vector<float> channels[4];
+    float* image_ptr[4];
+    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 4);
+    header.pixel_types = (int*)malloc(sizeof(int) * 4);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * 4);
+
+    for (int c = 0; c < 4; ++c) {
+      channels[c].resize(num_pixels);
+      image_ptr[c] = channels[c].data();
+
+      // Channel mapping logic
+      for (int p = 0; p < num_pixels; ++p) {
+        float val = 0.0f;
+        const auto& coeffs = sh_texture.pixels[p].coeffs;
+
+        if (file_idx == 0) {
+          // File 0: L0.r, L0.g, L0.b, L1m1.Y (indices 0, 1)
+          if (c < 3) {
+            // L0 RGB
+            val = coeffs[0][c];  // x, y, z
+          } else {
+            // L1m1 Luminance
+            val = coeffs[1].dot(kLumWeights);
+          }
+        } else if (file_idx == 1) {
+          // File 1: L10.Y, L11.Y, L2m2.Y, L2m1.Y (indices 2, 3, 4, 5)
+          int sh_idx = 2 + c;
+          val = coeffs[sh_idx].dot(kLumWeights);
+        } else if (file_idx == 2) {
+          // File 2: L20.Y, L21.Y, L22.Y, Unused (indices 6, 7, 8)
+          if (c < 3) {
+            int sh_idx = 6 + c;
+            val = coeffs[sh_idx].dot(kLumWeights);
+          } else {
+            val = 1.0f;  // Padding (Alpha)
+          }
+        }
+        channels[c][p] = val;
+      }
+
+      // Channel names: R, G, B, A
+      const char* names[] = {"R", "G", "B", "A"};
+      strncpy(header.channels[c].name, names[c], 255);
+
+      // Use HALF float for bandwidth optimization
+      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+      header.requested_pixel_types[c] =
+          TINYEXR_PIXELTYPE_HALF;  // Storage is half
+    }
+
+    image.images = (unsigned char**)image_ptr;
+    image.width = sh_texture.width;
+    image.height = sh_texture.height;
+
+    header.num_channels = 4;
+    header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
+
+    const char* err = nullptr;
+    int ret =
+        SaveEXRImageToFile(&image, &header, sub_path.string().c_str(), &err);
+
+    free(header.channels);
+    free(header.pixel_types);
+    free(header.requested_pixel_types);
+
+    if (ret != TINYEXR_SUCCESS) {
+      LOG(ERROR) << "SaveEXRImageToFile failed for " << sub_path << ": "
+                 << (err ? err : "Unknown error");
+      FreeEXRErrorMessage(err);
+      return false;
+    }
+    LOG(INFO) << "Saved packed SH: " << sub_path;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool SaveSHLightMap(const SHTexture& sh_texture,
@@ -277,6 +385,8 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
 
   if (mode == SaveMode::kCombined) {
     return SaveCombined(sh_texture, path);
+  } else if (mode == SaveMode::kLuminancePacked) {
+    return SavePackedLuminance(sh_texture, path);
   } else {
     return SaveSplit(sh_texture, path);
   }
@@ -314,13 +424,46 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     } else if (mat.albedo.width == 1 && mat.albedo.height == 1 &&
                mat.albedo.pixel_data.size() >= 4) {
       // 1x1 Texture -> baseColorFactor (Linear)
-      // Convert sRGB -> Linear
       std::vector<double> color(4);
       for (int i = 0; i < 3; ++i) {
         color[i] = SRGBToLinear(mat.albedo.pixel_data[i]);
       }
       color[3] = mat.albedo.pixel_data[3] / 255.0f;  // Alpha
       gmat.pbrMetallicRoughness.baseColorFactor = color;
+    }
+
+    // Normal Texture
+    if (mat.normal_texture.file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.normal_texture.file_path, path.parent_path(),
+                            &model, &texture_allocations);
+      if (texture_index.has_value()) {
+        gmat.normalTexture.index = *texture_index;
+      }
+    }
+    // If 1x1 normal map (fallback), we skip it as it likely represents flat
+    // normal
+
+    // Metallic-Roughness Texture
+    if (mat.metallic_roughness_texture.file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.metallic_roughness_texture.file_path,
+                            path.parent_path(), &model, &texture_allocations);
+      if (texture_index.has_value()) {
+        gmat.pbrMetallicRoughness.metallicRoughnessTexture.index =
+            *texture_index;
+      }
+    } else if (mat.metallic_roughness_texture.width == 1 &&
+               mat.metallic_roughness_texture.height == 1 &&
+               mat.metallic_roughness_texture.pixel_data.size() >= 3) {
+      // Extract factors
+      // B = Metallic, G = Roughness
+      // We assume the stored pixel data is correct (PBR convention)
+      unsigned char g = mat.metallic_roughness_texture.pixel_data[1];
+      unsigned char b = mat.metallic_roughness_texture.pixel_data[2];
+
+      gmat.pbrMetallicRoughness.roughnessFactor = g / 255.0;
+      gmat.pbrMetallicRoughness.metallicFactor = b / 255.0;
     }
 
     model.materials.push_back(gmat);
@@ -379,6 +522,24 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       prim.attributes["NORMAL"] =
           AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
                       geo.normals.size(), TINYGLTF_TYPE_VEC3, {}, {}, &model);
+    }
+
+    // Tangent
+    if (!geo.tangents.empty()) {
+      int view_idx;
+      std::vector<float> buffer_data;
+      buffer_data.reserve(geo.tangents.size() * 4);
+      for (const auto& t : geo.tangents) {
+        buffer_data.push_back(t.x());
+        buffer_data.push_back(t.y());
+        buffer_data.push_back(t.z());
+        buffer_data.push_back(t.w());
+      }
+      AddBufferView(buffer_data.data(), buffer_data.size() * sizeof(float), 16,
+                    TINYGLTF_TARGET_ARRAY_BUFFER, view_idx, &model);
+      prim.attributes["TANGENT"] =
+          AddAccessor(view_idx, TINYGLTF_COMPONENT_TYPE_FLOAT,
+                      geo.tangents.size(), TINYGLTF_TYPE_VEC4, {}, {}, &model);
     }
 
     // Texcoord 0 (Texture UVs)

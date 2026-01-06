@@ -61,7 +61,34 @@ kd *= 1.0 - u_Metallic;
 vec3 finalColor = (kd * diffuse * albedo) + (ks * specular);
 ```
 
-Phase 7 Visibility-Aware Importance Sampling
+Phase 7: Atlas Allocation Optimization (Resolution-Aware Scaling)
+Context: We need to move from a uniform lightmap density to a Resolution-Aware Allocation system in sh-baker. The goal is to ensure the SH lightmap density matches the visual frequency of the original albedo textures.
+Task: Please implement a scaling heuristic for xatlas mesh declarations based on the following logic:
+
+1. Albedo-Relative Scaling (Non-Tiling Case)
+* For each mesh, determine the dimensions of its primary diffuse/albedo texture ($W_{tex}, H_{tex}$).
+* Calculate the base area of the texture in pixels:
+    $Area_{tex} = W_{tex} \times H_{tex}$.
+* Set the meshRelativeScaling for xatlas such that the lightmap texel density is proportional to this area.
+* Heuristic: Use a global "Density Multiplier" ($k$) to allow us to scale the entire atlas quality:
+    $$\text{Target Scale} = k \times \sqrt{Area_{tex}}$$
+
+2. Tiling Estimation (The Tiling Case)
+* For surfaces that tile, calculate the Effective UV Area.
+* Find the UV0 bounding box ($U_{max} - U_{min}$ and $V_{max} - V_{min}$).Estimate the Tile Count ($TC$): $TC = (U_{range}) \times (V_{range})$.
+* Adjusted Effective Resolution: If a surface tiles, it covers more physical world space with the same texture. To maintain detail, scale the allotment by the square root of the tile count:
+    $$\text{Effective Scale} = \text{Target Scale} \times \sqrt{TC}$$
+
+3. Constraint & Safety Limits
+* Max Clamp: To prevent a single massive tiled floor from eating the entire atlas, implement a max_scale cap (no single mesh can exceed k times the median scale, in other words, an outlier).
+
+4. Integration with xatlas
+* Pass these calculated scales into the xatlas::MeshDeclaration::meshRelativeScaling before the xatlas::PackCharts call.
+* Padding Enforcement: Ensure the 16px padding rule from Phase 6 is maintained regardless of the individual mesh scale.
+
+Goal: Provide the C++ logic to calculate these scales during the mesh processing loop and apply them to the xatlas setup.
+
+Phase 8 Visibility-Aware Importance Sampling
 Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.
