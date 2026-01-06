@@ -221,8 +221,8 @@ Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
                              const Eigen::Vector3f& incident,
                              const Eigen::Vector3f& reflected) {
-  Eigen::Vector3f V = -incident;
-  Eigen::Vector3f L = reflected;
+  Eigen::Vector3f V = reflected;
+  Eigen::Vector3f L = incident;
   Eigen::Vector3f N = normal;
 
   if (N.dot(V) <= 0.0f || N.dot(L) <= 0.0f) {

@@ -101,9 +101,10 @@ Eigen::Vector3f EvaluateLightSamples(
 
   auto brdf_fn = [&](const Eigen::Vector3f& light_dir) {
     // EvalMaterial expects (..., incident, reflected).
-    // incident = Eye->Surface = -wo = -reflected.
-    // reflected = Surface->Light = light_dir.
-    return EvalMaterial(mat, uv, hit_point_normal, -reflected, light_dir);
+    // incident = Surface->Light = light_dir.
+    // reflected = Surface->Eye = reflected (This variable passed to
+    // EvaluateLightSamples is wo).
+    return EvalMaterial(mat, uv, hit_point_normal, light_dir, reflected);
   };
 
   for (const auto& light : lights) {

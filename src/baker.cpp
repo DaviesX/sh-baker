@@ -150,7 +150,7 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
               num_light_samples, rng);
 
     Eigen::Vector3f brdf =
-        EvalMaterial(mat, occ->uv, shading_normal, dir, sample.direction);
+        EvalMaterial(mat, occ->uv, shading_normal, sample.direction, -dir);
 
     // Cosine term is based on shading normal for the integral over hemisphere
     // defined by shading normal?

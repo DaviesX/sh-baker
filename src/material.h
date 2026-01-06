@@ -26,9 +26,9 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
 
 // Evaluates the material BRDF f_r(p, wr, wi).
 // Returns the BRDF value (color).
-// incident: incoming direction, away from the surface (from light/previous
-// bounce). reflected: outgoing direction, away from the surface (next path
-// segment).
+// incident: incoming direction, away from the surface (pointing to light
+// sources/next bounce). reflected: outgoing direction, away from the surface
+// (pointing to sensor/previous bounce).
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
                              const Eigen::Vector3f& incident,

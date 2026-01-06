@@ -45,7 +45,7 @@ TEST(MaterialTest, EvalMaterialBRDF) {
   mat.albedo.channels = 3;
 
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
-  Eigen::Vector3f incident(0.0f, 0.0f, -1.0f);
+  Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f reflected(0.0f, 0.0f, 1.0f);
 
   Eigen::Vector3f res = EvalMaterial(mat, Eigen::Vector2f(0.5f, 0.5f), normal,
