@@ -574,9 +574,7 @@
                 }
             },
             "name" : "Sun_Orientation",
-            "rotation" : [
-                0, 0, 0, 1
-            ]
+            "rotation" : [-0.35355, 0.14645, 0.14645, 0.91266]
         }
     ],
     "materials" : [
