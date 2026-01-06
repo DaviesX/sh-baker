@@ -163,8 +163,9 @@ bool SaveCombined(const SHTexture& sh_texture,
 
     // Set header info
     strncpy(header.channels[i].name, channel_names[i].c_str(), 255);
-    header.pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
-    header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
+    header.pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+    header.requested_pixel_types[i] =
+        TINYEXR_PIXELTYPE_HALF;  // Storage is half
   }
 
   image.images = (unsigned char**)image_ptr;
@@ -235,8 +236,9 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
       // Channel names: R, G, B
       const char* names[] = {"R", "G", "B"};
       strncpy(header.channels[c].name, names[c], 255);
-      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
-      header.requested_pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
+      header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
+      header.requested_pixel_types[c] =
+          TINYEXR_PIXELTYPE_HALF;  // Storage is half
     }
 
     image.images = (unsigned char**)image_ptr;
