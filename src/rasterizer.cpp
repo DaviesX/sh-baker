@@ -1,5 +1,6 @@
 #include "rasterizer.h"
 
+#include <glog/logging.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -40,6 +41,21 @@ void BuildBasis(const Eigen::Vector3f& n, Eigen::Vector3f& t,
   }
   t.normalize();
   b = n.cross(t);
+}
+
+bool AnyValidSubSamples(int x, int y, int width, int scale,
+                        const std::vector<uint8_t>& high_res_mask) {
+  const int stride = width * scale;
+  for (int src_y = y * scale; src_y < (y + 1) * scale; ++src_y) {
+    int line_idx = src_y * stride;
+    for (int src_x = x * scale; src_x < (x + 1) * scale; ++src_x) {
+      int src_idx = line_idx + src_x;
+      if (high_res_mask[src_idx]) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -114,7 +130,20 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                         Eigen::Vector3f n2 = geo.normals[idx2];
                         sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
 
-                        BuildBasis(sp.normal, sp.tangent, sp.bitangent);
+                        CHECK(!geo.tangents.empty());
+                        Eigen::Vector4f t0 = geo.tangents[idx0];
+                        Eigen::Vector4f t1 = geo.tangents[idx1];
+                        Eigen::Vector4f t2 = geo.tangents[idx2];
+                        Eigen::Vector4f interpolated_tan =
+                            t0 * u + t1 * v + t2 * w;
+
+                        Eigen::Vector3f t = interpolated_tan.head<3>();
+                        // Gram-Schmidt orthogonalization
+                        sp.tangent =
+                            (t - sp.normal * sp.normal.dot(t)).normalized();
+                        // Calculate bitangent (using w for handedness)
+                        sp.bitangent =
+                            sp.normal.cross(sp.tangent) * interpolated_tan.w();
 
                         surface_map[pixel_idx] = sp;
                       }
@@ -133,6 +162,24 @@ std::vector<uint8_t> CreateValidityMask(
   for (size_t i = 0; i < points.size(); ++i) {
     mask[i] = points[i].valid ? 1 : 0;
   }
+  return mask;
+}
+
+std::vector<uint8_t> DownsampleValidityMask(
+    const std::vector<uint8_t>& high_res_mask, int width, int height,
+    int scale) {
+  std::vector<uint8_t> mask(width * height, 0);
+
+  // Parallelize over output pixels
+  tbb::parallel_for(tbb::blocked_range<int>(0, height),
+                    [&](const tbb::blocked_range<int>& r) {
+                      for (int y = r.begin(); y != r.end(); ++y) {
+                        for (int x = 0; x < width; ++x) {
+                          mask[y * width + x] = AnyValidSubSamples(
+                              x, y, width, scale, high_res_mask);
+                        }
+                      }
+                    });
   return mask;
 }
 

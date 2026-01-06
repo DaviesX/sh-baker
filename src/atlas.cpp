@@ -7,10 +7,11 @@
 
 namespace sh_baker {
 
-std::vector<Geometry> CreateAtlasGeometries(
-    const std::vector<Geometry>& geometries) {
+std::optional<AtlasResult> CreateAtlasGeometries(
+    const std::vector<Geometry>& geometries, unsigned target_resolution,
+    unsigned padding) {
   if (geometries.empty()) {
-    return {};
+    return std::nullopt;
   }
 
   // 1. Create Atlas
@@ -45,15 +46,35 @@ std::vector<Geometry> CreateAtlasGeometries(
       LOG(ERROR) << "Error adding mesh " << i
                  << " to xatlas: " << xatlas::StringForEnum(error);
       xatlas::Destroy(atlas);
-      return geometries;  // Fallback? Or empty? usage suggests we return valid
-                          // geometries.
-      // If we fail, returning original geometries means lightmap_uvs is empty,
-      // likely causing crash or no bake.
+      return std::nullopt;
     }
   }
 
   // 3. Generate Atlas
-  xatlas::Generate(atlas);
+  xatlas::PackOptions pack_options;
+  pack_options.resolution = target_resolution;
+  pack_options.padding = padding;
+
+  // Use higher quality packing (brute force) if desired, but defaults are
+  // usually fine. pack_options.bruteForce = true;
+
+  xatlas::Generate(atlas, xatlas::ChartOptions(), pack_options);
+
+  if (atlas->width == 0 || atlas->height == 0) {
+    LOG(ERROR) << "xatlas failed to generate any content.";
+    xatlas::Destroy(atlas);
+    return std::nullopt;
+  }
+
+  if (atlas->atlasCount > 1) {
+    LOG(ERROR) << "xatlas failed to fit geometries into a single "
+               << target_resolution << "x" << target_resolution
+               << " atlas with padding " << padding << "."
+               << " Requested " << atlas->atlasCount << " atlases.";
+    // We strictly require a single atlas page.
+    xatlas::Destroy(atlas);
+    return std::nullopt;
+  }
 
   // 4. Reconstruct Geometries
   std::vector<Geometry> result_geometries;
@@ -72,6 +93,7 @@ std::vector<Geometry> CreateAtlasGeometries(
     new_geo.normals.resize(new_vertex_count);
     new_geo.texture_uvs.resize(new_vertex_count);
     new_geo.lightmap_uvs.resize(new_vertex_count);
+    new_geo.tangents.resize(new_vertex_count);
 
     // Fill vertices
     for (uint32_t v = 0; v < new_vertex_count; ++v) {
@@ -80,17 +102,20 @@ std::vector<Geometry> CreateAtlasGeometries(
 
       // Copy attributes from original mesh
       if (original_index < src_geo.vertices.size()) {
+        // Enforce invariants
+        CHECK(!src_geo.normals.empty()) << "Source geometry must have normals";
+        CHECK(!src_geo.tangents.empty())
+            << "Source geometry must have tangents";
+
         new_geo.vertices[v] = src_geo.vertices[original_index];
-        // If normals/uvs existed, copy them. If not, use defaults/zero.
-        if (!src_geo.normals.empty())
-          new_geo.normals[v] = src_geo.normals[original_index];
-        else
-          new_geo.normals[v] = Eigen::Vector3f(0, 1, 0);
+        new_geo.normals[v] = src_geo.normals[original_index];
+        new_geo.tangents[v] = src_geo.tangents[original_index];
 
         if (!src_geo.texture_uvs.empty())
           new_geo.texture_uvs[v] = src_geo.texture_uvs[original_index];
         else
           new_geo.texture_uvs[v] = Eigen::Vector2f(0, 0);
+
       } else {
         // Should not happen if xref is valid
         LOG(ERROR) << "xatlas xref out of bounds!";
@@ -112,7 +137,12 @@ std::vector<Geometry> CreateAtlasGeometries(
   }
 
   xatlas::Destroy(atlas);
-  return result_geometries;
+
+  AtlasResult result;
+  result.geometries = std::move(result_geometries);
+  result.width = atlas->width;
+  result.height = atlas->height;
+  return result;
 }
 
 }  // namespace sh_baker

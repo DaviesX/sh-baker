@@ -18,8 +18,9 @@ struct SHTexture {
 
 // Mode for saving SH Lightmap
 enum class SaveMode {
-  kCombined,       // One 27-channel EXR
-  kSplitChannels,  // 9 separate 3-channel EXRs (RGB per coeff)
+  kCombined,        // One 27-channel EXR
+  kSplitChannels,   // 9 separate 3-channel EXRs (RGB per coeff)
+  kLuminancePacked  // 3 RGBA textures, L1/L2 luminance only
 };
 
 // Saves the SH Lightmap to OpenEXR file(s).

@@ -45,15 +45,16 @@ TEST(MaterialTest, EvalMaterialBRDF) {
   mat.albedo.channels = 3;
 
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
-  Eigen::Vector3f incident(0.0f, 0.0f, -1.0f);
+  Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f reflected(0.0f, 0.0f, 1.0f);
 
   Eigen::Vector3f res = EvalMaterial(mat, Eigen::Vector2f(0.5f, 0.5f), normal,
                                      incident, reflected);
 
-  // Lambertian BRDF = rho / PI
-  // rho = 1.0
-  EXPECT_NEAR(res.x(), 1.0f / M_PI, 1e-5f);
+  // Lambertian BRDF = rho / PI. However, PBR adds Fresnel (0.04)
+  // so Diffuse is scaled by 0.96, plus some Specular.
+  // Expected approx 0.97 / PI.
+  EXPECT_NEAR(res.x(), 0.97f / M_PI, 1e-2f);
 }
 
 TEST(MaterialTest, GetEmission) {

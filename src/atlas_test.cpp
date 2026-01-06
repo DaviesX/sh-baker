@@ -18,14 +18,20 @@ TEST(AtlasTest, SimpleQuad) {
   Geometry input_geo;
   input_geo.vertices = {{-1, -1, 0}, {1, -1, 0}, {-1, 1, 0}, {1, 1, 0}};
   input_geo.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  input_geo.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   input_geo.texture_uvs = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
   input_geo.indices = {0, 1, 2, 2, 1, 3};
 
   std::vector<Geometry> input_geometries = {input_geo};
 
-  std::vector<Geometry> output_geometries =
-      CreateAtlasGeometries(input_geometries);
+  std::optional<AtlasResult> atlas_result =
+      CreateAtlasGeometries(input_geometries, 256, 2);
+  ASSERT_TRUE(atlas_result.has_value());
 
+  EXPECT_GE(atlas_result->width, 0);
+  EXPECT_GE(atlas_result->height, 0);
+
+  const auto& output_geometries = atlas_result->geometries;
   ASSERT_EQ(output_geometries.size(), 1);
   const auto& out_geo = output_geometries[0];
 

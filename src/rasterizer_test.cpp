@@ -12,6 +12,7 @@ TEST(RasterizerTest, RasterizeQuad) {
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
   quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   quad.indices = {0, 1, 2, 0, 2, 3};
   scene.geometries.push_back(quad);
 
@@ -47,6 +48,7 @@ TEST(RasterizerTest, RasterizeQuadSupersampled) {
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
   quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
   quad.indices = {0, 1, 2, 0, 2, 3};
   scene.geometries.push_back(quad);
 
@@ -78,6 +80,45 @@ TEST(RasterizerTest, ValidityMask) {
   EXPECT_EQ(mask[0], 1);
   EXPECT_EQ(mask[1], 0);
   EXPECT_EQ(mask[2], 1);
+}
+
+TEST(RasterizerTest, DownsampleValidityMask) {
+  int width = 2;
+  int height = 2;
+  int scale = 2;
+  // High res 4x4 = 16 pixels
+  std::vector<uint8_t> points(16, false);
+
+  // Case 1: Output (0,0) -> Input block [(0,0), (1,0), (0,1), (1,1)]
+  // indices: 0, 1, 4, 5. Keep all invalid.
+  // Expectation: Invalid (0)
+
+  // Case 2: Output (1,0) -> Input block [(2,0), (3,0), (2,1), (3,1)]
+  // indices: 2, 3, 6, 7. Set one valid.
+  points[2] = true;
+  // Expectation: Valid (1)
+
+  // Case 3: Output (0,1) -> Input block [(0,2), (1,2), (0,3), (1,3)]
+  // indices: 8, 9, 12, 13. Set all valid.
+  points[8] = true;
+  points[9] = true;
+  points[12] = true;
+  points[13] = true;
+  // Expectation: Valid (1)
+
+  // Case 4: Output (1,1) -> Input block [(2,2), (3,2), (2,3), (3,3)]
+  // indices: 10, 11, 14, 15. Set one valid (last one).
+  points[15] = true;
+  // Expectation: Valid (1)
+
+  std::vector<uint8_t> mask =
+      DownsampleValidityMask(points, width, height, scale);
+
+  ASSERT_EQ(mask.size(), 4);
+  EXPECT_EQ(mask[0], 0);  // (0,0)
+  EXPECT_EQ(mask[1], 1);  // (1,0)
+  EXPECT_EQ(mask[2], 1);  // (0,1)
+  EXPECT_EQ(mask[3], 1);  // (1,1)
 }
 
 }  // namespace sh_baker
