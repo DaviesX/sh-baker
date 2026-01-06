@@ -8,7 +8,7 @@
 namespace sh_baker {
 
 std::vector<Geometry> CreateAtlasGeometries(
-    const std::vector<Geometry>& geometries) {
+    const std::vector<Geometry>& geometries, int resolution, int padding) {
   if (geometries.empty()) {
     return {};
   }
@@ -53,7 +53,36 @@ std::vector<Geometry> CreateAtlasGeometries(
   }
 
   // 3. Generate Atlas
-  xatlas::Generate(atlas);
+  xatlas::PackOptions pack_options;
+  pack_options.resolution = (uint32_t)resolution;
+  pack_options.padding = (uint32_t)padding;
+
+  // Use higher quality packing (brute force) if desired, but defaults are
+  // usually fine. pack_options.bruteForce = true;
+
+  xatlas::Generate(atlas, xatlas::ChartOptions(), pack_options);
+
+  if (atlas->width == 0 || atlas->height == 0) {
+    LOG(ERROR) << "xatlas failed to generate any content.";
+    xatlas::Destroy(atlas);
+    return {};
+  }
+
+  if (atlas->atlasCount > 1) {
+    LOG(ERROR) << "xatlas failed to fit geometries into a single " << resolution
+               << "x" << resolution << " atlas with padding " << padding << "."
+               << " Requested " << atlas->atlasCount << " atlases.";
+    // We strictly require a single atlas page.
+    xatlas::Destroy(atlas);
+    return {};
+  }
+
+  if (atlas->width > resolution || atlas->height > resolution) {
+    LOG(ERROR) << "xatlas exceeded target resolution: " << atlas->width << "x"
+               << atlas->height << " > " << resolution << "x" << resolution;
+    xatlas::Destroy(atlas);
+    return {};
+  }
 
   // 4. Reconstruct Geometries
   std::vector<Geometry> result_geometries;

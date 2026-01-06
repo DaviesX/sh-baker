@@ -16,7 +16,7 @@ DEFINE_int32(width, 1024, "Width of the output image.");
 DEFINE_int32(height, 1024, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
-DEFINE_int32(dilation, 0, "Number of dilation passes.");
+DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
 DEFINE_bool(split_channels, false,
@@ -63,7 +63,14 @@ int main(int argc, char* argv[]) {
 
   // Generate Atlas
   LOG(INFO) << "Generating Lightmap UVs (xatlas)...";
-  scene.geometries = sh_baker::CreateAtlasGeometries(scene.geometries);
+  if (!scene.geometries.empty()) {
+    scene.geometries = sh_baker::CreateAtlasGeometries(
+        scene.geometries, FLAGS_width, FLAGS_dilation);
+    if (scene.geometries.empty()) {
+      LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
+      return 1;
+    }
+  }
   LOG(INFO)
       << "Atlas generation complete. New Geometries vertex counts adjusted.";
 
