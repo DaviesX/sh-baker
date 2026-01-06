@@ -34,6 +34,13 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
 std::vector<uint8_t> CreateValidityMask(
     const std::vector<SurfacePoint>& points);
 
+// Downsamples the validity mask from a supersampled buffer.
+// Returns a mask of size width * height.
+// A pixel is valid if ANY of its subpixels (scale*scale block) are valid.
+std::vector<uint8_t> DownsampleValidityMask(
+    const std::vector<uint8_t>& high_res_mask, int width, int height,
+    int scale);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_RASTERIZER_H_
