@@ -63,21 +63,28 @@ int main(int argc, char* argv[]) {
 
   // Generate Atlas
   LOG(INFO) << "Generating Lightmap UVs (xatlas)...";
-  if (!scene.geometries.empty()) {
-    scene.geometries = sh_baker::CreateAtlasGeometries(
-        scene.geometries, FLAGS_width, FLAGS_dilation);
-    if (scene.geometries.empty()) {
-      LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
-      return 1;
-    }
+  if (scene.geometries.empty()) {
+    LOG(ERROR) << "No geometries found in scene.";
+    return 1;
   }
-  LOG(INFO)
-      << "Atlas generation complete. New Geometries vertex counts adjusted.";
+
+  std::optional<sh_baker::AtlasResult> atlas_result =
+      sh_baker::CreateAtlasGeometries(scene.geometries, FLAGS_width,
+                                      FLAGS_dilation);
+  if (!atlas_result) {
+    LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
+    return 1;
+  }
+
+  scene.geometries = atlas_result->geometries;
+  LOG(INFO) << "Atlas generation complete. New Geometries vertex counts "
+               "adjusted. Resolution adjusted to: "
+            << atlas_result->width << "x" << atlas_result->height;
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
-  raster_config.width = FLAGS_width;
-  raster_config.height = FLAGS_height;
+  raster_config.width = atlas_result->width;
+  raster_config.height = atlas_result->height;
   raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"

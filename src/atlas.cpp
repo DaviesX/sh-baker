@@ -7,10 +7,11 @@
 
 namespace sh_baker {
 
-std::vector<Geometry> CreateAtlasGeometries(
-    const std::vector<Geometry>& geometries, int resolution, int padding) {
+std::optional<AtlasResult> CreateAtlasGeometries(
+    const std::vector<Geometry>& geometries, unsigned target_resolution,
+    unsigned padding) {
   if (geometries.empty()) {
-    return {};
+    return std::nullopt;
   }
 
   // 1. Create Atlas
@@ -45,17 +46,14 @@ std::vector<Geometry> CreateAtlasGeometries(
       LOG(ERROR) << "Error adding mesh " << i
                  << " to xatlas: " << xatlas::StringForEnum(error);
       xatlas::Destroy(atlas);
-      return geometries;  // Fallback? Or empty? usage suggests we return valid
-                          // geometries.
-      // If we fail, returning original geometries means lightmap_uvs is empty,
-      // likely causing crash or no bake.
+      return std::nullopt;
     }
   }
 
   // 3. Generate Atlas
   xatlas::PackOptions pack_options;
-  pack_options.resolution = (uint32_t)resolution;
-  pack_options.padding = (uint32_t)padding;
+  pack_options.resolution = target_resolution;
+  pack_options.padding = padding;
 
   // Use higher quality packing (brute force) if desired, but defaults are
   // usually fine. pack_options.bruteForce = true;
@@ -65,23 +63,17 @@ std::vector<Geometry> CreateAtlasGeometries(
   if (atlas->width == 0 || atlas->height == 0) {
     LOG(ERROR) << "xatlas failed to generate any content.";
     xatlas::Destroy(atlas);
-    return {};
+    return std::nullopt;
   }
 
   if (atlas->atlasCount > 1) {
-    LOG(ERROR) << "xatlas failed to fit geometries into a single " << resolution
-               << "x" << resolution << " atlas with padding " << padding << "."
+    LOG(ERROR) << "xatlas failed to fit geometries into a single "
+               << target_resolution << "x" << target_resolution
+               << " atlas with padding " << padding << "."
                << " Requested " << atlas->atlasCount << " atlases.";
     // We strictly require a single atlas page.
     xatlas::Destroy(atlas);
-    return {};
-  }
-
-  if (atlas->width > resolution || atlas->height > resolution) {
-    LOG(ERROR) << "xatlas exceeded target resolution: " << atlas->width << "x"
-               << atlas->height << " > " << resolution << "x" << resolution;
-    xatlas::Destroy(atlas);
-    return {};
+    return std::nullopt;
   }
 
   // 4. Reconstruct Geometries
@@ -145,7 +137,12 @@ std::vector<Geometry> CreateAtlasGeometries(
   }
 
   xatlas::Destroy(atlas);
-  return result_geometries;
+
+  AtlasResult result;
+  result.geometries = std::move(result_geometries);
+  result.width = atlas->width;
+  result.height = atlas->height;
+  return result;
 }
 
 }  // namespace sh_baker
