@@ -24,6 +24,10 @@ DEFINE_bool(split_channels, false,
 DEFINE_int32(supersample_scale, 1,
              "Scale factor for supersampling (e.g. 2 for 2x2).");
 
+DEFINE_bool(luminance_only, false,
+            "If true, compress Light map by storing only Luminance for L1/L2 "
+            "coefficients (Packed into 3 textures).");
+
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
 
@@ -130,9 +134,14 @@ int main(int argc, char* argv[]) {
     std::filesystem::create_directories(output_path);
     std::filesystem::path lightmap_path = output_path / kLightmapFileName;
     std::filesystem::path gltf_path = output_path / kGLTFFileName;
-    sh_baker::SaveMode mode = FLAGS_split_channels
-                                  ? sh_baker::SaveMode::kSplitChannels
-                                  : sh_baker::SaveMode::kCombined;
+
+    sh_baker::SaveMode mode = sh_baker::SaveMode::kCombined;
+    if (FLAGS_luminance_only) {
+      mode = sh_baker::SaveMode::kLuminancePacked;
+    } else if (FLAGS_split_channels) {
+      mode = sh_baker::SaveMode::kSplitChannels;
+    }
+
     if (!sh_baker::SaveSHLightMap(texture, lightmap_path, mode)) {
       LOG(ERROR) << "Failed to save output.";
       return 1;
