@@ -360,6 +360,34 @@ int main(int argc, char* argv[]) {
 
   glEnable(GL_DEPTH_TEST);
 
+  glUseProgram(g_ShaderProgram);
+
+  // Set Mode Uniform
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_UsePackedLuminance"),
+              use_packed_luminance ? 1 : 0);
+
+  // Set Material Sampler Units (Static)
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_AlbedoTex"), 0);
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_NormalTex"), 4);
+  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_MRTex"), 5);
+
+  // Bind SH Textures (Static)
+  if (use_packed_luminance) {
+    for (int i = 0; i < 3; ++i) {
+      glActiveTexture(GL_TEXTURE1 + i);
+      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+      std::string u_name = "u_PackedTex" + std::to_string(i);
+      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+    }
+  } else {
+    for (int i = 0; i < 9; ++i) {
+      glActiveTexture(GL_TEXTURE1 + i);
+      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+      std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
+      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+    }
+  }
+
   // --- Main Loop ---
   while (!glfwWindowShouldClose(window)) {
     ProcessInput(window);
@@ -369,12 +397,6 @@ int main(int argc, char* argv[]) {
     glViewport(0, 0, w, h);
     glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glUseProgram(g_ShaderProgram);
-
-    // Set Mode Uniform
-    glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_UsePackedLuminance"),
-                use_packed_luminance ? 1 : 0);
 
     // Camera Matrix
     Eigen::Vector3f cam_pos_cartesian;
@@ -425,25 +447,6 @@ int main(int argc, char* argv[]) {
     glUniform3fv(glGetUniformLocation(g_ShaderProgram, "u_CamPos"), 1,
                  g_CamPos.data());
 
-    // Bind SH Textures
-    if (use_packed_luminance) {
-      for (int i = 0; i < 3; ++i) {
-        glActiveTexture(GL_TEXTURE1 + i);
-        glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-        std::string u_name = "u_PackedTex" + std::to_string(i);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()),
-                    1 + i);
-      }
-    } else {
-      for (int i = 0; i < 9; ++i) {
-        glActiveTexture(GL_TEXTURE1 + i);
-        glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-        std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()),
-                    1 + i);
-      }
-    }
-
     // Draw Meshes
     for (size_t i = 0; i < g_Meshes.size(); ++i) {
       glBindVertexArray(g_Meshes[i].vao);
@@ -464,7 +467,6 @@ int main(int argc, char* argv[]) {
         // Albedo
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_AlbedoTex"), 0);
         glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasAlbedo"),
                     g_AlbedoTextures[mat_id] != 0 ? 1 : 0);
         glUniform3f(glGetUniformLocation(g_ShaderProgram, "u_AlbedoColor"), 1,
@@ -473,14 +475,12 @@ int main(int argc, char* argv[]) {
         // Normal
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_NormalTex"), 4);
         glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasNormal"),
                     g_NormalTextures[mat_id] != 0 ? 1 : 0);
 
         // MR
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_MRTex"), 5);
         glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasMR"),
                     g_MRTextures[mat_id] != 0 ? 1 : 0);
 
