@@ -1,4 +1,4 @@
-#define GLFW_INCLUDE_GLCOREARB
+#define GL_GLEXT_PROTOTYPES
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>
 #include <gflags/gflags.h>
