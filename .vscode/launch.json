@@ -20,9 +20,7 @@
                 "--dilation",
                 "4",
                 "--luminance_only",
-                "--write",
-                "material-map",
-                "--skip_parameterization"
+                "--debug_output",
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
