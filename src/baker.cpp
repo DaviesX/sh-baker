@@ -6,7 +6,9 @@
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <iostream>
 #include <random>
 
 #include "light.h"
@@ -202,44 +204,60 @@ SHTexture BakeSHLightMap(const Scene& scene,
 
   float inv_pdf_uniform = 2.0f * M_PI;
 
+  size_t total_pixels = surface_points.size();
+  std::atomic<size_t> processed_count{0};
+  std::atomic<int> last_progress{-1};
+
   tbb::parallel_for(
-      tbb::blocked_range<size_t>(0, surface_points.size()),
+      tbb::blocked_range<size_t>(0, total_pixels),
       [&](const tbb::blocked_range<size_t>& r) {
         // Each thread needs its own RNG? Or use thread-local?
         // Simple way: Seed based on index.
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
           const SurfacePoint& sp = surface_points[idx];
-          if (!sp.valid) continue;
 
-          SHCoeffs sh_accum;
+          if (sp.valid) {
+            SHCoeffs sh_accum;
 
-          // Seeding RNG with index to make it deterministic but different per
-          // pixel
-          std::mt19937 rng(12345 + idx);
+            // Seeding RNG with index to make it deterministic but different per
+            // pixel
+            std::mt19937 rng(12345 + idx);
 
-          // Offset position to avoid self-intersection
-          Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
+            // Offset position to avoid self-intersection
+            Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
 
-          for (int s = 0; s < config.samples; ++s) {
-            Eigen::Vector3f dir_local =
-                SampleHemisphereUniform(rng);  // Z is up
+            for (int s = 0; s < config.samples; ++s) {
+              Eigen::Vector3f dir_local =
+                  SampleHemisphereUniform(rng);  // Z is up
 
-            // Transform to World
-            Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
-                                        sp.bitangent * dir_local.y() +
-                                        sp.normal * dir_local.z();
+              // Transform to World
+              Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
+                                          sp.bitangent * dir_local.y() +
+                                          sp.normal * dir_local.z();
 
-            Eigen::Vector3f Li =
-                Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces,
-                      config.num_light_samples, rng);
+              Eigen::Vector3f Li =
+                  Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces,
+                        config.num_light_samples, rng);
 
-            AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+              AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+            }
+
+            // Average
+            output.pixels[idx] = sh_accum * (1.0f / config.samples);
           }
 
-          // Average
-          output.pixels[idx] = sh_accum * (1.0f / config.samples);
+          size_t done =
+              processed_count.fetch_add(1, std::memory_order_relaxed) + 1;
+          int percent = static_cast<int>((done * 100) / total_pixels);
+          int expected = last_progress.load(std::memory_order_relaxed);
+          if (percent > expected) {
+            if (last_progress.compare_exchange_strong(expected, percent)) {
+              std::cout << "\r[Baking] " << percent << "%" << std::flush;
+            }
+          }
         }
       });
+  std::cout << std::endl;
 
   // Clean up
   rtcReleaseScene(rtc_scene);
