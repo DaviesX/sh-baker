@@ -183,4 +183,52 @@ std::vector<uint8_t> DownsampleValidityMask(
   return mask;
 }
 
+Texture CreateMaterialMap(const std::vector<SurfacePoint>& surface_points,
+                          int width, int height) {
+  Texture texture;
+  texture.width = width;
+  texture.height = height;
+  texture.channels = 3;
+  texture.pixel_data.resize(width * height * 3);
+
+  // Parallelize for speed
+  tbb::parallel_for(tbb::blocked_range<int>(0, height),
+                    [&](const tbb::blocked_range<int>& r) {
+                      for (int y = r.begin(); y != r.end(); ++y) {
+                        for (int x = 0; x < width; ++x) {
+                          int idx = y * width + x;
+                          const auto& sp = surface_points[idx];
+                          uint8_t r = 0, g = 0, b = 0;
+
+                          if (sp.valid) {
+                            // Generate arbitrary color from material_id
+                            // Use a simple hash to get deterministic colors
+                            uint32_t id = sp.material_id;
+                            // Gold Noise / Hash
+                            id = ((id >> 16) ^ id) * 0x45d9f3b;
+                            id = ((id >> 16) ^ id) * 0x45d9f3b;
+                            id = (id >> 16) ^ id;
+
+                            r = (id & 0xFF);
+                            g = ((id >> 8) & 0xFF);
+                            b = ((id >> 16) & 0xFF);
+
+                            // Ensure it's not too dark if valid
+                            if (r < 50 && g < 50 && b < 50) {
+                              r += 50;
+                              g += 50;
+                              b += 50;
+                            }
+                          }
+
+                          texture.pixel_data[idx * 3 + 0] = r;
+                          texture.pixel_data[idx * 3 + 1] = g;
+                          texture.pixel_data[idx * 3 + 2] = b;
+                        }
+                      }
+                    });
+
+  return texture;
+}
+
 }  // namespace sh_baker

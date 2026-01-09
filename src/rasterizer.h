@@ -41,6 +41,13 @@ std::vector<uint8_t> DownsampleValidityMask(
     const std::vector<uint8_t>& high_res_mask, int width, int height,
     int scale);
 
+// Creates a material map for debugging.
+// Assigns arbitrary RGB color for the material ID.
+// Fills black color to invalid pixel locations.
+// width and height must match the dimension of the surface points.
+Texture CreateMaterialMap(const std::vector<SurfacePoint>& surface_points,
+                          int width, int height);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_RASTERIZER_H_
