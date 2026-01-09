@@ -101,31 +101,31 @@ std::optional<AtlasResult> CreateAtlasGeometries(
       const auto& vertex_ref = atlas_mesh.vertexArray[v];
       uint32_t original_index = vertex_ref.xref;
 
-      // Copy attributes from original mesh
-      if (original_index < src_geo.vertices.size()) {
-        // Enforce invariants
-        CHECK(!src_geo.normals.empty()) << "Source geometry must have normals";
-        CHECK(!src_geo.tangents.empty())
-            << "Source geometry must have tangents";
-
-        new_geo.vertices[v] = src_geo.vertices[original_index];
-        new_geo.normals[v] = src_geo.normals[original_index];
-        new_geo.tangents[v] = src_geo.tangents[original_index];
-
-        if (!src_geo.texture_uvs.empty())
-          new_geo.texture_uvs[v] = src_geo.texture_uvs[original_index];
-        else
-          new_geo.texture_uvs[v] = Eigen::Vector2f(0, 0);
-
-      } else {
-        // Should not happen if xref is valid
-        LOG(ERROR) << "xatlas xref out of bounds!";
-      }
-
       // Set new lightmap UV
       new_geo.lightmap_uvs[v] =
           Eigen::Vector2f(vertex_ref.uv[0] / (float)atlas->width,
                           vertex_ref.uv[1] / (float)atlas->height);
+
+      // Copy attributes from original mesh
+      if (original_index >= src_geo.vertices.size()) {
+        // Should not happen if xref is valid.
+        LOG(ERROR) << "xatlas xref out of bounds!";
+        continue;
+      }
+
+      // Enforce invariants
+      CHECK(!src_geo.normals.empty()) << "Source geometry must have normals";
+      CHECK(!src_geo.tangents.empty()) << "Source geometry must have tangents";
+      CHECK_EQ(vertex_ref.atlasIndex, 0) << "xatlas atlas index should be 0";
+
+      new_geo.vertices[v] = src_geo.vertices[original_index];
+      new_geo.normals[v] = src_geo.normals[original_index];
+      new_geo.tangents[v] = src_geo.tangents[original_index];
+
+      if (!src_geo.texture_uvs.empty())
+        new_geo.texture_uvs[v] = src_geo.texture_uvs[original_index];
+      else
+        new_geo.texture_uvs[v] = Eigen::Vector2f(0, 0);
     }
 
     // Fill indices
@@ -137,12 +137,12 @@ std::optional<AtlasResult> CreateAtlasGeometries(
     result_geometries.push_back(std::move(new_geo));
   }
 
-  xatlas::Destroy(atlas);
-
   AtlasResult result;
   result.geometries = std::move(result_geometries);
   result.width = atlas->width;
   result.height = atlas->height;
+
+  xatlas::Destroy(atlas);
   return result;
 }
 
