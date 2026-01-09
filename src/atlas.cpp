@@ -22,6 +22,7 @@ std::optional<AtlasResult> CreateAtlasGeometries(
   // xatlas In this simple case, the order is preserved.
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
+
     xatlas::MeshDecl mesh_decl;
     mesh_decl.vertexCount = (uint32_t)geo.vertices.size();
     mesh_decl.vertexPositionData = geo.vertices.data();

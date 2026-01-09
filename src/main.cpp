@@ -28,7 +28,8 @@ DEFINE_bool(luminance_only, false,
             "If true, compress Light map by storing only Luminance for L1/L2 "
             "coefficients (Packed into 3 textures).");
 
-DEFINE_string(write, "", "Debug output to write. Options: material-map");
+DEFINE_bool(debug_output, false,
+            "If true, output debug information to the output folder.");
 
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
@@ -96,7 +97,7 @@ int main(int argc, char* argv[]) {
   auto surface_points = sh_baker::RasterizeScene(scene, raster_config);
 
   // Debug Output
-  if (FLAGS_write.find("material-map") != std::string::npos) {
+  if (FLAGS_debug_output) {
     int scaled_w = raster_config.width * raster_config.supersample_scale;
     int scaled_h = raster_config.height * raster_config.supersample_scale;
     LOG(INFO) << "Generating Material Map (" << scaled_w << "x" << scaled_h

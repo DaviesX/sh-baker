@@ -261,6 +261,18 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     }
   }
 
+  // Filter degenerate triangles
+  if (!geo.indices.empty() && !geo.vertices.empty()) {
+    std::vector<uint32_t> valid_indices;
+    valid_indices.reserve(geo.indices.size());
+    int degenerate_count = 0;
+
+    // Ensure we have position data available for the check.
+    // At this point, geo.vertices is NOT yet populated!
+    // We need to move this check AFTER geo.vertices is populated.
+    // Returning to original code block placement...
+  }
+
   // Vertices
   geo.vertices.reserve(vertex_count);
   geo.normals.reserve(vertex_count);
@@ -312,6 +324,45 @@ bool ProcessPrimitive(const tinygltf::Model& model,
       geo.tangents.emplace_back(
           tan_data[i * tan_stride + 0], tan_data[i * tan_stride + 1],
           tan_data[i * tan_stride + 2], tan_data[i * tan_stride + 3]);
+    }
+  }
+
+  // Filter degenerate triangles
+  if (!geo.indices.empty() && !geo.vertices.empty()) {
+    std::vector<uint32_t> valid_indices;
+    valid_indices.reserve(geo.indices.size());
+    int degenerate_count = 0;
+
+    for (size_t i = 0; i < geo.indices.size(); i += 3) {
+      uint32_t i0 = geo.indices[i];
+      uint32_t i1 = geo.indices[i + 1];
+      uint32_t i2 = geo.indices[i + 2];
+
+      bool degenerate = false;
+      if (i0 == i1 || i0 == i2 || i1 == i2) {
+        degenerate = true;
+      } else {
+        const Eigen::Vector3f& p0 = geo.vertices[i0];
+        const Eigen::Vector3f& p1 = geo.vertices[i1];
+        const Eigen::Vector3f& p2 = geo.vertices[i2];
+        if ((p1 - p0).cross(p2 - p0).squaredNorm() < 1e-12f) {
+          degenerate = true;
+        }
+      }
+
+      if (degenerate) {
+        degenerate_count++;
+      } else {
+        valid_indices.push_back(i0);
+        valid_indices.push_back(i1);
+        valid_indices.push_back(i2);
+      }
+    }
+
+    if (degenerate_count > 0) {
+      LOG(WARNING) << "Removed " << degenerate_count
+                   << " degenerate triangles from primitive.";
+      geo.indices = std::move(valid_indices);
     }
   }
 
