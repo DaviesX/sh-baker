@@ -12,8 +12,8 @@
 #include "saver.h"
 
 DEFINE_string(input, "", "Path to the input glTF file.");
-DEFINE_int32(width, 1024, "Width of the output image.");
-DEFINE_int32(height, 1024, "Height of the output image.");
+DEFINE_int32(width, 2048, "Width of the output image.");
+DEFINE_int32(height, 2048, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
@@ -27,6 +27,8 @@ DEFINE_int32(supersample_scale, 1,
 DEFINE_bool(luminance_only, false,
             "If true, compress Light map by storing only Luminance for L1/L2 "
             "coefficients (Packed into 3 textures).");
+
+DEFINE_string(write, "", "Debug output to write. Options: material-map");
 
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
@@ -83,14 +85,36 @@ int main(int argc, char* argv[]) {
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
-  raster_config.width = atlas_result->width;
-  raster_config.height = atlas_result->height;
+  raster_config.width = FLAGS_width;  // Keep the requested resolution though
+                                      // xatlas may prefer a different one.
+  raster_config.height = FLAGS_height;
   raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"
             << raster_config.height
             << ") scale: " << raster_config.supersample_scale << "...";
   auto surface_points = sh_baker::RasterizeScene(scene, raster_config);
+
+  // Debug Output
+  if (FLAGS_write.find("material-map") != std::string::npos) {
+    int scaled_w = raster_config.width * raster_config.supersample_scale;
+    int scaled_h = raster_config.height * raster_config.supersample_scale;
+    LOG(INFO) << "Generating Material Map (" << scaled_w << "x" << scaled_h
+              << ")...";
+    sh_baker::Texture mat_map =
+        sh_baker::CreateMaterialMap(surface_points, scaled_w, scaled_h);
+
+    std::filesystem::path out_dir = FLAGS_output.empty()
+                                        ? std::filesystem::current_path()
+                                        : std::filesystem::path(FLAGS_output);
+    std::filesystem::create_directories(out_dir);
+    std::filesystem::path map_path = out_dir / "material_map.png";
+    if (sh_baker::SaveTexture(mat_map, map_path)) {
+      LOG(INFO) << "Material map saved to: " << map_path;
+    } else {
+      LOG(ERROR) << "Failed to save material map to: " << map_path;
+    }
+  }
 
   // Configure Baker
   sh_baker::BakeConfig config;

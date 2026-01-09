@@ -81,3 +81,20 @@ To use the standalone OpenGL visualizer:
 Controls:
 - **Left Mouse Drag**: Orbit camera.
 - **Scroll**: Zoom.
+
+### EXR to PNG Converter
+
+Tool to extract the L0 component (irradiance/diffuse color) from EXR lightmaps and save it as a PNG. Useful for quick debugging or previewing.
+
+Usage:
+
+```bash
+./build/sh_cvt --input <directory> [--reinhard]
+```
+
+Arguments:
+
+- `--input`: Input directory containing EXR files.
+- `--reinhard`: Apply Reinhard tone mapping (`x / (1+x)`) to the output.
+
+This tool will process all `.exr` files in the directory and save `<filename>_L0.png`.

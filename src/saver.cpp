@@ -612,4 +612,16 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
                                      /*embed_binary=*/false);
 }
 
+bool SaveTexture(const Texture& texture, const std::filesystem::path& path) {
+  if (texture.pixel_data.empty() || texture.width == 0 || texture.height == 0) {
+    return false;
+  }
+
+  // Use stbi_write_png
+  int ret = stbi_write_png(path.string().c_str(), texture.width, texture.height,
+                           texture.channels, texture.pixel_data.data(),
+                           texture.width * texture.channels);
+  return (ret != 0);
+}
+
 }  // namespace sh_baker

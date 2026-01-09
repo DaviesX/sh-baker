@@ -44,6 +44,9 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
 // (TEXCOORD_1).
 bool SaveScene(const Scene& scene, const std::filesystem::path& path);
 
+// Saves a standard Texture to a PNG file.
+bool SaveTexture(const Texture& texture, const std::filesystem::path& path);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_SAVER_H_
