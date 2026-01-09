@@ -68,7 +68,6 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
 
   // We parallelize over geometries. TBB's work stealing should balance it?
   // If a geometry is huge, we should parallelize inside it.
-  // Let's use a nested parallel structure.
 
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, scene.geometries.size()),
@@ -78,79 +77,75 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
           const auto& geo = scene.geometries[geom_idx];
           size_t tri_count = geo.indices.size() / 3;
 
-          // Inner parallelism for triangles
-          tbb::parallel_for(
-              tbb::blocked_range<size_t>(0, tri_count),
-              [&](const tbb::blocked_range<size_t>& r_tri) {
-                for (size_t i = r_tri.begin(); i != r_tri.end(); ++i) {
-                  uint32_t idx0 = geo.indices[i * 3 + 0];
-                  uint32_t idx1 = geo.indices[i * 3 + 1];
-                  uint32_t idx2 = geo.indices[i * 3 + 2];
+          for (size_t i = 0; i < tri_count; ++i) {
+            uint32_t idx0 = geo.indices[i * 3 + 0];
+            uint32_t idx1 = geo.indices[i * 3 + 1];
+            uint32_t idx2 = geo.indices[i * 3 + 2];
 
-                  Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
-                  Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
-                  Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+            Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+            Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+            Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-                  // Bounding box in UV space
-                  float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});
-                  float max_u = std::max({uv0.x(), uv1.x(), uv2.x()});
-                  float min_v = std::min({uv0.y(), uv1.y(), uv2.y()});
-                  float max_v = std::max({uv0.y(), uv1.y(), uv2.y()});
+            // Bounding box in UV space
+            float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});
+            float max_u = std::max({uv0.x(), uv1.x(), uv2.x()});
+            float min_v = std::min({uv0.y(), uv1.y(), uv2.y()});
+            float max_v = std::max({uv0.y(), uv1.y(), uv2.y()});
 
-                  int min_x = std::max(0, (int)(min_u * scaled_width));
-                  int max_x = std::min(scaled_width - 1,
-                                       (int)(std::ceil(max_u * scaled_width)));
-                  int min_y = std::max(0, (int)(min_v * scaled_height));
-                  int max_y = std::min(scaled_height - 1,
-                                       (int)(std::ceil(max_v * scaled_height)));
+            int min_x = std::max(0, (int)(min_u * scaled_width));
+            int max_x = std::min(scaled_width - 1,
+                                 (int)(std::ceil(max_u * scaled_width)));
+            int min_y = std::max(0, (int)(min_v * scaled_height));
+            int max_y = std::min(scaled_height - 1,
+                                 (int)(std::ceil(max_v * scaled_height)));
 
-                  for (int y = min_y; y <= max_y; ++y) {
-                    for (int x = min_x; x <= max_x; ++x) {
-                      Eigen::Vector2f p((x + 0.5f) / scaled_width,
-                                        (y + 0.5f) / scaled_height);
-                      float u, v, w;
-                      if (Barycentric(p, uv0, uv1, uv2, u, v, w)) {
-                        int pixel_idx = y * scaled_width + x;
-                        // Store surface point.
-                        // Note: This is a read-modify-write if we had blending,
-                        // but here we just overwrite.
-                        // Potential race with shared edges, but deterministic
-                        // enough for now.
-                        SurfacePoint sp;
-                        sp.valid = true;
-                        sp.material_id = geo.material_id;
-
-                        Eigen::Vector3f pos0 = geo.vertices[idx0];
-                        Eigen::Vector3f pos1 = geo.vertices[idx1];
-                        Eigen::Vector3f pos2 = geo.vertices[idx2];
-                        sp.position = pos0 * u + pos1 * v + pos2 * w;
-
-                        Eigen::Vector3f n0 = geo.normals[idx0];
-                        Eigen::Vector3f n1 = geo.normals[idx1];
-                        Eigen::Vector3f n2 = geo.normals[idx2];
-                        sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
-
-                        CHECK(!geo.tangents.empty());
-                        Eigen::Vector4f t0 = geo.tangents[idx0];
-                        Eigen::Vector4f t1 = geo.tangents[idx1];
-                        Eigen::Vector4f t2 = geo.tangents[idx2];
-                        Eigen::Vector4f interpolated_tan =
-                            t0 * u + t1 * v + t2 * w;
-
-                        Eigen::Vector3f t = interpolated_tan.head<3>();
-                        // Gram-Schmidt orthogonalization
-                        sp.tangent =
-                            (t - sp.normal * sp.normal.dot(t)).normalized();
-                        // Calculate bitangent (using w for handedness)
-                        sp.bitangent =
-                            sp.normal.cross(sp.tangent) * interpolated_tan.w();
-
-                        surface_map[pixel_idx] = sp;
-                      }
-                    }
-                  }
+            for (int y = min_y; y <= max_y; ++y) {
+              for (int x = min_x; x <= max_x; ++x) {
+                Eigen::Vector2f p((x + 0.5f) / scaled_width,
+                                  (y + 0.5f) / scaled_height);
+                float u, v, w;
+                if (!Barycentric(p, uv0, uv1, uv2, u, v, w)) {
+                  // Outside of the triangle.
+                  continue;
                 }
-              });
+
+                int pixel_idx = y * scaled_width + x;
+                // Store surface point.
+                // Note: This is a read-modify-write if we had blending,
+                // but here we just overwrite.
+                // Potential race with shared edges, but deterministic
+                // enough for now.
+                SurfacePoint sp;
+                sp.valid = true;
+                sp.material_id = geo.material_id;
+
+                Eigen::Vector3f pos0 = geo.vertices[idx0];
+                Eigen::Vector3f pos1 = geo.vertices[idx1];
+                Eigen::Vector3f pos2 = geo.vertices[idx2];
+                sp.position = pos0 * u + pos1 * v + pos2 * w;
+
+                Eigen::Vector3f n0 = geo.normals[idx0];
+                Eigen::Vector3f n1 = geo.normals[idx1];
+                Eigen::Vector3f n2 = geo.normals[idx2];
+                sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
+
+                CHECK(!geo.tangents.empty());
+                Eigen::Vector4f t0 = geo.tangents[idx0];
+                Eigen::Vector4f t1 = geo.tangents[idx1];
+                Eigen::Vector4f t2 = geo.tangents[idx2];
+                Eigen::Vector4f interpolated_tan = t0 * u + t1 * v + t2 * w;
+
+                Eigen::Vector3f t = interpolated_tan.head<3>();
+                // Gram-Schmidt orthogonalization
+                sp.tangent = (t - sp.normal * sp.normal.dot(t)).normalized();
+                // Calculate bitangent (using w for handedness)
+                sp.bitangent =
+                    sp.normal.cross(sp.tangent) * interpolated_tan.w();
+
+                surface_map[pixel_idx] = sp;
+              }
+            }
+          }
         }
       });
   return surface_map;
