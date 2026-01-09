@@ -149,6 +149,20 @@ GLuint LoadEXRTexture(const std::string& path) {
   return tid;
 }
 
+GLuint CreatePlaceholderTexture(float r, float g, float b) {
+  GLuint tid;
+  glGenTextures(1, &tid);
+  glBindTexture(GL_TEXTURE_2D, tid);
+  // GL_RGBA16F to match EXR
+  float color[4] = {r, g, b, 1.0f};
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_FLOAT, color);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  return tid;
+}
+
 void ProcessInput(GLFWwindow* window) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
     glfwSetWindowShouldClose(window, true);
@@ -340,7 +354,7 @@ int main(int argc, char* argv[]) {
       if (tid == 0) LOG(WARNING) << "Failed to load SH texture: " << p;
       g_SHTextures.push_back(tid);
     }
-  } else {
+  } else if (std::filesystem::exists(input_dir / "lightmap_L0.exr")) {
     LOG(INFO) << "Using Standard SH Lightmaps (9 files).";
     for (int i = 0; i < 9; ++i) {
       std::string filename =
@@ -351,6 +365,18 @@ int main(int argc, char* argv[]) {
         LOG(WARNING) << "Failed to load SH texture: " << p;
       }
       g_SHTextures.push_back(tid);
+    }
+  } else {
+    LOG(INFO) << "No SH Lightmaps found. Using 1x1 Placeholders (Luminance "
+                 "Only).";
+    // L0 = Approx 1.0 radiance
+    // Y00 = 0.282. Coeff = Radiance / Y00
+    // Reconstruction: Color = C0 * Y00 ...
+    // If we want Color=1, C0 * 0.282 = 1 => C0 = 3.54
+    float c0 = 3.5449f;
+    g_SHTextures.push_back(CreatePlaceholderTexture(c0, c0, c0));
+    for (int i = 1; i < 9; ++i) {
+      g_SHTextures.push_back(CreatePlaceholderTexture(0.0f, 0.0f, 0.0f));
     }
   }
 
