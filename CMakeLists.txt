@@ -153,8 +153,18 @@ gtest_discover_tests(sh_baker_test)
 
 add_executable(visualizer src/visualizer_main.cpp)
 
+
 target_link_libraries(visualizer PRIVATE
     sh_baker_lib
     glfw
     OpenGL::GL
+)
+
+# --- Converter Tool ---
+
+add_executable(sh_cvt src/sh_cvt_main.cpp)
+target_link_libraries(sh_cvt PRIVATE
+    sh_baker_lib
+    gflags
+    glog::glog
 )
