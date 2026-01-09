@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 
 namespace sh_baker {
 
@@ -99,6 +98,11 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
             int max_y = std::min(scaled_height - 1,
                                  (int)(std::ceil(max_v * scaled_height)));
 
+            bool triangle_hit_any_pixels = false;
+
+            // Track pixels per material to debug missing materials
+            int pixels_for_this_triangle = 0;
+
             for (int y = min_y; y <= max_y; ++y) {
               for (int x = min_x; x <= max_x; ++x) {
                 Eigen::Vector2f p((x + 0.5f) / scaled_width,
@@ -109,12 +113,10 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                   continue;
                 }
 
+                triangle_hit_any_pixels = true;
+                pixels_for_this_triangle++;
                 int pixel_idx = y * scaled_width + x;
-                // Store surface point.
-                // Note: This is a read-modify-write if we had blending,
-                // but here we just overwrite.
-                // Potential race with shared edges, but deterministic
-                // enough for now.
+
                 SurfacePoint sp;
                 sp.valid = true;
                 sp.material_id = geo.material_id;
@@ -145,9 +147,60 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                 surface_map[pixel_idx] = sp;
               }
             }
+
+            // Fallback: If triangle was too small to hit any pixel center,
+            // sample at the centroid and write to the nearest pixel
+            // *if* it is currently empty.
+            if (!triangle_hit_any_pixels) {
+              float center_u = (uv0.x() + uv1.x() + uv2.x()) / 3.0f;
+              float center_v = (uv0.y() + uv1.y() + uv2.y()) / 3.0f;
+
+              int cx = (int)(center_u * scaled_width);
+              int cy = (int)(center_v * scaled_height);
+
+              if (cx >= 0 && cx < scaled_width && cy >= 0 &&
+                  cy < scaled_height) {
+                int pixel_idx = cy * scaled_width + cx;
+
+                // Only write if valid bit is not set (don't overwrite
+                // legitimate hits) This assumes standard rasterizer wins over
+                // fallback.
+                if (!surface_map[pixel_idx].valid) {
+                  SurfacePoint sp;
+                  sp.valid = true;
+                  sp.material_id = geo.material_id;
+
+                  // Centroid barycentrics
+                  float u = 1.0f / 3.0f, v = 1.0f / 3.0f, w = 1.0f / 3.0f;
+
+                  Eigen::Vector3f pos0 = geo.vertices[idx0];
+                  Eigen::Vector3f pos1 = geo.vertices[idx1];
+                  Eigen::Vector3f pos2 = geo.vertices[idx2];
+                  sp.position = pos0 * u + pos1 * v + pos2 * w;
+
+                  Eigen::Vector3f n0 = geo.normals[idx0];
+                  Eigen::Vector3f n1 = geo.normals[idx1];
+                  Eigen::Vector3f n2 = geo.normals[idx2];
+                  sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
+
+                  Eigen::Vector4f t0 = geo.tangents[idx0];
+                  Eigen::Vector4f t1 = geo.tangents[idx1];
+                  Eigen::Vector4f t2 = geo.tangents[idx2];
+                  Eigen::Vector4f interpolated_tan = t0 * u + t1 * v + t2 * w;
+
+                  Eigen::Vector3f t = interpolated_tan.head<3>();
+                  sp.tangent = (t - sp.normal * sp.normal.dot(t)).normalized();
+                  sp.bitangent =
+                      sp.normal.cross(sp.tangent) * interpolated_tan.w();
+
+                  surface_map[pixel_idx] = sp;
+                }
+              }
+            }
           }
         }
       });
+
   return surface_map;
 }
 
