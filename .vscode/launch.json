@@ -1,0 +1,37 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug sh_baker",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/sh_baker",
+            "args": [
+                "--input",
+                "data/ABeautifulGame/ABeautifulGame.gltf",
+                "--output",
+                "baked",
+                "--samples",
+                "64",
+                "--dilation",
+                "1",
+                "--luminance_only",
+                "--write",
+                "material-map",
+                "--skip_parameterization"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}
