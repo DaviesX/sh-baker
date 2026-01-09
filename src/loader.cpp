@@ -261,18 +261,6 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     }
   }
 
-  // Filter degenerate triangles
-  if (!geo.indices.empty() && !geo.vertices.empty()) {
-    std::vector<uint32_t> valid_indices;
-    valid_indices.reserve(geo.indices.size());
-    int degenerate_count = 0;
-
-    // Ensure we have position data available for the check.
-    // At this point, geo.vertices is NOT yet populated!
-    // We need to move this check AFTER geo.vertices is populated.
-    // Returning to original code block placement...
-  }
-
   // Vertices
   geo.vertices.reserve(vertex_count);
   geo.normals.reserve(vertex_count);
@@ -340,12 +328,15 @@ bool ProcessPrimitive(const tinygltf::Model& model,
 
       bool degenerate = false;
       if (i0 == i1 || i0 == i2 || i1 == i2) {
+        // Duplicate indices.
         degenerate = true;
       } else {
+        // Area of triangle is close to zero. The mesh is perhaps too high-poly
+        // for this application.
         const Eigen::Vector3f& p0 = geo.vertices[i0];
         const Eigen::Vector3f& p1 = geo.vertices[i1];
         const Eigen::Vector3f& p2 = geo.vertices[i2];
-        if ((p1 - p0).cross(p2 - p0).squaredNorm() < 1e-12f) {
+        if ((p1 - p0).cross(p2 - p0).squaredNorm() < 1e-5f) {
           degenerate = true;
         }
       }
