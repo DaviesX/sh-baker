@@ -6,7 +6,6 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cmath>
-#include <optional>
 #include <random>
 #include <vector>
 
@@ -121,7 +120,7 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
 // estimated radiance is of lower variance if the lights set is potentially
 // visible.
 Eigen::Vector3f EvaluateLightSamples(
-    const SkyModel& sky, const std::vector<Light>& lights, RTCScene rtc_scene,
+    const std::vector<Light>& lights, RTCScene rtc_scene,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
     const Eigen::Vector3f& reflected, const Material& mat,
     const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
