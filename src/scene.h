@@ -90,8 +90,16 @@ struct Scene {
   SkyModel sky;
 };
 
+// Transforms the geometry by the transform matrix.
+std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
+std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry);
+std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
+
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);
+
+// Releases the Embree BVH.
+void ReleaseBVH(RTCScene scene);
 
 }  // namespace sh_baker
 

@@ -117,14 +117,12 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   // Direct Lighting (NEE)
   {
     Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
-    // View direction is -dir
-    Eigen::Vector3f wo = -dir;
 
     // Evaluate Direct Light (NEE)
     // EvaluateLights returns L_e(x, x')
     Eigen::Vector3f L_direct =
-        EvaluateLightSamples(scene.lights, rtc_scene, hit_pos, occ->normal, wo,
-                             mat, occ->uv, num_light_samples, rng);
+        EvaluateLightSamples(scene.lights, rtc_scene, hit_pos, occ->normal,
+                             -dir, mat, occ->uv, num_light_samples, rng);
 
     color += alpha * L_direct;
   }
@@ -200,38 +198,7 @@ SHTexture BakeSHLightMap(const Scene& scene,
         // Each thread needs its own RNG? Or use thread-local?
         // Simple way: Seed based on index.
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-          const SurfacePoint& sp = surface_points[idx];
-
-          if (sp.valid) {
-            SHCoeffs sh_accum;
-
-            // Seeding RNG with index to make it deterministic but different per
-            // pixel
-            std::mt19937 rng(12345 + idx);
-
-            // Offset position to avoid self-intersection
-            Eigen::Vector3f origin = sp.position + sp.normal * 0.001f;
-
-            for (int s = 0; s < config.samples; ++s) {
-              Eigen::Vector3f dir_local =
-                  SampleHemisphereUniform(rng);  // Z is up
-
-              // Transform to World
-              Eigen::Vector3f dir_world = sp.tangent * dir_local.x() +
-                                          sp.bitangent * dir_local.y() +
-                                          sp.normal * dir_local.z();
-
-              Eigen::Vector3f Li =
-                  Trace(rtc_scene, scene, origin, dir_world, 0, config.bounces,
-                        config.num_light_samples, rng);
-
-              AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
-            }
-
-            // Average
-            output.pixels[idx] = sh_accum * (1.0f / config.samples);
-          }
-
+          // Update progress.
           size_t done =
               processed_count.fetch_add(1, std::memory_order_relaxed) + 1;
           int percent = static_cast<int>((done * 100) / total_pixels);
@@ -241,12 +208,50 @@ SHTexture BakeSHLightMap(const Scene& scene,
               std::cout << "\r[Baking] " << percent << "%" << std::flush;
             }
           }
+
+          // Process lightmap pixel.
+          const SurfacePoint& sp = surface_points[idx];
+          if (!sp.valid) {
+            continue;
+          }
+
+          // Accumulate SH coefficients for the specified number of samples.
+          SHCoeffs sh_accum;
+
+          std::mt19937 rng(12345 +
+                           idx);  // Seeding RNG with index to make it
+                                  // deterministic but different per pixel
+          Eigen::Vector3f origin =
+              sp.position +
+              sp.normal * 0.001f;  // Offset position to avoid self-intersection
+
+          for (int s = 0; s < config.samples; ++s) {
+            Eigen::Vector3f dir_local =
+                SampleHemisphereUniform(rng);  // Z is up
+
+            // Transform to World
+            // Calculate bitangent (using w for handedness)
+            Eigen::Vector3f bitangent =
+                sp.normal.cross(sp.tangent.head<3>()) * sp.tangent.w();
+            Eigen::Vector3f dir_world = sp.tangent.head<3>() * dir_local.x() +
+                                        bitangent * dir_local.y() +
+                                        sp.normal * dir_local.z();
+
+            Eigen::Vector3f Li =
+                Trace(rtc_scene, scene, origin, dir_world, /*depth=*/0,
+                      config.bounces, config.num_light_samples, rng);
+
+            AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+          }
+
+          // Average
+          output.pixels[idx] = sh_accum * (1.0f / config.samples);
         }
       });
   std::cout << std::endl;
 
   // Clean up
-  rtcReleaseScene(rtc_scene);
+  ReleaseBVH(rtc_scene);
   rtcReleaseDevice(device);
 
   return output;

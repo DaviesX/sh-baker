@@ -1,10 +1,45 @@
 #include "scene.h"
 
+#include <Eigen/src/Core/Matrix.h>
+#include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
 
-#include <iostream>
-
 namespace sh_baker {
+
+std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry) {
+  std::vector<Eigen::Vector3f> vertices;
+  vertices.reserve(geometry.vertices.size());
+  for (const auto& v : geometry.vertices) {
+    vertices.push_back(geometry.transform * v);
+  }
+  return vertices;
+}
+
+std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry) {
+  std::vector<Eigen::Vector3f> normals;
+  normals.reserve(geometry.normals.size());
+  for (const auto& n : geometry.normals) {
+    normals.push_back((geometry.transform.rotation() * n).normalized());
+  }
+  return normals;
+}
+
+std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry) {
+  std::vector<Eigen::Vector4f> tangents;
+  tangents.reserve(geometry.tangents.size());
+  for (const auto& t : geometry.tangents) {
+    Eigen::Vector3f tangent_vector = t.head<3>();
+    float tangent_sign = t.w();
+    Eigen::Vector3f transformed_tangent_vector =
+        geometry.transform.rotation() * tangent_vector;
+
+    Eigen::Vector4f transformed_tangent;
+    transformed_tangent.head<3>() = transformed_tangent_vector.normalized();
+    transformed_tangent.w() = tangent_sign;
+    tangents.push_back(transformed_tangent);
+  }
+  return tangents;
+}
 
 RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
   if (!device) {
@@ -17,17 +52,21 @@ RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
   // Set scene build quality (optional, default is usually fine)
   rtcSetSceneBuildQuality(rtc_scene, RTC_BUILD_QUALITY_HIGH);
 
-  for (auto& geo : scene.geometries) {
+  for (const auto& geo : scene.geometries) {
+    auto vertices = TransformedVertices(geo);
+
     RTCGeometry rtc_geo = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
 
     // Vertices
     // Eigen::Vector3f is 3 floats.
-    rtcSetSharedGeometryBuffer(rtc_geo, RTC_BUFFER_TYPE_VERTEX,
-                               0,  // slot
-                               RTC_FORMAT_FLOAT3, geo.vertices.data(),
-                               0,                        // byte offset
-                               sizeof(Eigen::Vector3f),  // stride
-                               geo.vertices.size());
+    void* vertex_buffer =
+        rtcSetNewGeometryBuffer(rtc_geo, /*type=*/RTC_BUFFER_TYPE_VERTEX,
+                                /*slot=*/0,
+                                /*format=*/RTC_FORMAT_FLOAT3,
+                                /*byteStride=*/sizeof(Eigen::Vector3f),
+                                /*itemCount=*/vertices.size());
+    memcpy(vertex_buffer, vertices.data(),
+           vertices.size() * sizeof(Eigen::Vector3f));
 
     // Indices
     // indices is vector of uint32_t. Embree expects triangles (3 indices).
@@ -37,20 +76,18 @@ RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
           << "Geometry indices count is not a multiple of 3. Truncating.";
     }
 
-    rtcSetSharedGeometryBuffer(
-        rtc_geo, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, geo.indices.data(),
-        0,
-        3 * sizeof(uint32_t),  // Stride for one triangle (3 indices)
-        geo.indices.size() / 3);
+    rtcSetSharedGeometryBuffer(rtc_geo, /*type=*/RTC_BUFFER_TYPE_INDEX,
+                               /*slot=*/0,
+                               /*format=*/RTC_FORMAT_UINT3,
+                               /*ptr=*/geo.indices.data(),
+                               /*byteOffset=*/0,
+                               /*byteStride=*/3 * sizeof(uint32_t),
+                               /*itemCount=*/geo.indices.size() / 3);
 
     rtcSetGeometryUserData(rtc_geo, (void*)&geo);
 
     rtcAttachGeometry(rtc_scene, rtc_geo);
     rtcCommitGeometry(rtc_geo);
-
-    // rtcAttachGeometry increments the ref count, so we can release our local
-    // handle? documentation says: "The application can release the geometry
-    // handle after attaching it..."
     rtcReleaseGeometry(rtc_geo);
   }
 
@@ -58,5 +95,7 @@ RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
 
   return rtc_scene;
 }
+
+void ReleaseBVH(RTCScene scene) { rtcReleaseScene(scene); }
 
 }  // namespace sh_baker

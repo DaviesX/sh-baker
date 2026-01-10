@@ -5,6 +5,8 @@
 
 #include <vector>
 
+#include "scene.h"
+
 namespace sh_baker {
 
 std::optional<AtlasResult> CreateAtlasGeometries(
@@ -22,14 +24,16 @@ std::optional<AtlasResult> CreateAtlasGeometries(
   // xatlas In this simple case, the order is preserved.
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
+    auto vertices = TransformedVertices(geo);
+    auto normals = TransformedNormals(geo);
 
     xatlas::MeshDecl mesh_decl;
-    mesh_decl.vertexCount = (uint32_t)geo.vertices.size();
-    mesh_decl.vertexPositionData = geo.vertices.data();
+    mesh_decl.vertexCount = static_cast<uint32_t>(vertices.size());
+    mesh_decl.vertexPositionData = vertices.data();
     mesh_decl.vertexPositionStride = sizeof(Eigen::Vector3f);
 
-    if (!geo.normals.empty()) {
-      mesh_decl.vertexNormalData = geo.normals.data();
+    if (!normals.empty()) {
+      mesh_decl.vertexNormalData = normals.data();
       mesh_decl.vertexNormalStride = sizeof(Eigen::Vector3f);
     }
 
@@ -38,7 +42,7 @@ std::optional<AtlasResult> CreateAtlasGeometries(
       mesh_decl.vertexUvStride = sizeof(Eigen::Vector2f);
     }
 
-    mesh_decl.indexCount = (uint32_t)geo.indices.size();
+    mesh_decl.indexCount = static_cast<uint32_t>(geo.indices.size());
     mesh_decl.indexData = geo.indices.data();
     mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
 
@@ -101,6 +105,11 @@ std::optional<AtlasResult> CreateAtlasGeometries(
       const auto& vertex_ref = atlas_mesh.vertexArray[v];
       uint32_t original_index = vertex_ref.xref;
 
+      if (vertex_ref.atlasIndex != 0) {
+        // Discard vertices that are not in the first atlas.
+        continue;
+      }
+
       // Set new lightmap UV
       new_geo.lightmap_uvs[v] =
           Eigen::Vector2f(vertex_ref.uv[0] / (float)atlas->width,
@@ -116,7 +125,6 @@ std::optional<AtlasResult> CreateAtlasGeometries(
       // Enforce invariants
       CHECK(!src_geo.normals.empty()) << "Source geometry must have normals";
       CHECK(!src_geo.tangents.empty()) << "Source geometry must have tangents";
-      CHECK_EQ(vertex_ref.atlasIndex, 0) << "xatlas atlas index should be 0";
 
       new_geo.vertices[v] = src_geo.vertices[original_index];
       new_geo.normals[v] = src_geo.normals[original_index];
