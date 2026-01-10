@@ -75,8 +75,6 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
         Eigen::Vector4f interpolated_tan = w * t0 + u * t1 + v * t2;
 
         Eigen::Vector3f t = interpolated_tan.head<3>();
-        occ.tangent = (t - occ.normal * occ.normal.dot(t)).normalized();
-        occ.bitangent = occ.normal.cross(occ.tangent) * interpolated_tan.w();
       } else {
         // Fallback if no vertex normals (use geometric normal from hit)
         occ.normal = Eigen::Vector3f(rtc_ray_hit.hit.Ng_x, rtc_ray_hit.hit.Ng_y,
