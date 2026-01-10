@@ -157,6 +157,12 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     return false;
   }
 
+  if (primitive.attributes.find("TEXCOORD_0") == primitive.attributes.end()) {
+    LOG(ERROR) << "Primitive missing TEXCOORD_0 attribute. Baking requires "
+                  "UVs.";
+    return false;
+  }
+
   const tinygltf::Accessor& pos_accessor =
       model.accessors[primitive.attributes.at("POSITION")];
   const tinygltf::BufferView& pos_view =
@@ -330,15 +336,6 @@ bool ProcessPrimitive(const tinygltf::Model& model,
       if (i0 == i1 || i0 == i2 || i1 == i2) {
         // Duplicate indices.
         degenerate = true;
-      } else {
-        // Area of triangle is close to zero. The mesh is perhaps too high-poly
-        // for this application.
-        const Eigen::Vector3f& p0 = geo.vertices[i0];
-        const Eigen::Vector3f& p1 = geo.vertices[i1];
-        const Eigen::Vector3f& p2 = geo.vertices[i2];
-        if ((p1 - p0).cross(p2 - p0).squaredNorm() < 1e-5f) {
-          degenerate = true;
-        }
       }
 
       if (degenerate) {

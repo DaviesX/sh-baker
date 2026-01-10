@@ -104,6 +104,16 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                                 const Eigen::Vector3f& normal,
                                 const Eigen::Vector3f& reflected,
                                 std::mt19937& rng) {
+  // Compute basis vectors.
+  Eigen::Vector3f t, b;
+  if (std::abs(normal.x()) > std::abs(normal.z())) {
+    t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
+  } else {
+    t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
+  }
+  t.normalize();
+  b = normal.cross(t);
+
   float metallic, roughness;
   GetMetallicRoughness(mat, uv, metallic, roughness);
 
@@ -132,15 +142,6 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                             sin_theta * std::sin(phi), cos_theta);
 
     // Transform H to World
-    Eigen::Vector3f t, b;
-    if (std::abs(normal.x()) > std::abs(normal.z())) {
-      t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
-    } else {
-      t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
-    }
-    t.normalize();
-    b = normal.cross(t);
-
     Eigen::Vector3f H =
         (t * H_local.x() + b * H_local.y() + normal * H_local.z()).normalized();
 
@@ -176,15 +177,6 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                               std::sin(phi) * sin_theta, std::cos(theta));
 
     // Transform to World
-    Eigen::Vector3f t, b;
-    if (std::abs(normal.x()) > std::abs(normal.z())) {
-      t = Eigen::Vector3f(-normal.y(), normal.x(), 0.0f);
-    } else {
-      t = Eigen::Vector3f(0.0f, -normal.z(), normal.y());
-    }
-    t.normalize();
-    b = normal.cross(t);
-
     Eigen::Vector3f world_dir =
         t * local_dir.x() + b * local_dir.y() + normal * local_dir.z();
 

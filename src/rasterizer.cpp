@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "scene.h"
+
 namespace sh_baker {
 
 namespace {
@@ -42,12 +44,16 @@ void BuildBasis(const Eigen::Vector3f& n, Eigen::Vector3f& t,
   b = n.cross(t);
 }
 
-bool AnyValidSubSamples(int x, int y, int width, int scale,
+bool AnyValidSubSamples(int x, int y, int stride, int scale,
                         const std::vector<uint8_t>& high_res_mask) {
-  const int stride = width * scale;
-  for (int src_y = y * scale; src_y < (y + 1) * scale; ++src_y) {
+  const int start_x = x * scale;
+  const int start_y = y * scale;
+  const int end_x = (x + 1) * scale;
+  const int end_y = (y + 1) * scale;
+
+  for (int src_y = start_y; src_y < end_y; ++src_y) {
     int line_idx = src_y * stride;
-    for (int src_x = x * scale; src_x < (x + 1) * scale; ++src_x) {
+    for (int src_x = start_x; src_x < end_x; ++src_x) {
       int src_idx = line_idx + src_x;
       if (high_res_mask[src_idx]) {
         return true;
@@ -74,6 +80,13 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
         for (size_t geom_idx = r_geom.begin(); geom_idx != r_geom.end();
              ++geom_idx) {
           const auto& geo = scene.geometries[geom_idx];
+          auto vertices = TransformedVertices(geo);
+          auto normals = TransformedNormals(geo);
+          auto tangents = TransformedTangents(geo);
+          CHECK(!vertices.empty());
+          CHECK(!normals.empty());
+          CHECK(!tangents.empty());
+
           size_t tri_count = geo.indices.size() / 3;
 
           for (size_t i = 0; i < tri_count; ++i) {
@@ -121,28 +134,22 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                 sp.valid = true;
                 sp.material_id = geo.material_id;
 
-                Eigen::Vector3f pos0 = geo.vertices[idx0];
-                Eigen::Vector3f pos1 = geo.vertices[idx1];
-                Eigen::Vector3f pos2 = geo.vertices[idx2];
-                sp.position = pos0 * u + pos1 * v + pos2 * w;
+                sp.position = vertices[idx0] * u + vertices[idx1] * v +
+                              vertices[idx2] * w;
 
-                Eigen::Vector3f n0 = geo.normals[idx0];
-                Eigen::Vector3f n1 = geo.normals[idx1];
-                Eigen::Vector3f n2 = geo.normals[idx2];
-                sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
+                sp.normal =
+                    (normals[idx0] * u + normals[idx1] * v + normals[idx2] * w)
+                        .normalized();
 
-                CHECK(!geo.tangents.empty());
-                Eigen::Vector4f t0 = geo.tangents[idx0];
-                Eigen::Vector4f t1 = geo.tangents[idx1];
-                Eigen::Vector4f t2 = geo.tangents[idx2];
-                Eigen::Vector4f interpolated_tan = t0 * u + t1 * v + t2 * w;
-
-                Eigen::Vector3f t = interpolated_tan.head<3>();
-                // Gram-Schmidt orthogonalization
-                sp.tangent = (t - sp.normal * sp.normal.dot(t)).normalized();
-                // Calculate bitangent (using w for handedness)
-                sp.bitangent =
-                    sp.normal.cross(sp.tangent) * interpolated_tan.w();
+                Eigen::Vector4f t0 = tangents[idx0];
+                Eigen::Vector4f t1 = tangents[idx1];
+                Eigen::Vector4f t2 = tangents[idx2];
+                sp.tangent = t0 * u + t1 * v + t2 * w;
+                Eigen::Vector3f tangent3 = sp.tangent.head<3>();
+                tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
+                               .normalized();  // Gram-Schmidt orthogonalization
+                sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
+                                             tangent3.z(), sp.tangent.w());
 
                 surface_map[pixel_idx] = sp;
               }
@@ -173,25 +180,26 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                   // Centroid barycentrics
                   float u = 1.0f / 3.0f, v = 1.0f / 3.0f, w = 1.0f / 3.0f;
 
-                  Eigen::Vector3f pos0 = geo.vertices[idx0];
-                  Eigen::Vector3f pos1 = geo.vertices[idx1];
-                  Eigen::Vector3f pos2 = geo.vertices[idx2];
+                  Eigen::Vector3f pos0 = vertices[idx0];
+                  Eigen::Vector3f pos1 = vertices[idx1];
+                  Eigen::Vector3f pos2 = vertices[idx2];
                   sp.position = pos0 * u + pos1 * v + pos2 * w;
 
-                  Eigen::Vector3f n0 = geo.normals[idx0];
-                  Eigen::Vector3f n1 = geo.normals[idx1];
-                  Eigen::Vector3f n2 = geo.normals[idx2];
+                  Eigen::Vector3f n0 = normals[idx0];
+                  Eigen::Vector3f n1 = normals[idx1];
+                  Eigen::Vector3f n2 = normals[idx2];
                   sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
 
-                  Eigen::Vector4f t0 = geo.tangents[idx0];
-                  Eigen::Vector4f t1 = geo.tangents[idx1];
-                  Eigen::Vector4f t2 = geo.tangents[idx2];
-                  Eigen::Vector4f interpolated_tan = t0 * u + t1 * v + t2 * w;
-
-                  Eigen::Vector3f t = interpolated_tan.head<3>();
-                  sp.tangent = (t - sp.normal * sp.normal.dot(t)).normalized();
-                  sp.bitangent =
-                      sp.normal.cross(sp.tangent) * interpolated_tan.w();
+                  Eigen::Vector4f t0 = tangents[idx0];
+                  Eigen::Vector4f t1 = tangents[idx1];
+                  Eigen::Vector4f t2 = tangents[idx2];
+                  sp.tangent = t0 * u + t1 * v + t2 * w;
+                  Eigen::Vector3f tangent3 = sp.tangent.head<3>();
+                  tangent3 =
+                      (tangent3 - sp.normal * sp.normal.dot(tangent3))
+                          .normalized();  // Gram-Schmidt orthogonalization
+                  sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
+                                               tangent3.z(), sp.tangent.w());
 
                   surface_map[pixel_idx] = sp;
                 }
@@ -216,15 +224,18 @@ std::vector<uint8_t> CreateValidityMask(
 std::vector<uint8_t> DownsampleValidityMask(
     const std::vector<uint8_t>& high_res_mask, int width, int height,
     int scale) {
+  CHECK_EQ(high_res_mask.size(), width * height * scale * scale);
+
   std::vector<uint8_t> mask(width * height, 0);
 
   // Parallelize over output pixels
+  const int high_res_stride = width * scale;
   tbb::parallel_for(tbb::blocked_range<int>(0, height),
                     [&](const tbb::blocked_range<int>& r) {
-                      for (int y = r.begin(); y != r.end(); ++y) {
+                      for (int y = r.begin(); y < r.end(); ++y) {
                         for (int x = 0; x < width; ++x) {
                           mask[y * width + x] = AnyValidSubSamples(
-                              x, y, width, scale, high_res_mask);
+                              x, y, high_res_stride, scale, high_res_mask);
                         }
                       }
                     });
