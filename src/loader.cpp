@@ -141,28 +141,31 @@ Eigen::Affine3f NodeToTransform(const tinygltf::Node& node) {
 bool ProcessPrimitive(const tinygltf::Model& model,
                       const tinygltf::Primitive& primitive,
                       const Eigen::Affine3f& transform, Scene* scene) {
-  Geometry geo;
-  geo.transform = transform;
-  geo.material_id = std::max(0, primitive.material);  // Default to 0 if -1
-
-  // Get Position
-  if (primitive.attributes.find("POSITION") == primitive.attributes.end()) {
-    DLOG(WARNING) << "Primitive missing POSITION attribute";
+  // Precondition.
+  if (primitive.material < 0) {
+    LOG(ERROR) << "Primitive missing material.";
     return false;
   }
-
+  if (primitive.attributes.find("POSITION") == primitive.attributes.end()) {
+    LOG(ERROR) << "Primitive missing POSITION attribute.";
+    return false;
+  }
   if (primitive.attributes.find("NORMAL") == primitive.attributes.end()) {
     LOG(ERROR) << "Primitive missing NORMAL attribute. Baking requires Vertex "
                   "Normals.";
     return false;
   }
-
   if (primitive.attributes.find("TEXCOORD_0") == primitive.attributes.end()) {
     LOG(ERROR) << "Primitive missing TEXCOORD_0 attribute. Baking requires "
                   "UVs.";
     return false;
   }
 
+  Geometry geo;
+  geo.transform = transform;
+  geo.material_id = primitive.material;
+
+  // Get Position
   const tinygltf::Accessor& pos_accessor =
       model.accessors[primitive.attributes.at("POSITION")];
   const tinygltf::BufferView& pos_view =
