@@ -12,7 +12,7 @@ namespace {
 TEST(MaterialTest, SampleMaterial) {
   Material mat;
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
-  Eigen::Vector3f incident(0.0f, 0.0f, -1.0f);
+  Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   std::mt19937 rng(12345);
 
   ReflectionSample sample =

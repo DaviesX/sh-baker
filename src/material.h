@@ -13,22 +13,24 @@ namespace sh_baker {
 // Output of material sampling
 struct ReflectionSample {
   Eigen::Vector3f direction;  // Sampled outgoing direction
-  float pdf;                  // Probability density of this sample
+  float pdf = 0.f;            // Probability density of this sample
 };
 
-// Samples an outgoing direction based on the material BRDF and incoming
-// direction (incident). incident: vector pointing towards the surface (from
-// light/previous bounce).
+// Samples an outgoing direction based on the material BRDF and reflected
+// direction.
+// reflected: outgoing direction, away from the surface (pointing to
+// sensor/previous bounce).
 ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                                 const Eigen::Vector3f& normal,
-                                const Eigen::Vector3f& incident,
+                                const Eigen::Vector3f& reflected,
                                 std::mt19937& rng);
 
 // Evaluates the material BRDF f_r(p, wr, wi).
 // Returns the BRDF value (color).
 // incident: incoming direction, away from the surface (pointing to light
-// sources/next bounce). reflected: outgoing direction, away from the surface
-// (pointing to sensor/previous bounce).
+// sources/next bounce).
+// reflected: outgoing direction, away from the surface (pointing to
+// sensor/previous bounce).
 Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& normal,
                              const Eigen::Vector3f& incident,
@@ -47,13 +49,6 @@ float GetAlpha(const Material& mat, const Eigen::Vector2f& uv);
 // Helper to retrieve metallic and roughness.
 void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
                           float& metallic, float& roughness);
-
-// Helper to retrieve perturbed normal from normal map.
-// If no normal map, returns the geometric normal.
-Eigen::Vector3f GetNormalFromMap(const Material& mat, const Eigen::Vector2f& uv,
-                                 const Eigen::Vector3f& normal,
-                                 const Eigen::Vector3f& tangent,
-                                 const Eigen::Vector3f& bitangent);
 
 }  // namespace sh_baker
 

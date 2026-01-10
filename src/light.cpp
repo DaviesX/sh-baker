@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <numeric>
 #include <random>
 
@@ -80,7 +79,7 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 }  // namespace light_internal
 
 Eigen::Vector3f EvaluateLightSamples(
-    const SkyModel& sky, const std::vector<Light>& lights, RTCScene rtc_scene,
+    const std::vector<Light>& lights, RTCScene rtc_scene,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
     const Eigen::Vector3f& reflected, const Material& mat,
     const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng) {

@@ -1,5 +1,7 @@
 #include "material.h"
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -55,35 +57,6 @@ void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
   }
 }
 
-Eigen::Vector3f GetNormalFromMap(const Material& mat, const Eigen::Vector2f& uv,
-                                 const Eigen::Vector3f& normal,
-                                 const Eigen::Vector3f& tangent,
-                                 const Eigen::Vector3f& bitangent) {
-  if (mat.normal_texture.pixel_data.empty()) return normal;
-
-  int tx = std::clamp((int)(uv.x() * mat.normal_texture.width), 0,
-                      (int)mat.normal_texture.width - 1);
-  int ty = std::clamp((int)(uv.y() * mat.normal_texture.height), 0,
-                      (int)mat.normal_texture.height - 1);
-  int idx = (ty * mat.normal_texture.width + tx) * mat.normal_texture.channels;
-
-  float r = mat.normal_texture.pixel_data[idx] / 255.0f;
-  float g = mat.normal_texture.pixel_data[idx + 1] / 255.0f;
-  float b = mat.normal_texture.pixel_data[idx + 2] / 255.0f;
-
-  // Remap [0,1] to [-1,1]
-  Eigen::Vector3f local_n(r * 2.0f - 1.0f, g * 2.0f - 1.0f, b * 2.0f - 1.0f);
-  // local_n.z should be positive? glTF says yes.
-
-  // Create TBN matrix
-  Eigen::Matrix3f tbn;
-  tbn.col(0) = tangent;
-  tbn.col(1) = bitangent;
-  tbn.col(2) = normal;
-
-  return (tbn * local_n).normalized();
-}
-
 namespace {
 // Trowbridge-Reitz GGX Normal Distribution Function
 float DistributionGGX(const Eigen::Vector3f& N, const Eigen::Vector3f& H,
@@ -129,7 +102,7 @@ Eigen::Vector3f FresnelSchlick(float cosTheta, const Eigen::Vector3f& F0) {
 
 ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
                                 const Eigen::Vector3f& normal,
-                                const Eigen::Vector3f& incident,
+                                const Eigen::Vector3f& reflected,
                                 std::mt19937& rng) {
   float metallic, roughness;
   GetMetallicRoughness(mat, uv, metallic, roughness);
@@ -172,8 +145,13 @@ ReflectionSample SampleMaterial(const Material& mat, const Eigen::Vector2f& uv,
         (t * H_local.x() + b * H_local.y() + normal * H_local.z()).normalized();
 
     // L = 2(V.H)H - V
-    Eigen::Vector3f V = -incident;
+    Eigen::Vector3f V = reflected;
     Eigen::Vector3f L = (2.0f * V.dot(H) * H - V).normalized();
+
+    if (L.dot(normal) < 0.0f) {
+      // Internal reflection. No sample is generated.
+      return ReflectionSample();
+    }
 
     ReflectionSample sample;
     sample.direction = L;

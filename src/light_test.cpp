@@ -5,7 +5,6 @@
 
 #include <cmath>  // For M_PI
 
-#include "loader.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -99,9 +98,8 @@ TEST_F(LightTest, EvaluatePointLight) {
   // BRDF = 1/PI.
   // Result = 1/PI.
 
-  Eigen::Vector3f result =
-      EvaluateLightSamples(scene_.sky, lights, rtc_scene, P, N, wo,
-                           scene_.materials[0], uv, 1, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(
+      lights, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -152,9 +150,8 @@ TEST_F(LightTest, EvaluateAreaLight) {
   RTCScene rtc_scene = rtcNewScene(device_);
 
   // Eval 100 samples to average
-  Eigen::Vector3f result =
-      EvaluateLightSamples(scene_.sky, lights, rtc_scene, P, N, wo,
-                           scene_.materials[0], uv, 100, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(
+      lights, rtc_scene, P, N, wo, scene_.materials[0], uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);
 
