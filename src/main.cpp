@@ -139,8 +139,7 @@ int main(int argc, char* argv[]) {
     LOG(INFO) << "Downsampling from scale " << FLAGS_supersample_scale << "...";
     texture = sh_baker::DownsampleSHTexture(texture, FLAGS_supersample_scale);
     validity_mask = sh_baker::DownsampleValidityMask(
-        validity_mask, raster_config.width * raster_config.supersample_scale,
-        raster_config.height * raster_config.supersample_scale,
+        validity_mask, raster_config.width, raster_config.height,
         raster_config.supersample_scale);
   }
 

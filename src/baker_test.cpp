@@ -55,8 +55,7 @@ TEST(BakerTest, BakeSimpleQuad) {
   surface_points[5].position = Eigen::Vector3f(-0.25f, -0.25f, 0.0f);
   surface_points[5].normal = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
   // Tangents
-  surface_points[5].tangent = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
-  surface_points[5].bitangent = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+  surface_points[5].tangent = Eigen::Vector4f(1.0f, 0.0f, 0.0f, 1.0f);
 
   BakeConfig config;
   config.samples = 64;
