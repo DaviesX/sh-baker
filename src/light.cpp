@@ -171,9 +171,12 @@ Eigen::Vector3f EvaluateLightSamples(
 
     float pdf = weights[idx] / sum_weights;
     float area_sample_pdf = area_sample_pdfs[idx];
-    float inverse_joint_pdf = 1.f / (pdf * area_sample_pdf);
+    float joint_pdf = pdf * area_sample_pdf;
+    if (joint_pdf < 1e-3f) {
+      continue;
+    }
 
-    result += inverse_joint_pdf * radiance_without_visibility;
+    result += radiance_without_visibility / joint_pdf;
   }
 
   return result / num_samples;
@@ -253,8 +256,6 @@ void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
 
   // Sample from the distribution and accumulate the result.
   std::discrete_distribution<int> dist(weights.begin(), weights.end());
-  float inv_num_samples = 1.0f / num_samples;
-
   for (unsigned i = 0; i < num_samples; ++i) {
     int idx = dist(rng);
 
@@ -269,10 +270,13 @@ void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
 
     float pdf = weights[idx] / sum_weights;
     float area_sample_pdf = area_sample_pdfs[idx];
-    float inverse_joint_pdf = 1.f / (pdf * area_sample_pdf);
+    float joint_pdf = pdf * area_sample_pdf;
+    if (joint_pdf < 1e-3f) {
+      continue;
+    }
 
     Eigen::Vector3f Li =
-        (inverse_joint_pdf * inv_num_samples) * radiance_without_visibility;
+        radiance_without_visibility / (joint_pdf * num_samples);
 
     // Accumulate into SH (using direction TO the light).
     AccumulateRadiance(Li, visibility_ray.direction, accumulator);

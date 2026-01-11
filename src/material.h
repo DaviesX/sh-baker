@@ -36,6 +36,28 @@ Eigen::Vector3f EvalMaterial(const Material& mat, const Eigen::Vector2f& uv,
                              const Eigen::Vector3f& incident,
                              const Eigen::Vector3f& reflected);
 
+// Samples an outgoing direction based on the material BRDF and reflected
+// direction.
+// reflected: outgoing direction, away from the surface (pointing to
+// sensor/previous bounce).
+ReflectionSample SampleMaterialAdvanced(const Material& mat,
+                                        const Eigen::Vector2f& uv,
+                                        const Eigen::Vector3f& normal,
+                                        const Eigen::Vector3f& reflected,
+                                        std::mt19937& rng);
+
+// Evaluates the material BRDF f_r(p, wr, wi).
+// Returns the BRDF value (color).
+// incident: incoming direction, away from the surface (pointing to light
+// sources/next bounce).
+// reflected: outgoing direction, away from the surface (pointing to
+// sensor/previous bounce).
+Eigen::Vector3f EvalMaterialAdvanced(const Material& mat,
+                                     const Eigen::Vector2f& uv,
+                                     const Eigen::Vector3f& normal,
+                                     const Eigen::Vector3f& incident,
+                                     const Eigen::Vector3f& reflected);
+
 // Helper to retrieve albedo from texture or default.
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv);
 
