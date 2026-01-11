@@ -44,6 +44,12 @@ GLuint g_HdrDepthRBO_MS = 0;
 GLuint g_HdrFBO_Resolve = 0;
 GLuint g_HdrColorTexture_Resolve = 0;
 
+// Luminance Framebuffer (Auto Exposure)
+GLuint g_LumProgram = 0;
+GLuint g_LumFBO = 0;
+GLuint g_LumTexture = 0;
+const int kLumSize = 256;
+
 // Screen Quad
 GLuint g_QuadVAO = 0;
 GLuint g_QuadVBO = 0;
@@ -79,6 +85,35 @@ void InitScreenQuad() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                           (void*)(2 * sizeof(float)));
   }
+}
+
+void InitLuminanceFramebuffer() {
+  if (g_LumFBO) {
+    glDeleteFramebuffers(1, &g_LumFBO);
+    glDeleteTextures(1, &g_LumTexture);
+  }
+  glGenFramebuffers(1, &g_LumFBO);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_LumFBO);
+
+  glGenTextures(1, &g_LumTexture);
+  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
+  // R16F is sufficient for log luminance
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, kLumSize, kLumSize, 0, GL_RED,
+               GL_FLOAT, NULL);
+  // Mipmaps needed for average
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                  GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         g_LumTexture, 0);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    LOG(ERROR) << "Luminance Framebuffer not complete!";
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void InitHdrFramebuffer(int width, int height) {
@@ -129,24 +164,51 @@ void InitHdrFramebuffer(int width, int height) {
     LOG(ERROR) << "Resolve Framebuffer not complete!";
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  // Init Luminance
+  InitLuminanceFramebuffer();
 }
 
 void DrawPostProcess(int width, int height) {
   if (g_QuadVAO == 0) InitScreenQuad();
 
-  // Resolve MSAA to Texture
+  // 1. Resolve MSAA to Texture
   glBindFramebuffer(GL_READ_FRAMEBUFFER, g_HdrFBO_MS);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_HdrFBO_Resolve);
   glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
+  // 2. Compute Average Log Luminance
+  glBindFramebuffer(GL_FRAMEBUFFER, g_LumFBO);
+  glViewport(0, 0, kLumSize, kLumSize);
+  glUseProgram(g_LumProgram);
+  glDisable(GL_DEPTH_TEST);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
+  glUniform1i(glGetUniformLocation(g_LumProgram, "u_HdrTex"), 0);
+
+  glBindVertexArray(g_QuadVAO);
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  // Generate Mipmaps to average
+  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
+  glGenerateMipmap(GL_TEXTURE_2D);
+
+  // 3. Render Final Post Process to Screen
   glBindFramebuffer(GL_FRAMEBUFFER, 0);  // Back to default for drawing quad
+  glViewport(0, 0, width, height);       // Restore viewport
 
   glUseProgram(g_PostProgram);
-  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_DEPTH_TEST);  // Already disabled, but good to be explicit
+
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
   glUniform1i(glGetUniformLocation(g_PostProgram, "u_ScreenTexture"), 0);
+
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
+  glUniform1i(glGetUniformLocation(g_PostProgram, "u_LumTexture"), 1);
 
   glBindVertexArray(g_QuadVAO);
   glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -378,6 +440,12 @@ void DrawMeshes(const sh_baker::Scene& scene, const Eigen::Matrix4f& vp,
   glUniform3fv(glGetUniformLocation(g_MeshProgram, "u_CamPos"), 1,
                cam_pos.data());
 
+  // Bind SH Textures (Static uniforms, but Texture Units need binding)
+  for (size_t i = 0; i < g_SHTextures.size(); ++i) {
+    glActiveTexture(GL_TEXTURE1 + i);
+    glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
+  }
+
   // Draw Meshes
   for (size_t i = 0; i < g_Meshes.size(); ++i) {
     glBindVertexArray(g_Meshes[i].vao);
@@ -482,6 +550,7 @@ int main(int argc, char* argv[]) {
   glfwSetCursorPosCallback(window, CursorPosCallback);
   glfwSetScrollCallback(window, ScrollCallback);
 
+  // glEnable(GL_FRAMEBUFFER_SRGB);
   glEnable(GL_MULTISAMPLE);  // Enable MSAA locally if supported, but FBO is
                              // single sample for now.
 
@@ -644,8 +713,10 @@ int main(int argc, char* argv[]) {
   g_MeshProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
   g_SkyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
   g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
+  g_LumProgram = CreateShaderProgram("glsl/post.vert", "glsl/lum.frag");
 
-  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram) return 1;
+  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram || !g_LumProgram)
+    return 1;
 
   glEnable(GL_DEPTH_TEST);
 
