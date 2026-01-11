@@ -3,29 +3,120 @@
 #include <glog/logging.h>
 #include <xatlas.h>
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "scene.h"
 
 namespace sh_baker {
+namespace {
 
-std::optional<AtlasResult> CreateAtlasGeometries(
-    const std::vector<Geometry>& geometries, unsigned target_resolution,
-    unsigned padding) {
+const float kMinScale = 0.001f;
+const float kMaxScaleFactor = 5.0f;
+
+std::vector<float> CalculateGeometryScales(
+    const std::vector<Geometry>& geometries,
+    const std::vector<Material>& materials, float density_multiplier) {
+  // 1. Calculate Scaling Factors
+  // Heuristic:
+  // TargetScale = density_multiplier * sqrt(Area_tex)
+  // If Tiling: EffectiveScale = TargetScale * sqrt(TileCount)
+  std::vector<float> mesh_scales;
+  mesh_scales.reserve(geometries.size());
+
+  for (const auto& geo : geometries) {
+    const Material& mat = materials[geo.material_id];
+
+    // Step 1: Albedo-Relative Scaling
+    // Use albedo dimensions as base area.
+    float width = static_cast<float>(mat.albedo.width);
+    float height = static_cast<float>(mat.albedo.height);
+
+    float tex_area_sqrt = std::sqrt(width * height);
+    float target_scale = static_cast<float>(density_multiplier) * tex_area_sqrt;
+
+    // Step 2: Tiling Estimation
+    float u_min = std::numeric_limits<float>::max();
+    float u_max = std::numeric_limits<float>::lowest();
+    float v_min = std::numeric_limits<float>::max();
+    float v_max = std::numeric_limits<float>::lowest();
+
+    CHECK(!geo.texture_uvs.empty());
+    for (const auto& uv : geo.texture_uvs) {
+      u_min = std::min(u_min, uv.x());
+      u_max = std::max(u_max, uv.x());
+      v_min = std::min(v_min, uv.y());
+      v_max = std::max(v_max, uv.y());
+    }
+
+    float u_range = u_max - u_min;
+    float v_range = v_max - v_min;
+
+    // Avoid zero range
+    u_range = std::max(u_range, 0.001f);
+    v_range = std::max(v_range, 0.001f);
+
+    float tile_count = u_range * v_range;
+    float effective_scale = target_scale * std::sqrt(tile_count);
+
+    DLOG(INFO) << "Mesh " << &geo - geometries.data() << ": Albedo "
+               << mat.albedo.width << "x" << mat.albedo.height << ", Tiling "
+               << tile_count << " -> Scale " << effective_scale;
+
+    mesh_scales.push_back(effective_scale);
+  }
+
+  // Step 3: Constraints (Median Filtering)
+  if (!mesh_scales.empty()) {
+    std::vector<float> sorted_scales = mesh_scales;
+    std::sort(sorted_scales.begin(), sorted_scales.end());
+    float median_scale = sorted_scales[sorted_scales.size() / 2];
+
+    // Avoid degenerate median
+    median_scale = std::max(median_scale, 0.001f);
+
+    float max_allowed_scale = kMaxScaleFactor * median_scale;
+    for (size_t i = 0; i < mesh_scales.size(); ++i) {
+      if (mesh_scales[i] > max_allowed_scale) {
+        DLOG(INFO) << "Clamping mesh " << i << " scale " << mesh_scales[i]
+                   << " to " << max_allowed_scale;
+        mesh_scales[i] = max_allowed_scale;
+      }
+    }
+  }
+
+  return mesh_scales;
+}
+
+}  // namespace
+
+std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
+                                                 unsigned target_resolution,
+                                                 unsigned padding,
+                                                 float density_multiplier) {
+  const auto& geometries = scene.geometries;
   if (geometries.empty()) {
     return std::nullopt;
   }
+
+  std::vector<float> geometry_scales =
+      CalculateGeometryScales(geometries, scene.materials, density_multiplier);
 
   // 1. Create Atlas
   xatlas::Atlas* atlas = xatlas::Create();
 
   // 2. Add Meshes
-  // We need to keep track of which geometry corresponds to which mesh added to
-  // xatlas In this simple case, the order is preserved.
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
     auto vertices = TransformedVertices(geo);
     auto normals = TransformedNormals(geo);
+
+    // Apply calculated scale to vertices (Emulating meshRelativeScaling)
+    float scale = geometry_scales[i];
+    for (auto& v : vertices) {
+      v *= scale;
+    }
 
     xatlas::MeshDecl mesh_decl;
     mesh_decl.vertexCount = static_cast<uint32_t>(vertices.size());

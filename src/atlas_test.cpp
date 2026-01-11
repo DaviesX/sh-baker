@@ -23,9 +23,19 @@ TEST(AtlasTest, SimpleQuad) {
   input_geo.indices = {0, 1, 2, 2, 1, 3};
 
   std::vector<Geometry> input_geometries = {input_geo};
+  Scene scene;
+  scene.geometries = std::move(input_geometries);
+
+  // Add a dummy material so atlas.cpp doesn't crash
+  Material mat;
+  // Default 1x1 albedo
+  mat.albedo.width = 256;
+  mat.albedo.height = 256;
+  scene.materials.push_back(mat);
+  scene.geometries[0].material_id = 0;
 
   std::optional<AtlasResult> atlas_result =
-      CreateAtlasGeometries(input_geometries, 256, 2);
+      CreateAtlasGeometries(scene, 256, 2);
   ASSERT_TRUE(atlas_result.has_value());
 
   EXPECT_GE(atlas_result->width, 0);
