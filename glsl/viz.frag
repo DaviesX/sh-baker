@@ -7,16 +7,8 @@ in vec2 vTexCoord1;
 out vec4 FragColor;
 
 uniform sampler2D u_AlbedoTex;
-uniform int u_HasAlbedo;
-uniform vec3 u_AlbedoColor;
-// --- PBR Inputs ---
 uniform sampler2D u_NormalTex;
-uniform int u_HasNormal;
-
 uniform sampler2D u_MRTex;  // Metallic (B), Roughness (G)
-uniform int u_HasMR;
-uniform float u_Metallic;
-uniform float u_Roughness;
 
 uniform vec3 u_CamPos;
 
@@ -124,30 +116,20 @@ vec3 Uncharted2Tonemap(vec3 x) {
 void main() {
   // 1. PBR Parameters
   // Albedo
-  vec3 albedo = u_AlbedoColor;
-  if (u_HasAlbedo > 0) {
-    vec4 texColor = texture(u_AlbedoTex, vTexCoord0);
-    albedo *= texColor.rgb;
-  }
+  vec3 albedo = texture(u_AlbedoTex, vTexCoord0).rgb;
 
   // Normal
   vec3 N = normalize(vNormal);
-  if (u_HasNormal > 0) {
-    vec3 mapNormal = texture(u_NormalTex, vTexCoord0).rgb;
-    mapNormal = mapNormal * 2.0 - 1.0;
-    mat3 TBN = mat3(normalize(vTangent), normalize(vBitangent), N);
-    N = normalize(TBN * mapNormal);
-  }
+  vec3 mapNormal = texture(u_NormalTex, vTexCoord0).rgb;
+  mapNormal = mapNormal * 2.0 - 1.0;
+  mat3 TBN = mat3(normalize(vTangent), normalize(vBitangent), N);
+  N = normalize(TBN * mapNormal);
 
   // Metallic/Roughness
-  float metallic = u_Metallic;
-  float roughness = u_Roughness;
-  if (u_HasMR > 0) {
-    vec4 mrSample = texture(u_MRTex, vTexCoord0);
-    // glTF: G = Roughness, B = Metallic
-    roughness = mrSample.g;
-    metallic = mrSample.b;
-  }
+  vec4 mrSample = texture(u_MRTex, vTexCoord0);
+  // glTF: G = Roughness, B = Metallic
+  float roughness = mrSample.g;
+  float metallic = mrSample.b;
 
   // 2. View/Reflect vectors
   vec3 V = normalize(u_CamPos - vWorldPos);
