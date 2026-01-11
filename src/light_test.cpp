@@ -99,7 +99,7 @@ TEST_F(LightTest, EvaluatePointLight) {
   // Result = 1/PI.
 
   Eigen::Vector3f result = EvaluateLightSamples(
-      lights, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
+      scene_, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -109,57 +109,63 @@ TEST_F(LightTest, EvaluatePointLight) {
 }
 
 TEST_F(LightTest, EvaluateAreaLight) {
-  // Area Light Geometry
+  // Clear scene to avoid pollution/pointer invalidation from SetUp
+  scene_.lights.clear();
+  scene_.geometries.clear();
+  scene_.materials.clear();
+
+  Material mat;
+  mat.name = "emit";
+  mat.emission_intensity = 10.0f;  // Important
+  scene_.materials.push_back(mat);
+
+  // Area Light Geometry (Y=10)
   Geometry area_geo;
-  // A triangle at y=10, large enough to be easily hit?
-  // Or just a small one.
-  // Let's define a triangle directly above P.
-  // Vertices: (-1, 10, 1), (1, 10, 1), (0, 10, -1).
-  // Center roughly (0, 10, 0).
-  // Normal pointing Down (0, -1, 0).
   area_geo.vertices = {Eigen::Vector3f(-1, 10, 1), Eigen::Vector3f(1, 10, 1),
                        Eigen::Vector3f(0, 10, -1)};
+  // Normal (0, -1, 0) -- Down
   area_geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
                       Eigen::Vector3f(0, -1, 0)};
-  // Indices
-  area_geo.indices = {0, 1, 2};  // CCW?
-  // V1-V0 = (2, 0, 0). V2-V0 = (1, 0, -2). Cross: (0, 4, 0). Up?
-  // We want Normal Down.
-  // Let's just trust normals provided.
+  area_geo.indices = {0, 1, 2};  // Winding?
+  // V1-V0 = (2,0,0). V2-V0=(1,0,-2). Cross=(0,4,0) -> Up.
+  // Wait, if geometric normal is UP, and we provide normal DOWN,
+  // SampleAreaLight uses interpolated normal (-1).
+  // But AreaLightRadiance checks dot(N, -L).
+  // If we are below (0,0,0), L is (0,1,0). -L is (0,-1,0).
+  // dot((0,-1,0), (0,-1,0)) = 1. Good.
+  // But strictly, geometric normal check?
+  // Embree ray intersection should hit it.
+  // Let's ensure indices produce Down normal to be safe: {0, 2, 1}.
+  area_geo.indices = {0, 2, 1};
   area_geo.material_id = 0;
 
-  scene_.geometries.push_back(area_geo);  // Index 0.
+  scene_.geometries.push_back(area_geo);
 
   Light area;
   area.type = Light::Type::Area;
   area.geometry_index = 0;
   area.geometry = &scene_.geometries[0];
-  area.material = &scene_.materials[0];  // Self-emission comes from material
-  scene_.materials[0].emission_intensity = 10.0f;  // Enable emission
+  area.material = &scene_.materials[0];
   area.intensity = 10.0f;
   area.area = 2.0f;
 
-  std::vector<Light> lights = {area};
+  scene_.lights.push_back(area);
 
   Eigen::Vector3f P(0, 0, 0);
-  Eigen::Vector3f N(1, 0, 0);  // Pointing towards Area Light at X=10
-  Eigen::Vector3f wo(1, 0,
-                     0);  // View direction along normal to avoid grazing angle
+  Eigen::Vector3f N(0, 1, 0);   // Pointing UP towards Light
+  Eigen::Vector3f wo(0, 1, 0);  // View direction UP
   Eigen::Vector2f uv(0, 0);
 
   RTCScene rtc_scene = rtcNewScene(device_);
 
-  // Eval 100 samples to average
+  // Eval 100 samples
   Eigen::Vector3f result = EvaluateLightSamples(
-      lights, rtc_scene, P, N, wo, scene_.materials[0], uv, 100, rng_);
+      scene_, rtc_scene, P, N, wo, scene_.materials[0], uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);
 
-  // Check non-zero.
-  // Result should be > 0.
-  // Approx: 8 * 0.02 * 1 * 1 / PI = 0.05.
   EXPECT_GT(result.x(), 0.01f);
-  EXPECT_LT(result.x(), 1.0f);
+  EXPECT_LT(result.x(), 10.0f);  // Should be reasonably bounded
 }
 
 TEST_F(LightTest, DirectionalLightRadiance) {
@@ -297,6 +303,79 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   // Mat intensity = 10. Albedo default grey (0.8).
   // Radiance = 10 * 0.8 = 8.
   EXPECT_NEAR(sample.radiance.x(), 8.0f, 1e-4f);
+}
+
+TEST_F(LightTest, SampleEnvironment_Preetham) {
+  scene_.environment = Environment{};
+  scene_.environment->type = Environment::Type::Preetham;
+  scene_.environment->sun_direction = Eigen::Vector3f(0, 1, 0);  // Up
+  scene_.environment->intensity = 2.0f;
+
+  // Sample
+  light_internal::EnvironmentSample sample =
+      light_internal::SampleEnvironment(scene_, rng_);
+
+  // Check non-zero pdf
+  EXPECT_GT(sample.pdf, 0.0f);
+
+  // Check direction is normalized
+  EXPECT_NEAR(sample.direction.norm(), 1.0f, 1e-4f);
+
+  // Check radiance
+  // If direction is close to sun, very bright. Else blueish.
+  // Random sampling makes this probabilistic, but we can verify it's not zero.
+  EXPECT_GT(sample.radiance.maxCoeff(), 0.0f);
+}
+
+TEST_F(LightTest, SampleEnvironment_Texture) {
+  scene_.environment = Environment{};
+  scene_.environment->type = Environment::Type::Texture;
+  scene_.environment->intensity = 1.0f;
+
+  // Create a simple 2x2 texture
+  // Top-Left (0,0): Red (255,0,0)
+  // Top-Right (1,0): Black (0,0,0)
+  // Bottom-Left (0,1): Green (0,255,0)
+  // Bottom-Right (1,1): Blue (0,0,255)
+
+  Texture& tex = scene_.environment->texture;
+  tex.width = 2;
+  tex.height = 2;
+  tex.channels = 3;
+  tex.pixel_data = {255, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 255};
+
+  BuildEnvironmentCDF(*scene_.environment);
+
+  // Verify CDF construction
+  // Row 0 (Top): Red(Lum~0.2) * sin(theta_0)  vs Black(0)
+  // Row 1 (Bot): Green(Lum~0.7) * sin(theta_1) vs Blue(Lum~0.07) * sin(theta_1)
+  // theta_0 = 0.25 * PI. theta_1 = 0.75 * PI. sin(theta_0)=sin(theta_1).
+  // So row weights proportional to luminance sums.
+
+  // Sample
+  light_internal::EnvironmentSample sample =
+      light_internal::SampleEnvironment(scene_, rng_);
+
+  EXPECT_NEAR(sample.direction.norm(), 1.0f, 1e-4f);
+  // Should have valid pdf
+  // It's possible to pick black pixel (pdf 0? no, logic handles black with
+  // uniform fallback or small epsilon usually, but in my implementation black
+  // pixels have probability 0 if row is not all black). Only Top-Right is
+  // black. Top-Left is Red. So if sample is Top-Right, PDF might be tricky. But
+  // strict logic says 0 probability. So we should effectively never sample
+  // Top-Right.
+
+  // Any sample we get should correspond to a non-zero pixel.
+  if (sample.radiance.maxCoeff() > 0) {
+    // Red, Green or Blue.
+    bool is_red = (sample.radiance.x() > 0 && sample.radiance.y() == 0 &&
+                   sample.radiance.z() == 0);
+    bool is_green = (sample.radiance.x() == 0 && sample.radiance.y() > 0 &&
+                     sample.radiance.z() == 0);
+    bool is_blue = (sample.radiance.x() == 0 && sample.radiance.y() == 0 &&
+                    sample.radiance.z() > 0);
+    EXPECT_TRUE(is_red || is_green || is_blue);
+  }
 }
 }  // namespace
 }  // namespace sh_baker

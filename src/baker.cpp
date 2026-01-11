@@ -106,8 +106,8 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
   Eigen::Vector3f L_direct =
-      EvaluateLightSamples(scene.lights, rtc_scene, hit_pos, occ->normal, -dir,
-                           mat, occ->uv, num_light_samples, rng);
+      EvaluateLightSamples(scene, rtc_scene, hit_pos, occ->normal, -dir, mat,
+                           occ->uv, num_light_samples, rng);
   color += alpha * L_direct;
 
   // Indirect Lighting (Recursive)
@@ -217,7 +217,7 @@ SHTexture BakeSHLightMap(const Scene& scene,
                                         sp.normal * dir_local.z();
 
             // Direct lighting (NEE).
-            AccumulateIncomingLightSamples(scene.lights, rtc_scene, sp.position,
+            AccumulateIncomingLightSamples(scene, rtc_scene, sp.position,
                                            sp.normal, config.num_light_samples,
                                            rng, &sh_accum);
 

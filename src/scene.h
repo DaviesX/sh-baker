@@ -71,12 +71,33 @@ struct Light {
   int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
+struct Environment {
+  enum class Type { Texture, Preetham };
+  Type type;
+
+  // For Texture type (HDRi)
+  Texture texture;
+  // CDFs for Importance Sampling
+  std::vector<float> marginal_cdf;                   // V-axis
+  std::vector<std::vector<float>> conditional_cdfs;  // U-axis per V
+
+  // For Preetham type
+  Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0);
+  float turbidity = 2.5f;
+
+  float intensity = 1.0f;
+};
+
 // --- Scene ---
 struct Scene {
   std::vector<Geometry> geometries;
   std::vector<Material> materials;
   std::vector<Light> lights;
+  std::optional<Environment> environment;
 };
+
+// Builds the CDFs for the environment texture if present.
+void BuildEnvironmentCDF(Environment& env);
 
 // Transforms the geometry by the transform matrix.
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);

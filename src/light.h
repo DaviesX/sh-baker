@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-#include <vector>
 
 #include "occlusion.h"
 #include "scene.h"
@@ -203,6 +202,52 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
   return incoming.radiance.cwiseProduct(cos_brdf);
 }
 
+struct EnvironmentSample {
+  Eigen::Vector3f direction;  // Incoming direction (L)
+  Eigen::Vector3f radiance;
+  float pdf = 0.f;
+};
+
+EnvironmentSample SampleEnvironment(const Scene& scene, std::mt19937& rng);
+
+struct EnvironmentIncoming {
+  Eigen::Vector3f radiance;
+  Eigen::Vector3f incident;
+  float cos_n;
+};
+
+inline EnvironmentIncoming EnvironmentIncomingRadiance(
+    const EnvironmentSample& sample, const Eigen::Vector3f& P,
+    const Eigen::Vector3f& N, Ray* visibility_ray) {
+  // Infinite distance, but for ray tracing we set tfar large.
+  visibility_ray->origin = P;
+  visibility_ray->direction = sample.direction;
+  visibility_ray->tnear = 0.001f;
+  visibility_ray->tfar = 1.0e10f;
+
+  float cos_n = N.dot(sample.direction);
+  if (cos_n < 0.f) {
+    return EnvironmentIncoming{Eigen::Vector3f::Zero(), sample.direction,
+                               cos_n};
+  }
+  return EnvironmentIncoming{sample.radiance, sample.direction, cos_n};
+}
+
+template <typename Brdf>
+Eigen::Vector3f EnvironmentRadiance(const EnvironmentSample& sample,
+                                    const Eigen::Vector3f& P,
+                                    const Eigen::Vector3f& N, Brdf brdf,
+                                    Ray* visibility_ray) {
+  EnvironmentIncoming incoming =
+      EnvironmentIncomingRadiance(sample, P, N, visibility_ray);
+  if (incoming.cos_n < 0.f) {
+    return Eigen::Vector3f::Zero();
+  }
+
+  Eigen::Vector3f cos_brdf = incoming.cos_n * brdf(incoming.incident);
+  return incoming.radiance.cwiseProduct(cos_brdf);
+}
+
 }  // namespace light_internal
 
 // Evaluates the sun and samples `num_samples` lights based on the distribution
@@ -212,11 +257,13 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
 // Then, it computes the radiance L_e(x) combined with the geometric visibility
 // term. The estimated radiance is of lower variance if the lights set is
 // potentially visible.
-Eigen::Vector3f EvaluateLightSamples(
-    const std::vector<Light>& lights, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    const Eigen::Vector3f& reflected, const Material& mat,
-    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
+Eigen::Vector3f EvaluateLightSamples(const Scene& scene, RTCScene rtc_scene,
+                                     const Eigen::Vector3f& hit_point,
+                                     const Eigen::Vector3f& hit_point_normal,
+                                     const Eigen::Vector3f& reflected,
+                                     const Material& mat,
+                                     const Eigen::Vector2f& uv,
+                                     unsigned num_samples, std::mt19937& rng);
 
 // Computes the direct lighting (Next Event Estimation) and accumulates the
 // projected SH coefficients into the accumulator.
@@ -225,8 +272,7 @@ Eigen::Vector3f EvaluateLightSamples(
 // cannot simply return a summed radiance covering multiple light sources.
 // Instead, we must project each light sample into the SH basis using its
 // specific incoming direction.
-void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
-                                    RTCScene rtc_scene,
+void AccumulateIncomingLightSamples(const Scene& scene, RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,

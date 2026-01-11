@@ -94,7 +94,23 @@ Task: Please implement a scaling heuristic for xatlas mesh declarations based on
 
 Goal: Provide the C++ logic to calculate these scales during the mesh processing loop and apply them to the xatlas setup.
 
-Phase 8 Visibility-Aware Importance Sampling
+Phase 8: Skybox & Infinite Environment Support
+Objective: Implement a global environment pass to provide consistent Global Illumination (GI) and a visual backdrop.
+
+* Logic for loader.cpp (The glTF Bridge):
+    - Texture Detection: Scan the glTF JSON for the EXT_lights_image_based extension or custom viewer properties (like skybox).
+    - Sun Identification: If no environment map is present, find the DirectionalLight with the maximum intensity in scene.lights.
+    - Analytical Model: Implement a procedural Preetham Sky if no external HDRi is provided. In details, we set the parameters of the Preetham sky to match the sun's parameters and replace the sun with the analytical sky.
+
+* Logic for light.cpp (The Baker Integration):
+    - Light sampling: implement environment light sampling & evaluation and analytical sky sampling & evaluation.
+    - Importance Sampling: For HDR environments, implement Luminance-based Importance Sampling to fire more rays at the sun or bright clouds, drastically reducing SH noise.
+
+* Logic for visualizer_main.cpp (The Background Pass):
+    - Skybox Primitive: Render a unit-sphere or cube with depth testing set to GL_LEQUAL and depth writing disabled.
+    - Preetham Skybox: Use the Preetham skybox to render the background if no environment map is present based on the loader result.
+
+Phase 9: Visibility-Aware Importance Sampling
 Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.

@@ -101,18 +101,6 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
   return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
-float A = 0.15;
-float B = 0.50;
-float C = 0.10;
-float D = 0.20;
-float E = 0.02;
-float F = 0.30;
-float W = 11.2;
-
-vec3 Uncharted2Tonemap(vec3 x) {
-  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
-}
-
 void main() {
   // 1. PBR Parameters
   // Albedo
@@ -140,9 +128,6 @@ void main() {
   vec3 irradiance = SampleSH(N, vTexCoord1);
 
   // Specular Radiance (SH along Reflection) -> Rough approximation
-  // Ideally we convolve SH with Specular Lobe, but cheap way is sampling along
-  // R. We can blur the lookup based on roughness if we had MIPs of coeffs? For
-  // now, just sample along R.
   vec3 specularIrradiance = SampleSH(R, vTexCoord1);
 
   // Compute F0
@@ -156,22 +141,9 @@ void main() {
   kD *= (1.0 - metallic);
 
   vec3 diffuse = kD * irradiance * albedo;
-
-  // Simple Specular term
-  // (Usually use Split Sum approx with Pre-filtered env map + BRDF LUT)
-  // Here we use SH as Pre-filtered env map (very low freq).
-  // It works okay for rough surfaces. For shiny, it will look blurry (which is
-  // SH limitation).
   vec3 specular = specularIrradiance * F;
 
-  // Uncharted2 Tone Mapping.
+  // Output Linear HDR Color
   vec3 color = diffuse + specular;
-
-  float exposureBias = 4.0f;
-  vec3 curr = Uncharted2Tonemap(exposureBias * color);
-
-  vec3 whiteScale = 1.0f / Uncharted2Tonemap(vec3(W));
-  color = curr * whiteScale;
-
   FragColor = vec4(color, 1.0);
 }

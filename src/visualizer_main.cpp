@@ -30,7 +30,130 @@ DEFINE_string(input, "",
               "lightmap_*.exr files.");
 
 // --- Globals ---
-GLuint g_ShaderProgram = 0;
+// --- Globals (Additional) ---
+GLuint g_MeshProgram = 0;
+GLuint g_SkyProgram = 0;
+GLuint g_PostProgram = 0;
+
+// HDR Framebuffer (MSAA)
+GLuint g_HdrFBO_MS = 0;
+GLuint g_HdrColorTexture_MS = 0;
+GLuint g_HdrDepthRBO_MS = 0;
+
+// HDR Framebuffer (Resolve / Post-Process Input)
+GLuint g_HdrFBO_Resolve = 0;
+GLuint g_HdrColorTexture_Resolve = 0;
+
+// Screen Quad
+GLuint g_QuadVAO = 0;
+GLuint g_QuadVBO = 0;
+
+// Skybox Data (Global for access by DrawSky, setup in main)
+GLuint g_SkyboxTexture = 0;
+bool g_UsePreetham = false;
+Eigen::Vector3f g_SunDir(0, 1, 0);
+float g_SkyIntensity = 1.0f;
+static GLuint g_CubeVAO = 0;
+static GLuint g_CubeVBO = 0;
+
+// ... (RenderMesh struct, vector globals unchanged) ...
+
+void InitScreenQuad() {
+  if (g_QuadVAO == 0) {
+    float quadVertices[] = {// positions   // texCoords
+                            -1.0f, 1.0f, 0.0f, 1.0f,  -1.0f, -1.0f,
+                            0.0f,  0.0f, 1.0f, -1.0f, 1.0f,  0.0f,
+
+                            -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  -1.0f,
+                            1.0f,  0.0f, 1.0f, 1.0f,  1.0f,  1.0f};
+    glGenVertexArrays(1, &g_QuadVAO);
+    glGenBuffers(1, &g_QuadVBO);
+    glBindVertexArray(g_QuadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_QuadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices,
+                 GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          (void*)(2 * sizeof(float)));
+  }
+}
+
+void InitHdrFramebuffer(int width, int height) {
+  // 1. MSAA Framebuffer
+  if (g_HdrFBO_MS) {
+    glDeleteFramebuffers(1, &g_HdrFBO_MS);
+    glDeleteTextures(1, &g_HdrColorTexture_MS);
+    glDeleteRenderbuffers(1, &g_HdrDepthRBO_MS);
+  }
+  glGenFramebuffers(1, &g_HdrFBO_MS);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_HdrFBO_MS);
+
+  glGenTextures(1, &g_HdrColorTexture_MS);
+  glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, g_HdrColorTexture_MS);
+  glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, 4, GL_RGBA16F, width,
+                          height, GL_TRUE);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D_MULTISAMPLE, g_HdrColorTexture_MS, 0);
+
+  glGenRenderbuffers(1, &g_HdrDepthRBO_MS);
+  glBindRenderbuffer(GL_RENDERBUFFER, g_HdrDepthRBO_MS);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_DEPTH_COMPONENT24,
+                                   width, height);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                            GL_RENDERBUFFER, g_HdrDepthRBO_MS);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    LOG(ERROR) << "MSAA Framebuffer not complete!";
+
+  // 2. Resolve Framebuffer (Standard Texture)
+  if (g_HdrFBO_Resolve) {
+    glDeleteFramebuffers(1, &g_HdrFBO_Resolve);
+    glDeleteTextures(1, &g_HdrColorTexture_Resolve);
+  }
+  glGenFramebuffers(1, &g_HdrFBO_Resolve);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_HdrFBO_Resolve);
+
+  glGenTextures(1, &g_HdrColorTexture_Resolve);
+  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA,
+               GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         g_HdrColorTexture_Resolve, 0);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    LOG(ERROR) << "Resolve Framebuffer not complete!";
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void DrawPostProcess(int width, int height) {
+  if (g_QuadVAO == 0) InitScreenQuad();
+
+  // Resolve MSAA to Texture
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, g_HdrFBO_MS);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_HdrFBO_Resolve);
+  glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);  // Back to default for drawing quad
+
+  glUseProgram(g_PostProgram);
+  glDisable(GL_DEPTH_TEST);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
+  glUniform1i(glGetUniformLocation(g_PostProgram, "u_ScreenTexture"), 0);
+
+  glBindVertexArray(g_QuadVAO);
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  glEnable(GL_DEPTH_TEST);
+}
+
 struct RenderMesh {
   GLuint vao;
   GLsizei count;
@@ -220,7 +343,108 @@ void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
   if (g_CamDist < 0.1f) g_CamDist = 0.1f;
 }
 
+void InitSkyboxGeometry() {
+  if (g_CubeVAO == 0) {
+    float skyboxVertices[] = {// positions
+                              -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f,
+                              1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f,
+                              -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,
+                              1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f};
+    unsigned int skyboxIndices[] = {0, 1, 2, 2, 3, 0, 4, 1, 0, 0, 5, 4,
+                                    2, 6, 7, 7, 3, 2, 4, 5, 7, 7, 6, 4,
+                                    0, 3, 7, 7, 5, 0, 1, 4, 2, 2, 4, 6};
+    glGenVertexArrays(1, &g_CubeVAO);
+    glGenBuffers(1, &g_CubeVBO);
+    GLuint cubeEBO;
+    glGenBuffers(1, &cubeEBO);
+    glBindVertexArray(g_CubeVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_CubeVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices,
+                 GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(skyboxIndices), &skyboxIndices,
+                 GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                          (void*)0);
+  }
+}
+
+void DrawMeshes(const sh_baker::Scene& scene, const Eigen::Matrix4f& vp,
+                const Eigen::Vector3f& cam_pos) {
+  glUseProgram(g_MeshProgram);
+
+  // Pass CamPos to Shader
+  glUniform3fv(glGetUniformLocation(g_MeshProgram, "u_CamPos"), 1,
+               cam_pos.data());
+
+  // Draw Meshes
+  for (size_t i = 0; i < g_Meshes.size(); ++i) {
+    glBindVertexArray(g_Meshes[i].vao);
+
+    const auto& geo = scene.geometries[i];
+    Eigen::Matrix4f model = geo.transform.matrix();
+    Eigen::Matrix4f mvp = vp * model;
+
+    glUniformMatrix4fv(glGetUniformLocation(g_MeshProgram, "u_MVP"), 1,
+                       GL_FALSE, mvp.data());
+    glUniformMatrix4fv(glGetUniformLocation(g_MeshProgram, "u_Model"), 1,
+                       GL_FALSE, model.data());
+
+    int mat_id = g_Meshes[i].material_id;
+    CHECK_GT(mat_id, -1);
+    CHECK_LT(mat_id, scene.materials.size());
+
+    // Albedo
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
+
+    // Normal
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
+
+    // MR
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
+
+    glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);
+  }
+}
+
+void DrawSky(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj) {
+  if (g_CubeVAO == 0) InitSkyboxGeometry();
+
+  glUseProgram(g_SkyProgram);
+
+  glDepthFunc(GL_LEQUAL);
+
+  // View matrix for skybox should remove translation
+  Eigen::Matrix4f viewSky = view;
+  viewSky(0, 3) = 0;
+  viewSky(1, 3) = 0;
+  viewSky(2, 3) = 0;
+  Eigen::Matrix4f mvpSky = proj * viewSky;
+
+  glUniformMatrix4fv(glGetUniformLocation(g_SkyProgram, "u_MVP"), 1, GL_FALSE,
+                     mvpSky.data());
+
+  glUniform1i(glGetUniformLocation(g_SkyProgram, "u_UsePreetham"),
+              g_UsePreetham);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, g_SkyboxTexture);
+  glUniform1i(glGetUniformLocation(g_SkyProgram, "u_SkyboxTex"), 0);
+  glUniform3fv(glGetUniformLocation(g_SkyProgram, "u_SunDir"), 1,
+               g_SunDir.data());
+  glUniform1f(glGetUniformLocation(g_SkyProgram, "u_SkyIntensity"),
+              g_SkyIntensity);
+
+  glBindVertexArray(g_CubeVAO);
+  glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+  glDepthFunc(GL_LESS);
+}
+
 int main(int argc, char* argv[]) {
+  FLAGS_logtostderr = 1;
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
@@ -258,7 +482,8 @@ int main(int argc, char* argv[]) {
   glfwSetCursorPosCallback(window, CursorPosCallback);
   glfwSetScrollCallback(window, ScrollCallback);
 
-  glEnable(GL_MULTISAMPLE);  // Enable MSAA
+  glEnable(GL_MULTISAMPLE);  // Enable MSAA locally if supported, but FBO is
+                             // single sample for now.
 
   // Check for Anisotropic Filtering support
   if (glfwExtensionSupported("GL_EXT_texture_filter_anisotropic")) {
@@ -268,6 +493,9 @@ int main(int argc, char* argv[]) {
   } else {
     LOG(WARNING) << "Anisotropic Filtering NOT supported.";
   }
+
+  // --- Init HDR FBO ---
+  InitHdrFramebuffer(kWindowWidth, kWindowHeight);
 
   // --- Load Scene ---
   auto scene_path = input_dir / "scene.gltf";
@@ -412,22 +640,26 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // --- Shader ---
-  g_ShaderProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
-  if (!g_ShaderProgram) return 1;
+  // --- Setup Shaders ---
+  g_MeshProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
+  g_SkyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
+  g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
+
+  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram) return 1;
 
   glEnable(GL_DEPTH_TEST);
 
-  glUseProgram(g_ShaderProgram);
+  // --- Setup Mesh Program Static Uniforms ---
+  glUseProgram(g_MeshProgram);
 
   // Set Mode Uniform
-  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_UsePackedLuminance"),
+  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_UsePackedLuminance"),
               use_packed_luminance ? 1 : 0);
 
   // Set Material Sampler Units (Static)
-  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_AlbedoTex"), 0);
-  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_NormalTex"), 4);
-  glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_MRTex"), 5);
+  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_AlbedoTex"), 0);
+  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_NormalTex"), 4);
+  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_MRTex"), 5);
 
   // Bind SH Textures (Static)
   if (use_packed_luminance) {
@@ -435,14 +667,37 @@ int main(int argc, char* argv[]) {
       glActiveTexture(GL_TEXTURE1 + i);
       glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
       std::string u_name = "u_PackedTex" + std::to_string(i);
-      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+      glUniform1i(glGetUniformLocation(g_MeshProgram, u_name.c_str()), 1 + i);
     }
   } else {
     for (int i = 0; i < 9; ++i) {
       glActiveTexture(GL_TEXTURE1 + i);
       glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
       std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
-      glUniform1i(glGetUniformLocation(g_ShaderProgram, u_name.c_str()), 1 + i);
+      glUniform1i(glGetUniformLocation(g_MeshProgram, u_name.c_str()), 1 + i);
+    }
+  }
+
+  // --- Load Skybox Data ---
+  if (!scene.environment) {
+    LOG(ERROR) << "No environment found.";
+    // Fallback?
+    g_UsePreetham = true;
+    g_SunDir = Eigen::Vector3f(0.2f, 0.8f, 0.2f).normalized();
+    g_SkyIntensity = 1.0f;
+  } else {
+    if (scene.environment->type == sh_baker::Environment::Type::Texture) {
+      const auto& tex = scene.environment->texture;
+      if (tex.width > 0) {
+        LOG(INFO) << "Loading Skybox Texture...";
+        g_SkyboxTexture = LoadTexture(tex);
+      }
+    } else {
+      g_UsePreetham = true;
+      g_SunDir = scene.environment->sun_direction;
+      g_SkyIntensity = scene.environment->intensity;
+      LOG(INFO) << "Using Preetham Sky (Scene). Sun Dir: "
+                << g_SunDir.transpose();
     }
   }
 
@@ -450,10 +705,10 @@ int main(int argc, char* argv[]) {
   while (!glfwWindowShouldClose(window)) {
     ProcessInput(window);
 
-    int w, h;
-    glfwGetFramebufferSize(window, &w, &h);
-    glViewport(0, 0, w, h);
-    glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+    // 1. Render to HDR FBO (MSAA)
+    glBindFramebuffer(GL_FRAMEBUFFER, g_HdrFBO_MS);
+    glViewport(0, 0, kWindowWidth, kWindowHeight);  // Fixed size for now
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Camera Matrix
@@ -487,7 +742,7 @@ int main(int argc, char* argv[]) {
     view(1, 3) = -u.dot(cam_pos_cartesian);
     view(2, 3) = f.dot(cam_pos_cartesian);
 
-    float aspect = (float)w / (float)h;
+    float aspect = (float)kWindowWidth / (float)kWindowHeight;
     float fov = 45.0f * M_PI / 180.0f;
     float tanHalfFov = std::tan(fov / 2.0f);
     float zNear = 0.1f;
@@ -501,42 +756,21 @@ int main(int argc, char* argv[]) {
 
     Eigen::Matrix4f vp = proj * view;
 
-    // Pass CamPos to Shader
-    glUniform3fv(glGetUniformLocation(g_ShaderProgram, "u_CamPos"), 1,
-                 g_CamPos.data());
+    DrawMeshes(scene, vp, g_CamPos);
 
-    // Draw Meshes
-    for (size_t i = 0; i < g_Meshes.size(); ++i) {
-      glBindVertexArray(g_Meshes[i].vao);
+    DrawSky(view, proj);
 
-      const auto& geo = scene.geometries[i];
-      Eigen::Matrix4f model = geo.transform.matrix();
-      Eigen::Matrix4f mvp = vp * model;
+    // 2. Render Post Process to Screen
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // Use actual window size for screen output
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    glViewport(0, 0, w, h);
+    glClearColor(1.0f, 0.0f, 1.0f, 1.0f);  // Pink debug if quad fails
+    glClear(GL_COLOR_BUFFER_BIT |
+            GL_DEPTH_BUFFER_BIT);  // Depth not needed but good hygiene
 
-      glUniformMatrix4fv(glGetUniformLocation(g_ShaderProgram, "u_MVP"), 1,
-                         GL_FALSE, mvp.data());
-      glUniformMatrix4fv(glGetUniformLocation(g_ShaderProgram, "u_Model"), 1,
-                         GL_FALSE, model.data());
-
-      int mat_id = g_Meshes[i].material_id;
-      CHECK_GT(mat_id, -1);
-      CHECK_LT(mat_id, scene.materials.size());
-      const auto& mat_data = scene.materials[mat_id];
-
-      // Albedo
-      glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
-
-      // Normal
-      glActiveTexture(GL_TEXTURE4);
-      glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
-
-      // MR
-      glActiveTexture(GL_TEXTURE5);
-      glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
-
-      glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);
-    }
+    DrawPostProcess(kWindowWidth, kWindowHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
