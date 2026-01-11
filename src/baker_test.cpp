@@ -31,17 +31,12 @@ TEST(BakerTest, BakeSimpleQuad) {
   mat.albedo.channels = 4;
   scene.materials.push_back(mat);
 
-  // Sky: Black
-  scene.sky.sun_intensity = 0.0f;
-  scene.sky.sun_color = Eigen::Vector3f::Zero();
-
-  // Light: Directional from +Z
-  // In our baker logic (Hit Sky or Emission), explicit lights in list are
-  // ignored currently. We rely on Sky or Emissive Surfaces. Let's make the Sky
-  // bright from +Z direction to simulate the light.
-  scene.sky.sun_intensity = 1.0f;
-  scene.sky.sun_color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
-  scene.sky.sun_direction = Eigen::Vector3f(0, 0, 1);
+  Light light;
+  light.type = Light::Type::Directional;
+  light.direction = Eigen::Vector3f(0, 0, -1);
+  light.color = Eigen::Vector3f(1, 1, 1);
+  light.intensity = 1.0f;
+  scene.lights.push_back(light);
 
   // Create dummy surface points
   std::vector<SurfacePoint> surface_points(16);  // 4x4
@@ -51,7 +46,7 @@ TEST(BakerTest, BakeSimpleQuad) {
 
   // Center pixel (1, 1) -> index 5
   // UV 0.375, 0.375. Position -0.25, -0.25, 0. Normal 0, 0, 1.
-  surface_points[5].valid = true;
+  surface_points[5].material_id = 0;
   surface_points[5].position = Eigen::Vector3f(-0.25f, -0.25f, 0.0f);
   surface_points[5].normal = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
   // Tangents

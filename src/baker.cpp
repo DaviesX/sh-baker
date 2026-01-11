@@ -66,21 +66,10 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   std::optional<Occlusion> occ = FindOcclusion(rtc_scene, visibility_ray);
 
   if (!occ.has_value()) {
-    // Sky
-    float sun = std::max(0.0f, dir.dot(scene.sky.sun_direction));
-    Eigen::Vector3f sky_radiance =
-        scene.sky.sun_color * scene.sky.sun_intensity * sun +
-        Eigen::Vector3f(0.05f, 0.05f, 0.05f);  // ambient
-
-    if (depth == 0) {
-      // Primary rays see the sky/sun directly
-      return sky_radiance;
-    } else {
-      // Secondary rays (Indirect):
-      // Sun is handled by NEE (EvaluateLights), so we excluded it here to avoid
-      // double counting. We only return the ambient component.
-      return Eigen::Vector3f(0.05f, 0.05f, 0.05f);
-    }
+    // Sky is handled by NEE (EvaluateLights() and
+    // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
+    // counting.
+    return Eigen::Vector3f::Zero();
   }
 
   // Hit surface
@@ -114,40 +103,32 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
     }
   }
 
+  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
+
   // Direct Lighting (NEE)
-  {
-    Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
-
-    // Evaluate Direct Light (NEE)
-    // EvaluateLights returns L_e(x, x')
-    Eigen::Vector3f L_direct =
-        EvaluateLightSamples(scene.lights, rtc_scene, hit_pos, occ->normal,
-                             -dir, mat, occ->uv, num_light_samples, rng);
-
-    color += alpha * L_direct;
-  }
+  // EvaluateLights returns L_e(x, x')
+  Eigen::Vector3f L_direct =
+      EvaluateLightSamples(scene.lights, rtc_scene, hit_pos, occ->normal, -dir,
+                           mat, occ->uv, num_light_samples, rng);
+  color += alpha * L_direct;
 
   // Indirect Lighting (Recursive)
-  {
-    Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
-    ReflectionSample sample =
-        SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
-    if (sample.pdf == 0.f) {
-      // Internal reflection.
-      return color;
-    }
+  ReflectionSample sample =
+      SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
+  if (sample.pdf == 0.f) {
+    // Internal reflection.
+    return color;
+  }
 
-    Eigen::Vector3f incoming =
-        Trace(rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth,
-              num_light_samples, rng);
+  Eigen::Vector3f incoming =
+      Trace(rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth,
+            num_light_samples, rng);
+  Eigen::Vector3f brdf =
+      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
+  float cosine_term = std::max(0.0f, occ->normal.dot(sample.direction));
 
-    Eigen::Vector3f brdf =
-        EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
-    float cosine_term = std::max(0.0f, occ->normal.dot(sample.direction));
-
-    if (sample.pdf > 1e-6f) {
-      color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
-    }
+  if (sample.pdf > 1e-6f) {
+    color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
   }
 
   return color;
@@ -209,9 +190,10 @@ SHTexture BakeSHLightMap(const Scene& scene,
             }
           }
 
-          // Process lightmap pixel.
+          // Process lightmap texel.
           const SurfacePoint& sp = surface_points[idx];
-          if (!sp.valid) {
+          if (sp.material_id < 0) {
+            // Invalid lightmap texel.
             continue;
           }
 
@@ -237,11 +219,18 @@ SHTexture BakeSHLightMap(const Scene& scene,
                                         bitangent * dir_local.y() +
                                         sp.normal * dir_local.z();
 
-            Eigen::Vector3f Li =
-                Trace(rtc_scene, scene, origin, dir_world, /*depth=*/0,
-                      config.bounces, config.num_light_samples, rng);
+            // Direct lighting (NEE).
+            AccumulateIncomingLightSamples(scene.lights, rtc_scene, sp.position,
+                                           sp.normal, config.num_light_samples,
+                                           rng, &sh_accum);
 
-            AccumulateRadiance(Li * inv_pdf_uniform, dir_world, &sh_accum);
+            // Indirect lighting.
+            Eigen::Vector3f Li_indirect =
+                Trace(rtc_scene, scene, origin, dir_world, /*depth=*/0,
+                      config.bounces, config.num_light_samples, rng) *
+                inv_pdf_uniform;
+
+            AccumulateRadiance(Li_indirect, dir_world, &sh_accum);
           }
 
           // Average
