@@ -15,6 +15,11 @@
 #include "scene.h"
 #include "tinyexr.h"
 
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
+
 // --- Constants ---
 const int kWindowWidth = 1280;
 const int kWindowHeight = 720;
@@ -37,6 +42,8 @@ std::vector<GLuint> g_AlbedoTextures;
 std::vector<GLuint> g_NormalTextures;
 std::vector<GLuint> g_MRTextures;
 std::vector<GLuint> g_SHTextures;
+
+float g_MaxAnisotropy = 1.0f;
 
 // Camera
 Eigen::Vector3f g_CamPos(0, 0, 5);
@@ -115,6 +122,10 @@ GLuint LoadTexture(const sh_baker::Texture& tex) {
   glGenerateMipmap(GL_TEXTURE_2D);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  if (g_MaxAnisotropy > 1.0f) {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                    g_MaxAnisotropy);
+  }
   return tid;
 }
 
@@ -144,6 +155,10 @@ GLuint LoadEXRTexture(const std::string& path) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  if (g_MaxAnisotropy > 1.0f) {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                    g_MaxAnisotropy);
+  }
 
   free(out);
   return tid;
@@ -222,6 +237,7 @@ int main(int argc, char* argv[]) {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  glfwWindowHint(GLFW_SAMPLES, 4);  // 4x MSAA
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
@@ -236,6 +252,17 @@ int main(int argc, char* argv[]) {
   glfwSetMouseButtonCallback(window, MouseButtonCallback);
   glfwSetCursorPosCallback(window, CursorPosCallback);
   glfwSetScrollCallback(window, ScrollCallback);
+
+  glEnable(GL_MULTISAMPLE);  // Enable MSAA
+
+  // Check for Anisotropic Filtering support
+  if (glfwExtensionSupported("GL_EXT_texture_filter_anisotropic")) {
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &g_MaxAnisotropy);
+    LOG(INFO) << "Anisotropic Filtering Enabled. Max Anisotropy: "
+              << g_MaxAnisotropy;
+  } else {
+    LOG(WARNING) << "Anisotropic Filtering NOT supported.";
+  }
 
   // --- Load Scene ---
   auto scene_path = input_dir / "scene.gltf";

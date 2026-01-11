@@ -109,6 +109,18 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
   return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
+float A = 0.15;
+float B = 0.50;
+float C = 0.10;
+float D = 0.20;
+float E = 0.02;
+float F = 0.30;
+float W = 11.2;
+
+vec3 Uncharted2Tonemap(vec3 x) {
+  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
 void main() {
   // 1. PBR Parameters
   // Albedo
@@ -170,13 +182,14 @@ void main() {
   // SH limitation).
   vec3 specular = specularIrradiance * F;
 
-  // Combine
+  // Uncharted2 Tone Mapping.
   vec3 color = diffuse + specular;
 
-  // Tone mapping (Reinhard)
-  color = color / (color + vec3(1.0));
-  // Gamma
-  color = pow(color, vec3(1.0 / 2.2));
+  float exposureBias = 4.0f;
+  vec3 curr = Uncharted2Tonemap(exposureBias * color);
+
+  vec3 whiteScale = 1.0f / Uncharted2Tonemap(vec3(W));
+  color = curr * whiteScale;
 
   FragColor = vec4(color, 1.0);
 }
