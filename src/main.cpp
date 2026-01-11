@@ -24,6 +24,9 @@ DEFINE_bool(split_channels, false,
 DEFINE_int32(supersample_scale, 1,
              "Scale factor for supersampling (e.g. 2 for 2x2).");
 
+DEFINE_double(density_multiplier, 1.0,
+              "Global density multiplier for atlas scaling.");
+
 DEFINE_bool(luminance_only, false,
             "If true, compress Light map by storing only Luminance for L1/L2 "
             "coefficients (Packed into 3 textures).");
@@ -72,8 +75,9 @@ int main(int argc, char* argv[]) {
   }
 
   std::optional<sh_baker::AtlasResult> atlas_result =
-      sh_baker::CreateAtlasGeometries(scene.geometries, FLAGS_width,
-                                      FLAGS_dilation);
+      sh_baker::CreateAtlasGeometries(
+          scene, FLAGS_width, FLAGS_dilation,
+          static_cast<float>(FLAGS_density_multiplier));
   if (!atlas_result) {
     LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
     return 1;
