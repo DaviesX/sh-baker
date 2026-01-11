@@ -131,7 +131,6 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                 int pixel_idx = y * scaled_width + x;
 
                 SurfacePoint sp;
-                sp.valid = true;
                 sp.material_id = geo.material_id;
 
                 sp.position = vertices[idx0] * u + vertices[idx1] * v +
@@ -172,9 +171,8 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                 // Only write if valid bit is not set (don't overwrite
                 // legitimate hits) This assumes standard rasterizer wins over
                 // fallback.
-                if (!surface_map[pixel_idx].valid) {
+                if (surface_map[pixel_idx].material_id < 0) {
                   SurfacePoint sp;
-                  sp.valid = true;
                   sp.material_id = geo.material_id;
 
                   // Centroid barycentrics
@@ -216,7 +214,7 @@ std::vector<uint8_t> CreateValidityMask(
     const std::vector<SurfacePoint>& points) {
   std::vector<uint8_t> mask(points.size());
   for (size_t i = 0; i < points.size(); ++i) {
-    mask[i] = points[i].valid ? 1 : 0;
+    mask[i] = points[i].material_id >= 0;
   }
   return mask;
 }
@@ -259,7 +257,7 @@ Texture CreateMaterialMap(const std::vector<SurfacePoint>& surface_points,
                           const auto& sp = surface_points[idx];
                           uint8_t r = 0, g = 0, b = 0;
 
-                          if (sp.valid) {
+                          if (sp.material_id >= 0) {
                             // Generate arbitrary color from material_id
                             // Use a simple hash to get deterministic colors
                             uint32_t id = sp.material_id;

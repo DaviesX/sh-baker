@@ -6,7 +6,6 @@
 #include <Eigen/Dense>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -50,7 +49,7 @@ struct Geometry {
 
   std::vector<uint32_t> indices;
 
-  uint32_t material_id = 0;  // Index into Scene::materials
+  int material_id = -1;  // Index into Scene::materials
   Eigen::Affine3f transform = Eigen::Affine3f::Identity();
 };
 
@@ -74,20 +73,11 @@ struct Light {
   int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
-// --- SkyModel ---
-struct SkyModel {
-  Eigen::Vector3f sun_direction =
-      Eigen::Vector3f(0, 1, 0).normalized();  // Points from surface to sun.
-  Eigen::Vector3f sun_color = Eigen::Vector3f::Ones();
-  float sun_intensity = 1.0f;
-};
-
 // --- Scene ---
 struct Scene {
   std::vector<Geometry> geometries;
   std::vector<Material> materials;
   std::vector<Light> lights;
-  SkyModel sky;
 };
 
 // Transforms the geometry by the transform matrix.
