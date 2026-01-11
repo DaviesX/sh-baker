@@ -5,7 +5,6 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <iostream>
@@ -84,7 +83,6 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
     Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
     Eigen::Vector3f transmission = Trace(rtc_scene, scene, hit_pos, dir, depth,
                                          max_depth, num_light_samples, rng);
-
     color += (1.0f - alpha) * transmission;
   }
 
@@ -115,7 +113,7 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   // Indirect Lighting (Recursive)
   ReflectionSample sample =
       SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
-  if (sample.pdf == 0.f) {
+  if (sample.pdf < 1e-3f) {
     // Internal reflection.
     return color;
   }
@@ -125,11 +123,10 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
             num_light_samples, rng);
   Eigen::Vector3f brdf =
       EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
-  float cosine_term = std::max(0.0f, occ->normal.dot(sample.direction));
-
-  if (sample.pdf > 1e-6f) {
-    color += alpha * incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
-  }
+  float cosine_term = occ->normal.dot(sample.direction);
+  Eigen::Vector3f L_indirect =
+      incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
+  color += alpha * L_indirect;
 
   return color;
 }

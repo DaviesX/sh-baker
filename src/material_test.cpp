@@ -9,14 +9,14 @@
 namespace sh_baker {
 namespace {
 
-TEST(MaterialTest, SampleMaterial) {
+TEST(MaterialTest, SampleMaterialAdvanced) {
   Material mat;
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   std::mt19937 rng(12345);
 
-  ReflectionSample sample =
-      SampleMaterial(mat, Eigen::Vector2f(0.5f, 0.5f), normal, incident, rng);
+  ReflectionSample sample = SampleMaterialAdvanced(
+      mat, Eigen::Vector2f(0.5f, 0.5f), normal, incident, rng);
 
   EXPECT_GT(sample.pdf, 0.0f);
   EXPECT_NEAR(sample.direction.norm(), 1.0f, 1e-4f);
@@ -36,7 +36,7 @@ TEST(MaterialTest, GetAlbedo) {
   EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
 }
 
-TEST(MaterialTest, EvalMaterialBRDF) {
+TEST(MaterialTest, EvalMaterialAdvancedBRDF) {
   Material mat;
   // White albedo
   mat.albedo.pixel_data = {255, 255, 255};
@@ -48,8 +48,8 @@ TEST(MaterialTest, EvalMaterialBRDF) {
   Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f reflected(0.0f, 0.0f, 1.0f);
 
-  Eigen::Vector3f res = EvalMaterial(mat, Eigen::Vector2f(0.5f, 0.5f), normal,
-                                     incident, reflected);
+  Eigen::Vector3f res = EvalMaterialAdvanced(mat, Eigen::Vector2f(0.5f, 0.5f),
+                                             normal, incident, reflected);
 
   // Lambertian BRDF = rho / PI. However, PBR adds Fresnel (0.04)
   // so Diffuse is scaled by 0.96, plus some Specular.
