@@ -178,4 +178,99 @@ Eigen::Vector3f EvaluateLightSamples(
   return result / num_samples;
 }
 
+Eigen::Vector3f EvaluateIncomingLightSamples(
+    const std::vector<Light>& lights, RTCScene rtc_scene,
+    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
+    unsigned num_samples, std::mt19937& rng) {
+  // Build sampling distribution using the cheap heuristic:
+  // score = L(sample)* G(hit_point_normal, sample) / dist^2.
+  // By omitting the visibility term, we can sample the distribution extremely
+  // efficiently. Given the lights set we have here is potentially visible, our
+  // probability distribution is very close to the actual incoming radiance
+  // function, yielding low variance.
+  std::vector<Eigen::Vector3f> radiances_without_visibility;
+  std::vector<Ray> visibility_rays;
+  std::vector<float> area_sample_pdfs;
+  std::vector<float> weights;
+  radiances_without_visibility.reserve(lights.size());
+  visibility_rays.reserve(lights.size());
+  area_sample_pdfs.reserve(lights.size());
+  weights.reserve(lights.size());
+
+  for (const auto& light : lights) {
+    Eigen::Vector3f radiance;
+    Ray visibility_ray;
+    float area_sample_pdf = 1.0f;
+    switch (light.type) {
+      case Light::Type::Directional: {
+        radiance = light_internal::DirectionalLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      }
+      case Light::Type::Point: {
+        radiance = light_internal::PointLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      }
+      case Light::Type::Spot: {
+        radiance = light_internal::SpotLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      }
+      case Light::Type::Area: {
+        light_internal::AreaSample sample =
+            light_internal::SampleAreaLight(light, rng);
+        radiance = light_internal::AreaLightIncomingRadiance(
+                       sample, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        area_sample_pdf = sample.pdf;
+        break;
+      }
+      default: {
+        radiance = Eigen::Vector3f::Zero();
+        break;
+      }
+    }
+
+    radiances_without_visibility.push_back(radiance);
+    visibility_rays.push_back(visibility_ray);
+    area_sample_pdfs.push_back(area_sample_pdf);
+    weights.push_back(radiance.maxCoeff());
+  }
+
+  // Create Distribution
+  float sum_weights = std::accumulate(weights.begin(), weights.end(), 0.0f);
+  if (sum_weights < 1e-6f) {
+    // All lights are almost invisible.
+    return Eigen::Vector3f::Zero();
+  }
+
+  // Sample from the distribution and accumulate the result.
+  Eigen::Vector3f result = Eigen::Vector3f::Zero();
+  std::discrete_distribution<int> dist(weights.begin(), weights.end());
+  for (unsigned i = 0; i < num_samples; ++i) {
+    int idx = dist(rng);
+
+    const Eigen::Vector3f& radiance_without_visibility =
+        radiances_without_visibility[idx];
+    const Ray& visibility_ray = visibility_rays[idx];
+
+    if (FindOcclusion(rtc_scene, visibility_ray)) {
+      // Visibility term is 0.
+      continue;
+    }
+
+    float pdf = weights[idx] / sum_weights;
+    float area_sample_pdf = area_sample_pdfs[idx];
+    float inverse_joint_pdf = 1.f / (pdf * area_sample_pdf);
+
+    result += inverse_joint_pdf * radiance_without_visibility;
+  }
+
+  return result / num_samples;
+}
+
 }  // namespace sh_baker

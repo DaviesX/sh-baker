@@ -19,8 +19,7 @@ struct SurfacePoint {
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
   Eigen::Vector3f normal = Eigen::Vector3f::Zero();
   Eigen::Vector4f tangent = Eigen::Vector4f::Zero();
-  uint32_t material_id = 0;
-  bool valid = false;
+  int32_t material_id = -1;  // Invalid if < 0.
 };
 
 // Rasterizes the scene UVs into a buffer of SurfacePoints.

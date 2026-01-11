@@ -55,15 +55,7 @@ TEST(LoaderTest, MissingFile) {
 }
 
 TEST(LoaderTest, LoadBoxFallbackColor) {
-  std::filesystem::path input_path =
-      "/Users/daviswen/sh-baker/data/box/Box.gltf";
-  if (!std::filesystem::exists(input_path)) {
-    input_path = "data/box/Box.gltf";
-    if (!std::filesystem::exists(input_path)) {
-      input_path = "../data/box/Box.gltf";
-    }
-  }
-
+  std::filesystem::path input_path = "data/box/scene.gltf";
   ASSERT_TRUE(std::filesystem::exists(input_path))
       << "Test file not found: " << input_path;
 

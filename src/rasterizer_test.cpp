@@ -8,6 +8,7 @@ TEST(RasterizerTest, RasterizeQuad) {
   Scene scene;
   Geometry quad;
   // Full 0-1 UV quad
+  quad.material_id = 0;
   quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
@@ -26,7 +27,8 @@ TEST(RasterizerTest, RasterizeQuad) {
 
   // All should be valid
   for (int i = 0; i < 16; ++i) {
-    EXPECT_TRUE(result[i].valid) << "Pixel " << i << " should be covered.";
+    EXPECT_GE(result[i].material_id, 0)
+        << "Pixel " << i << " should be covered.";
   }
 
   // Check center (approx)
@@ -44,6 +46,7 @@ TEST(RasterizerTest, RasterizeQuadSupersampled) {
   Scene scene;
   Geometry quad;
   // Full 0-1 UV quad
+  quad.material_id = 0;
   quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
   quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
   quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
@@ -63,16 +66,17 @@ TEST(RasterizerTest, RasterizeQuadSupersampled) {
 
   // All should be valid
   for (int i = 0; i < 64; ++i) {
-    EXPECT_TRUE(result[i].valid) << "Pixel " << i << " should be covered.";
+    EXPECT_GE(result[i].material_id, 0)
+        << "Pixel " << i << " should be covered.";
   }
 }
 
 TEST(RasterizerTest, ValidityMask) {
   // Create dummy points
   std::vector<SurfacePoint> points(3);
-  points[0].valid = true;
-  points[1].valid = false;
-  points[2].valid = true;
+  points[0].material_id = 0;
+  points[1].material_id = -1;
+  points[2].material_id = 0;
 
   std::vector<uint8_t> mask = CreateValidityMask(points);
 
