@@ -5,6 +5,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+add_compile_options(
+  $<$<CONFIG:Release>:-Ofast>
+  $<$<CONFIG:Release>:-flto=auto>
+  $<$<CONFIG:Release>:-march=native>
+)
+add_link_options(
+  $<$<CONFIG:Release>:-flto=auto>
+  $<$<CONFIG:Release>:-Ofast>
+)
+
 include(FetchContent)
 
 # Enable offline build support:
