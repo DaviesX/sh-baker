@@ -32,8 +32,6 @@ struct Material {
   Texture albedo;
   Texture normal_texture;
   Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
-  float roughness = 0.9f;
-  float metallic = 0.0f;
 
   // Emission (for Area Lights).
   float emission_intensity = 0.0f;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 
 #define TINYGLTF_IMPLEMENTATION
@@ -482,10 +483,6 @@ void ProcessMaterials(const tinygltf::Model& model,
   for (const auto& gltf_mat : model.materials) {
     Material mat;
     mat.name = gltf_mat.name;
-    mat.roughness =
-        static_cast<float>(gltf_mat.pbrMetallicRoughness.roughnessFactor);
-    mat.metallic =
-        static_cast<float>(gltf_mat.pbrMetallicRoughness.metallicFactor);
 
     // Emission
     auto emissive_strength_it =
@@ -543,16 +540,17 @@ void ProcessMaterials(const tinygltf::Model& model,
     if (mat.metallic_roughness_texture.pixel_data.empty()) {
       // Default 1x1 using factors
       // Metallic is stored in B, Roughness in G
-      unsigned char m = static_cast<unsigned char>(
-          std::clamp(mat.metallic, 0.0f, 1.0f) * 255.0f);
-      unsigned char r = static_cast<unsigned char>(
-          std::clamp(mat.roughness, 0.0f, 1.0f) * 255.0f);
-
       mat.metallic_roughness_texture.width = 1;
       mat.metallic_roughness_texture.height = 1;
       mat.metallic_roughness_texture.channels = 3;
       // R is unused, G=Roughness, B=Metallic
-      mat.metallic_roughness_texture.pixel_data = {0, r, m};
+      auto roughness =
+          static_cast<float>(gltf_mat.pbrMetallicRoughness.roughnessFactor);
+      auto metallic =
+          static_cast<float>(gltf_mat.pbrMetallicRoughness.metallicFactor);
+      mat.metallic_roughness_texture.pixel_data = {
+          0, static_cast<uint8_t>(roughness * 255),
+          static_cast<uint8_t>(metallic * 255)};
     }
 
     scene->materials.push_back(std::move(mat));

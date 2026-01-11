@@ -407,12 +407,6 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     tinygltf::Material gmat;
     gmat.name = mat.name;
 
-    // Preserve metallic/roughness if we had them (not stored in simple Material
-    // unfortunately, actually Material struct HAS roughness/metallic! line
-    // 34/35 in scene.h). Let's populate them too while we are at it.
-    gmat.pbrMetallicRoughness.roughnessFactor = mat.roughness;
-    gmat.pbrMetallicRoughness.metallicFactor = mat.metallic;
-
     if (mat.albedo.file_path) {
       auto texture_index =
           AddOrReuseTexture(*mat.albedo.file_path, path.parent_path(), &model,

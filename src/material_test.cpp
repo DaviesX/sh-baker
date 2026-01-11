@@ -11,6 +11,23 @@ namespace {
 
 TEST(MaterialTest, SampleMaterialAdvanced) {
   Material mat;
+  // Initialize textures
+  mat.albedo.width = 1;
+  mat.albedo.height = 1;
+  mat.albedo.channels = 3;
+  mat.albedo.pixel_data = {255, 255, 255};
+
+  mat.normal_texture.width = 1;
+  mat.normal_texture.height = 1;
+  mat.normal_texture.channels = 3;
+  mat.normal_texture.pixel_data = {128, 128, 255};
+
+  mat.metallic_roughness_texture.width = 1;
+  mat.metallic_roughness_texture.height = 1;
+  mat.metallic_roughness_texture.channels = 3;
+  mat.metallic_roughness_texture.pixel_data = {
+      0, 255, 255};  // R=Unused, G=Roughness, B=Metallic
+
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);
   std::mt19937 rng(12345);
@@ -43,6 +60,16 @@ TEST(MaterialTest, EvalMaterialAdvancedBRDF) {
   mat.albedo.width = 1;
   mat.albedo.height = 1;
   mat.albedo.channels = 3;
+
+  mat.normal_texture.width = 1;
+  mat.normal_texture.height = 1;
+  mat.normal_texture.channels = 3;
+  mat.normal_texture.pixel_data = {128, 128, 255};
+
+  mat.metallic_roughness_texture.width = 1;
+  mat.metallic_roughness_texture.height = 1;
+  mat.metallic_roughness_texture.channels = 3;
+  mat.metallic_roughness_texture.pixel_data = {0, 255, 0};
 
   Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
   Eigen::Vector3f incident(0.0f, 0.0f, 1.0f);

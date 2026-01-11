@@ -514,43 +514,21 @@ int main(int argc, char* argv[]) {
                          GL_FALSE, model.data());
 
       int mat_id = g_Meshes[i].material_id;
-      if (mat_id >= 0 && mat_id < scene.materials.size()) {
-        const auto& mat_data = scene.materials[mat_id];
+      CHECK_GT(mat_id, -1);
+      CHECK_LT(mat_id, scene.materials.size());
+      const auto& mat_data = scene.materials[mat_id];
 
-        // Albedo
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasAlbedo"),
-                    g_AlbedoTextures[mat_id] != 0 ? 1 : 0);
-        glUniform3f(glGetUniformLocation(g_ShaderProgram, "u_AlbedoColor"), 1,
-                    1, 1);
+      // Albedo
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
 
-        // Normal
-        glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasNormal"),
-                    g_NormalTextures[mat_id] != 0 ? 1 : 0);
+      // Normal
+      glActiveTexture(GL_TEXTURE4);
+      glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
 
-        // MR
-        glActiveTexture(GL_TEXTURE5);
-        glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasMR"),
-                    g_MRTextures[mat_id] != 0 ? 1 : 0);
-
-        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Metallic"),
-                    mat_data.metallic);
-        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Roughness"),
-                    mat_data.roughness);
-
-      } else {
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasAlbedo"), 0);
-        glUniform3f(glGetUniformLocation(g_ShaderProgram, "u_AlbedoColor"), 1,
-                    0, 1);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasNormal"), 0);
-        glUniform1i(glGetUniformLocation(g_ShaderProgram, "u_HasMR"), 0);
-        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Metallic"), 0.0f);
-        glUniform1f(glGetUniformLocation(g_ShaderProgram, "u_Roughness"), 0.5f);
-      }
+      // MR
+      glActiveTexture(GL_TEXTURE5);
+      glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
 
       glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);
     }
