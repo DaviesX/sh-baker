@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(sh_baker CXX C)
+project(sh_baker_main CXX C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -24,15 +24,6 @@ set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/deps")
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
 # --- Dependencies ---
-
-# tinygltf
-FetchContent_Declare(
-  tinygltf
-  GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
-  GIT_TAG        release
-)
-FetchContent_MakeAvailable(tinygltf)
-
 # xatlas
 FetchContent_Declare(
   xatlas
@@ -59,12 +50,29 @@ find_package(gflags REQUIRED)
 find_package(GTest REQUIRED)
 
 # stb_image
-FetchContent_Declare(
-  stb_image
-  GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_TAG        master
-)
-FetchContent_MakeAvailable(stb_image)
+find_path(STB_IMAGE_INCLUDE_DIR NAMES stb_image.h PATH_SUFFIXES stb)
+if(NOT STB_IMAGE_INCLUDE_DIR)
+  message(FATAL_ERROR "stb_image not found")
+endif()
+add_library(gstb_image INTERFACE)
+target_include_directories(gstb_image INTERFACE ${STB_IMAGE_INCLUDE_DIR})
+
+# nlohmann_json
+find_path(JSON_INCLUDE_DIR NAMES nlohmann/json.hpp)
+if(NOT JSON_INCLUDE_DIR)
+  message(FATAL_ERROR "nlohmann/json.hpp not found")
+endif()
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE ${JSON_INCLUDE_DIR})
+
+# tinygltf
+find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h)
+if(NOT TINYGLTF_INCLUDE_DIR)
+  message(FATAL_ERROR "tinygltf not found")
+endif()
+add_library(tinygltf INTERFACE)
+target_include_directories(tinygltf INTERFACE ${TINYGLTF_INCLUDE_DIR})
+target_link_libraries(tinygltf INTERFACE gstb_image nlohmann_json)
 
 # GLFW
 find_package(glfw3 REQUIRED)
@@ -81,7 +89,7 @@ find_package(Eigen3 REQUIRED)
 # TBB
 find_package(TBB REQUIRED)
 
-# --- Library (sh_baker_lib) ---
+# --- Library (sh_baker) ---
 
 set(LIB_SOURCES
     src/loader.cpp
@@ -115,18 +123,17 @@ set(LIB_HEADERS
     src/atlas.h
 )
 
-add_library(sh_baker_lib SHARED ${LIB_SOURCES} ${LIB_HEADERS})
+add_library(sh_baker SHARED ${LIB_SOURCES} ${LIB_HEADERS})
 
-target_include_directories(sh_baker_lib PUBLIC 
+target_include_directories(sh_baker PUBLIC 
     src 
-    ${tinygltf_SOURCE_DIR}
-    ${stb_image_SOURCE_DIR}
     ${xatlas_SOURCE_DIR}/source/xatlas
     ${mikktspace_SOURCE_DIR}
 )
 
-target_link_libraries(sh_baker_lib PUBLIC
+target_link_libraries(sh_baker PUBLIC
     tinygltf
+    gstb_image
     glog::glog
     gflags
     embree
@@ -134,10 +141,10 @@ target_link_libraries(sh_baker_lib PUBLIC
     TBB::tbb
 )
 
-# --- Executable (sh_baker) ---
+# --- Executable (sh_baker_main) ---
 
-add_executable(sh_baker src/main.cpp)
-target_link_libraries(sh_baker PRIVATE sh_baker_lib)
+add_executable(sh_baker_main src/main.cpp)
+target_link_libraries(sh_baker_main PRIVATE sh_baker)
 
 # --- Tests ---
 
@@ -158,7 +165,7 @@ add_executable(sh_baker_test
 )
 
 target_link_libraries(sh_baker_test PRIVATE
-    sh_baker_lib
+    sh_baker
     GTest::gtest_main
 )
 
@@ -171,7 +178,7 @@ add_executable(visualizer src/visualizer_main.cpp)
 
 
 target_link_libraries(visualizer PRIVATE
-    sh_baker_lib
+    sh_baker
     glfw
     OpenGL::GL
 )
@@ -180,7 +187,7 @@ target_link_libraries(visualizer PRIVATE
 
 add_executable(sh_cvt src/sh_cvt_main.cpp)
 target_link_libraries(sh_cvt PRIVATE
-    sh_baker_lib
+    sh_baker
     gflags
     glog::glog
 )

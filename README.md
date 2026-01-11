@@ -18,8 +18,14 @@ Offline Path-Tracer for Baking Spherical Harmonic (SH) Lightmaps.
 This project uses CMake. To build:
 
 ```bash
-cmake -B build -S .
-cmake --build build
+cmake -DCMAKE_BUILD_TYPE=Release -B build -S .
+cmake --build build --parallel 12
+```
+
+To run the main application:
+
+```bash
+./build/sh_baker_main --input data/Sponza/scene.gltf --output out --width 1024 --height 1024 --samples 128 --supersample_scale 3 --luminance_only
 ```
 
 ## Testing
