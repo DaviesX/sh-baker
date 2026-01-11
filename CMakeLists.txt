@@ -7,6 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+# Enable offline build support:
+# 1. Store dependencies in a persistent 'deps' folder within the source tree.
+set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/deps")
+# 2. Prevent FetchContent from attempting to connect to the internet to check for updates.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
 # --- Dependencies ---
 
 # tinygltf
