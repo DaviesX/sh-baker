@@ -220,9 +220,9 @@ SHTexture BakeSHLightMap(const Scene& scene,
                                         sp.normal * dir_local.z();
 
             // Direct lighting (NEE).
-            Eigen::Vector3f Li_direct = EvaluateIncomingLightSamples(
-                scene.lights, rtc_scene, sp.position, sp.normal,
-                config.num_light_samples, rng);
+            AccumulateIncomingLightSamples(scene.lights, rtc_scene, sp.position,
+                                           sp.normal, config.num_light_samples,
+                                           rng, &sh_accum);
 
             // Indirect lighting.
             Eigen::Vector3f Li_indirect =
@@ -230,10 +230,7 @@ SHTexture BakeSHLightMap(const Scene& scene,
                       config.bounces, config.num_light_samples, rng) *
                 inv_pdf_uniform;
 
-            // Total incoming light.
-            Eigen::Vector3f Li = Li_direct + Li_indirect;
-
-            AccumulateRadiance(Li, dir_world, &sh_accum);
+            AccumulateRadiance(Li_indirect, dir_world, &sh_accum);
           }
 
           // Average

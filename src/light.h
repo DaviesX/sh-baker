@@ -11,6 +11,7 @@
 
 #include "occlusion.h"
 #include "scene.h"
+#include "sh_coeffs.h"
 
 namespace sh_baker {
 namespace light_internal {
@@ -217,18 +218,19 @@ Eigen::Vector3f EvaluateLightSamples(
     const Eigen::Vector3f& reflected, const Material& mat,
     const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
 
-// It does similar to EvaluateLightSamples but returns the incoming radiance
-// instead of the outgoing radiance. As a result, the heuristic becomes
-// score = L(sample)* G(hit_point_normal, sample) / dist^2, where G is a simple
-// visibility term based on the normal of the hit point and the light direction.
+// Computes the direct lighting (Next Event Estimation) and accumulates the
+// projected SH coefficients into the accumulator.
 //
-// Then, it computes the radiance L_e(x) combined with the geometric visibility
-// term. The estimated radiance is of lower variance if the lights set is
-// potentially visible.
-Eigen::Vector3f EvaluateIncomingLightSamples(
-    const std::vector<Light>& lights, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    unsigned num_samples, std::mt19937& rng);
+// Because SH projection depends on the direction of the incident light, we
+// cannot simply return a summed radiance covering multiple light sources.
+// Instead, we must project each light sample into the SH basis using its
+// specific incoming direction.
+void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
+                                    RTCScene rtc_scene,
+                                    const Eigen::Vector3f& hit_point,
+                                    const Eigen::Vector3f& hit_point_normal,
+                                    unsigned num_samples, std::mt19937& rng,
+                                    SHCoeffs* accumulator);
 
 }  // namespace sh_baker
 

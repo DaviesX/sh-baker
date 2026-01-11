@@ -7,6 +7,7 @@
 
 #include "material.h"
 #include "occlusion.h"
+#include "sh_coeffs.h"
 
 namespace sh_baker {
 
@@ -178,10 +179,12 @@ Eigen::Vector3f EvaluateLightSamples(
   return result / num_samples;
 }
 
-Eigen::Vector3f EvaluateIncomingLightSamples(
-    const std::vector<Light>& lights, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    unsigned num_samples, std::mt19937& rng) {
+void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
+                                    RTCScene rtc_scene,
+                                    const Eigen::Vector3f& hit_point,
+                                    const Eigen::Vector3f& hit_point_normal,
+                                    unsigned num_samples, std::mt19937& rng,
+                                    SHCoeffs* accumulator) {
   // Build sampling distribution using the cheap heuristic:
   // score = L(sample)* G(hit_point_normal, sample) / dist^2.
   // By omitting the visibility term, we can sample the distribution extremely
@@ -245,12 +248,13 @@ Eigen::Vector3f EvaluateIncomingLightSamples(
   float sum_weights = std::accumulate(weights.begin(), weights.end(), 0.0f);
   if (sum_weights < 1e-6f) {
     // All lights are almost invisible.
-    return Eigen::Vector3f::Zero();
+    return;
   }
 
   // Sample from the distribution and accumulate the result.
-  Eigen::Vector3f result = Eigen::Vector3f::Zero();
   std::discrete_distribution<int> dist(weights.begin(), weights.end());
+  float inv_num_samples = 1.0f / num_samples;
+
   for (unsigned i = 0; i < num_samples; ++i) {
     int idx = dist(rng);
 
@@ -267,10 +271,12 @@ Eigen::Vector3f EvaluateIncomingLightSamples(
     float area_sample_pdf = area_sample_pdfs[idx];
     float inverse_joint_pdf = 1.f / (pdf * area_sample_pdf);
 
-    result += inverse_joint_pdf * radiance_without_visibility;
-  }
+    Eigen::Vector3f Li =
+        (inverse_joint_pdf * inv_num_samples) * radiance_without_visibility;
 
-  return result / num_samples;
+    // Accumulate into SH (using direction TO the light).
+    AccumulateRadiance(Li, visibility_ray.direction, accumulator);
+  }
 }
 
 }  // namespace sh_baker
