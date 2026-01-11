@@ -8,6 +8,16 @@
 namespace sh_baker {
 namespace atlas_internal {
 
+// Calculates the scaling factor for each geometry based on its material's
+// albedo texture resolution and UV tiling.
+//
+// The heuristic is:
+//   TargetScale = density_multiplier * sqrt(AlbedoWidth * AlbedoHeight)
+//   EffectiveScale = TargetScale * sqrt(TileCount)
+//
+// Where TileCount is estimated from the UV bounding box range.
+// The function also applies outlier clamping to ensure no single mesh exceeds
+// 5x the median scale.
 std::vector<float> CalculateGeometryScales(
     const std::vector<Geometry>& geometries,
     const std::vector<Material>& materials, float density_multiplier);

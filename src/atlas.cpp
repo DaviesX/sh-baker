@@ -15,6 +15,10 @@ namespace {
 const float kMinScale = 0.001f;
 const float kMaxScaleFactor = 5.0f;
 
+}  // namespace
+
+namespace atlas_internal {
+
 std::vector<float> CalculateGeometryScales(
     const std::vector<Geometry>& geometries,
     const std::vector<Material>& materials, float density_multiplier) {
@@ -89,7 +93,7 @@ std::vector<float> CalculateGeometryScales(
   return mesh_scales;
 }
 
-}  // namespace
+}  // namespace atlas_internal
 
 std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
                                                  unsigned target_resolution,
@@ -100,8 +104,8 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
     return std::nullopt;
   }
 
-  std::vector<float> geometry_scales =
-      CalculateGeometryScales(geometries, scene.materials, density_multiplier);
+  std::vector<float> geometry_scales = atlas_internal::CalculateGeometryScales(
+      geometries, scene.materials, density_multiplier);
 
   // 1. Create Atlas
   xatlas::Atlas* atlas = xatlas::Create();

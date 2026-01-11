@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "scene.h"
+
 namespace sh_baker {
 
 TEST(AtlasTest, SimpleQuad) {
@@ -60,6 +62,107 @@ TEST(AtlasTest, SimpleQuad) {
   // Vertices should be at least equal to input (xatlas might split or keep
   // same) A planar quad shouldn't need splits, but xatlas might do it.
   EXPECT_GE(out_geo.vertices.size(), input_geo.vertices.size());
+}
+
+TEST(AtlasTest, CalculateGeometryScales_Basic) {
+  std::vector<Geometry> geometries(1);
+  std::vector<Material> materials(1);
+
+  // Mesh 0
+  geometries[0].material_id = 0;
+  geometries[0].texture_uvs = {{0, 0}, {1, 0}, {0, 1}};  // 1x1 tile
+
+  // 100x100 texture
+  materials[0].albedo.width = 100;
+  materials[0].albedo.height = 100;
+
+  float density_multiplier = 1.0f;
+  std::vector<float> scales = atlas_internal::CalculateGeometryScales(
+      geometries, materials, density_multiplier);
+
+  ASSERT_EQ(scales.size(), 1);
+  // sqrt(100 * 100) = 100
+  // tile_count = 1
+  // scale = 100 * 1 = 100
+  EXPECT_NEAR(scales[0], 100.0f, 1e-4f);
+}
+
+TEST(AtlasTest, CalculateGeometryScales_Tiling) {
+  std::vector<Geometry> geometries(1);
+  std::vector<Material> materials(1);
+
+  // Mesh 0: UVs range [0, 2] x [0, 2] -> 4 tiles
+  geometries[0].material_id = 0;
+  geometries[0].texture_uvs = {{0, 0}, {2, 0}, {0, 2}};
+
+  // 10x10 texture
+  materials[0].albedo.width = 10;
+  materials[0].albedo.height = 10;
+
+  float density_multiplier = 1.0f;
+  std::vector<float> scales = atlas_internal::CalculateGeometryScales(
+      geometries, materials, density_multiplier);
+
+  ASSERT_EQ(scales.size(), 1);
+  // sqrt(10 * 10) = 10
+  // tile_count = 2 * 2 = 4
+  // scale = 10 * sqrt(4) = 20
+  EXPECT_NEAR(scales[0], 20.0f, 1e-4f);
+}
+
+TEST(AtlasTest, CalculateGeometryScales_Clamping) {
+  // Create 3 meshes to establish a median.
+  // Median scale will be 10.
+  // One outlier will be huge, should be clamped.
+  std::vector<Geometry> geometries(3);
+  std::vector<Material> materials(3);
+
+  // Mesh 0: Scale 10
+  geometries[0].material_id = 0;
+  geometries[0].texture_uvs = {{0, 0}, {1, 1}};
+  materials[0].albedo.width = 10;
+  materials[0].albedo.height = 10;
+
+  // Mesh 1: Scale 10
+  geometries[1].material_id = 1;
+  geometries[1].texture_uvs = {{0, 0}, {1, 1}};
+  materials[1].albedo.width = 10;
+  materials[1].albedo.height = 10;
+
+  // Mesh 2: Huge Scale (1000x1000 texture) -> Scale 1000
+  geometries[2].material_id = 2;
+  geometries[2].texture_uvs = {{0, 0}, {1, 1}};
+  materials[2].albedo.width = 1000;
+  materials[2].albedo.height = 1000;
+
+  float density_multiplier = 1.0f;
+  std::vector<float> scales = atlas_internal::CalculateGeometryScales(
+      geometries, materials, density_multiplier);
+
+  ASSERT_EQ(scales.size(), 3);
+  EXPECT_NEAR(scales[0], 10.0f, 1e-4f);
+  EXPECT_NEAR(scales[1], 10.0f, 1e-4f);
+
+  // Median is 10. Max allowed is 5 * 10 = 50.
+  EXPECT_NEAR(scales[2], 50.0f, 1e-4f);
+}
+
+TEST(AtlasTest, CalculateGeometryScales_DensityMultiplier) {
+  std::vector<Geometry> geometries(1);
+  std::vector<Material> materials(1);
+
+  geometries[0].material_id = 0;
+  geometries[0].texture_uvs = {{0, 0}, {1, 1}};
+  materials[0].albedo.width = 100;
+  materials[0].albedo.height = 100;
+
+  float density_multiplier = 2.0f;
+  std::vector<float> scales = atlas_internal::CalculateGeometryScales(
+      geometries, materials, density_multiplier);
+
+  ASSERT_EQ(scales.size(), 1);
+  // 2.0 * 100 = 200
+  EXPECT_NEAR(scales[0], 200.0f, 1e-4f);
 }
 
 }  // namespace sh_baker
