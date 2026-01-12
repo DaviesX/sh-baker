@@ -11,6 +11,8 @@
 #include <variant>
 #include <vector>
 
+#include "sh_coeffs.h"
+
 namespace sh_baker {
 
 // --- Texture ---
@@ -91,6 +93,7 @@ struct Environment {
 
   // For Texture type (HDRi)
   std::variant<Texture, Texture32F> texture;
+  float intensity = 1.0f;
 
   // For Preetham type
   // Direction of sun (geometric up for noon sun or from surface looking to
@@ -98,7 +101,8 @@ struct Environment {
   Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0);
   float turbidity = 2.5f;
 
-  float intensity = 1.0f;
+  // For both types.
+  SHCoeffs sh_coeffs;
 };
 
 // --- Scene ---
@@ -116,6 +120,9 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 
 // Returns the surface area of the geometry.
 float SurfaceArea(const Geometry& geometry);
+
+// Projects the environment to SH coefficients.
+SHCoeffs ProjectEnvironmentToSH(const Environment& env);
 
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);

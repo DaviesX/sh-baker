@@ -767,6 +767,7 @@ void ProcessEnvironment(const tinygltf::Model& model,
   std::optional<Environment> ibl_env =
       LoadEnvironmentFromImage(model, gltf_file, scene);
   if (ibl_env) {
+    ibl_env->sh_coeffs = ProjectEnvironmentToSH(ibl_env.value());
     scene->environment = std::move(ibl_env.value());
     return;
   }
@@ -774,6 +775,7 @@ void ProcessEnvironment(const tinygltf::Model& model,
   std::optional<Environment> sun_env =
       LoadEnvironmentFromSun(model, gltf_file, scene);
   if (sun_env) {
+    sun_env->sh_coeffs = ProjectEnvironmentToSH(sun_env.value());
     scene->environment = std::move(sun_env.value());
     return;
   }
