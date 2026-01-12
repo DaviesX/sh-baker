@@ -149,28 +149,31 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
 }
 
 template <typename T>
-std::vector<T> DownsampleTexture(const std::vector<T>& input, int width,
-                                 int height, int scale) {
+std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
+                                 int input_height, int scale) {
   if (scale <= 1) return input;
 
-  std::vector<T> output(width * height);
+  const int output_width = input_width / scale;
+  const int output_height = input_height / scale;
 
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
+  std::vector<T> output(output_width * output_height);
+
+  for (int y = 0; y < output_height; ++y) {
+    for (int x = 0; x < output_width; ++x) {
       T avg = T();
       int count = 0;
       for (int dy = 0; dy < scale; ++dy) {
         for (int dx = 0; dx < scale; ++dx) {
           int sx = x * scale + dx;
           int sy = y * scale + dy;
-          if (sx < width && sy < height) {
-            avg += input[sy * width + sx];
+          if (sx < input_width && sy < input_height) {
+            avg += input[sy * input_width + sx];
             count++;
           }
         }
       }
       if (count > 0) {
-        output[y * width + x] = avg * (1.f / float(count));
+        output[y * output_width + x] = avg * (1.f / float(count));
       }
     }
   }

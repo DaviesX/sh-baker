@@ -18,6 +18,11 @@ TEST(SaverTest, SaveCombinedImage) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 1.0f);
+
   // Fill with dummy data
   for (auto& sh : tex.pixels) {
     sh.coeffs[0] = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
@@ -28,7 +33,7 @@ TEST(SaverTest, SaveCombinedImage) {
     std::filesystem::remove(test_path);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kCombined);
+  bool success = SaveSHLightMap(tex, env_tex, test_path, SaveMode::kCombined);
   EXPECT_TRUE(success);
   EXPECT_TRUE(std::filesystem::exists(test_path));
 
@@ -46,6 +51,11 @@ TEST(SaverTest, SaveSplitChannels) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 0.5f);
+
   for (auto& sh : tex.pixels) {
     sh.coeffs[0] = Eigen::Vector3f(1.0f, 0.0f, 0.0f);  // L0
     sh.coeffs[1] = Eigen::Vector3f(0.0f, 1.0f, 0.0f);  // L1m1
@@ -56,13 +66,14 @@ TEST(SaverTest, SaveSplitChannels) {
 
   // Cleanup
   const char* suffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
-                            "L2m1", "L20",  "L21", "L22"};
+                            "L2m1", "L20",  "L21", "L22", "EnvVisibility"};
   for (const char* suffix : suffixes) {
     std::string filename = std::string("test_split_") + suffix + ".exr";
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kSplitChannels);
+  bool success =
+      SaveSHLightMap(tex, env_tex, test_path, SaveMode::kSplitChannels);
   EXPECT_TRUE(success);
 
   for (const char* suffix : suffixes) {
@@ -194,6 +205,11 @@ TEST(SaverTest, SavePackedLuminance) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 0.2f);
+
   // Fill with dummy data
   for (auto& sh : tex.pixels) {
     // L0 = (1.0, 0.5, 0.25)
@@ -210,7 +226,8 @@ TEST(SaverTest, SavePackedLuminance) {
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kLuminancePacked);
+  bool success =
+      SaveSHLightMap(tex, env_tex, test_path, SaveMode::kLuminancePacked);
   EXPECT_TRUE(success);
 
   for (int i = 0; i < 3; ++i) {
