@@ -50,6 +50,39 @@ GLuint g_LumFBO = 0;
 GLuint g_LumTexture = 0;
 const int kLumSize = 256;
 
+// Bloom Framebuffers (Ping Pong)
+GLuint g_BrightProgram = 0;
+GLuint g_BlurProgram = 0;
+GLuint g_BloomFBO[2] = {0, 0};
+GLuint g_BloomTextures[2] = {0, 0};
+int kBloomWidth = 0;
+int kBloomHeight = 0;
+
+void InitBloomFramebuffers(int width, int height) {
+  kBloomWidth = width / 2;
+  kBloomHeight = height / 2;
+
+  glGenFramebuffers(2, g_BloomFBO);
+  glGenTextures(2, g_BloomTextures);
+
+  for (int i = 0; i < 2; i++) {
+    glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[i]);
+    glBindTexture(GL_TEXTURE_2D, g_BloomTextures[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, kBloomWidth, kBloomHeight, 0,
+                 GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           g_BloomTextures[i], 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      LOG(ERROR) << "Bloom Framebuffer " << i << " not complete!";
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 // Screen Quad
 GLuint g_QuadVAO = 0;
 GLuint g_QuadVBO = 0;
@@ -167,6 +200,9 @@ void InitHdrFramebuffer(int width, int height) {
 
   // Init Luminance
   InitLuminanceFramebuffer();
+
+  // Init Bloom
+  InitBloomFramebuffers(width, height);
 }
 
 void DrawPostProcess(int width, int height) {
@@ -195,7 +231,43 @@ void DrawPostProcess(int width, int height) {
   glBindTexture(GL_TEXTURE_2D, g_LumTexture);
   glGenerateMipmap(GL_TEXTURE_2D);
 
-  // 3. Render Final Post Process to Screen
+  // 3. Bloom Extraction (Bright Pass)
+  glViewport(0, 0, kBloomWidth, kBloomHeight);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[0]);
+  glUseProgram(g_BrightProgram);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
+  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_HdrTex"), 0);
+
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
+  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_LumTexture"),
+              1);  // Uses mipmapped lum
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  // 4. Bloom Blur (Ping Pong)
+  glUseProgram(g_BlurProgram);
+  bool horizontal = true;
+  int amount = 2;
+
+  for (int i = 0; i < amount; i++) {
+    glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[horizontal ? 1 : 0]);
+    glUniform1i(glGetUniformLocation(g_BlurProgram, "u_Horizontal"),
+                horizontal);
+    glUniform1i(glGetUniformLocation(g_BlurProgram, "u_Image"), 0);
+
+    glActiveTexture(GL_TEXTURE0);
+    // Bind texture from OPPOSITE FBO (previous pass result)
+    glBindTexture(GL_TEXTURE_2D, g_BloomTextures[horizontal ? 0 : 1]);
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    horizontal = !horizontal;
+  }
+
+  // 5. Render Final Post Process to Screen
+  glEnable(GL_FRAMEBUFFER_SRGB);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);  // Back to default for drawing quad
   glViewport(0, 0, width, height);       // Restore viewport
 
@@ -209,6 +281,10 @@ void DrawPostProcess(int width, int height) {
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, g_LumTexture);
   glUniform1i(glGetUniformLocation(g_PostProgram, "u_LumTexture"), 1);
+
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, g_BloomTextures[0]);  // Final blur result
+  glUniform1i(glGetUniformLocation(g_PostProgram, "u_BloomTexture"), 2);
 
   glBindVertexArray(g_QuadVAO);
   glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -710,12 +786,16 @@ int main(int argc, char* argv[]) {
   }
 
   // --- Setup Shaders ---
+  // --- Setup Shaders ---
   g_MeshProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
   g_SkyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
   g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
   g_LumProgram = CreateShaderProgram("glsl/post.vert", "glsl/lum.frag");
+  g_BrightProgram = CreateShaderProgram("glsl/post.vert", "glsl/bright.frag");
+  g_BlurProgram = CreateShaderProgram("glsl/post.vert", "glsl/blur.frag");
 
-  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram || !g_LumProgram)
+  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram || !g_LumProgram ||
+      !g_BrightProgram || !g_BlurProgram)
     return 1;
 
   glEnable(GL_DEPTH_TEST);

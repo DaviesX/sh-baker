@@ -5,6 +5,7 @@ in vec2 vTexCoord;
 
 uniform sampler2D u_ScreenTexture;
 uniform sampler2D u_LumTexture;
+uniform sampler2D u_BloomTexture;
 
 // --- Tonemapping Helper ---
 const float A = 0.15;
@@ -23,6 +24,7 @@ vec3 Uncharted2Tonemap(vec3 x) {
 
 void main() {
   vec3 color = texture(u_ScreenTexture, vTexCoord).rgb;
+  vec3 bloomColor = texture(u_BloomTexture, vTexCoord).rgb;
 
   // Auto Exposure
   // Sample 1x1 mip level (max LOD)
@@ -33,9 +35,12 @@ void main() {
   // Key value (Middle Gray)
   float key = 0.18;
   // Exposure Formula: Key / GeomMean
-  float exposure = key / max(lumAvg, 0.0001);
+  float exposure = key / max(lumAvg, 0.1);
 
   color *= exposure;
+
+  // Add Bloom
+  color += bloomColor;
 
   // Tone mapping
   vec3 curr = Uncharted2Tonemap(exposureBias * color);
