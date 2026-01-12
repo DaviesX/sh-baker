@@ -106,6 +106,7 @@ const char* kCoeffNames[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
                              "L2m1", "L20",  "L21", "L22"};
 
 bool SaveCombined(const SHTexture& sh_texture,
+                  const Texture32F& environment_visibility_texture,
                   const std::filesystem::path& path) {
   EXRHeader header;
   InitEXRHeader(&header);
@@ -113,12 +114,12 @@ bool SaveCombined(const SHTexture& sh_texture,
   EXRImage image;
   InitEXRImage(&image);
 
-  image.num_channels = 27;  // 9 coeffs * 3 (RGB)
+  image.num_channels = 28;  // 9 coeffs * 3 (RGB) + 1 EnvOcclusion
 
   // Channel names
   std::vector<std::string> channel_names;
   // We need C-strings for header.channels[i].name, so keep the strings alive
-  channel_names.reserve(27);
+  channel_names.reserve(28);
 
   // Band 0: L0
   // Band 1: L1m1, L10, L11
@@ -130,9 +131,10 @@ bool SaveCombined(const SHTexture& sh_texture,
       channel_names.push_back(std::string(kCoeffNames[i]) + rgb_suffix[c]);
     }
   }
+  channel_names.push_back("EnvVisibility");
 
-  std::vector<float> channels[27];
-  float* image_ptr[27];
+  std::vector<float> channels[28];
+  float* image_ptr[28];
   header.channels =
       (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * image.num_channels);
 
@@ -143,21 +145,32 @@ bool SaveCombined(const SHTexture& sh_texture,
   int num_pixels = sh_texture.width * sh_texture.height;
 
   // Split SoA
-  for (int i = 0; i < 27; ++i) {
+  for (int i = 0; i < 28; ++i) {
     channels[i].resize(num_pixels);
     image_ptr[i] = channels[i].data();
 
-    // Map i to (coeff_idx, rgb_idx)
-    int coeff_idx = i / 3;
-    int rgb_idx = i % 3;
+    // Map i to (coeff_idx, rgb_idx) or EnvOcclusion
+    if (i < 27) {
+      int coeff_idx = i / 3;
+      int rgb_idx = i % 3;
 
-    for (int p = 0; p < num_pixels; ++p) {
-      if (rgb_idx == 0)
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].x();
-      else if (rgb_idx == 1)
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].y();
-      else
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].z();
+      for (int p = 0; p < num_pixels; ++p) {
+        if (rgb_idx == 0)
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].x();
+        else if (rgb_idx == 1)
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].y();
+        else
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].z();
+      }
+    } else {
+      // EnvVisibility (index 27)
+      for (int p = 0; p < num_pixels; ++p) {
+        // Handle mismatched sizes? Assuming aligned.
+        if (p < environment_visibility_texture.pixel_data.size())
+          channels[i][p] = environment_visibility_texture.pixel_data[p];
+        else
+          channels[i][p] = 0.0f;
+      }
     }
 
     // Set header info
@@ -191,7 +204,9 @@ bool SaveCombined(const SHTexture& sh_texture,
   return true;
 }
 
-bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
+bool SaveSplit(const SHTexture& sh_texture,
+               const Texture32F& environment_visibility_texture,
+               const std::filesystem::path& path) {
   // path is "dir/filename.exr". We want "dir/filename_L0.exr" etc.
   std::filesystem::path parent = path.parent_path();
   std::string stem = path.stem().string();
@@ -199,6 +214,7 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
 
   int num_pixels = sh_texture.width * sh_texture.height;
 
+  // Save SH Coefficients
   for (int i = 0; i < 9; ++i) {
     std::string coeff_name = kCoeffNames[i];
     std::string filename = stem + "_" + coeff_name + extension;
@@ -264,15 +280,71 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
     LOG(INFO) << "Saved: " << sub_path;
   }
 
+  // Save Environment Visibility
+  {
+    std::string filename = stem + "_EnvVisibility" + extension;
+    std::filesystem::path sub_path = parent / filename;
+
+    EXRHeader header;
+    InitEXRHeader(&header);
+    EXRImage image;
+    InitEXRImage(&image);
+
+    image.num_channels = 1;
+
+    std::vector<float> channel;
+    channel.resize(num_pixels);
+    // Copy data
+    if (environment_visibility_texture.pixel_data.size() == num_pixels) {
+      std::copy(environment_visibility_texture.pixel_data.begin(),
+                environment_visibility_texture.pixel_data.end(),
+                channel.begin());
+    }
+
+    float* image_ptr[1];
+    image_ptr[0] = channel.data();
+
+    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 1);
+    header.pixel_types = (int*)malloc(sizeof(int) * 1);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * 1);
+
+    strncpy(header.channels[0].name, "Y", 255);
+    header.pixel_types[0] = TINYEXR_PIXELTYPE_FLOAT;
+    header.requested_pixel_types[0] = TINYEXR_PIXELTYPE_HALF;
+
+    image.images = (unsigned char**)image_ptr;
+    image.width = sh_texture.width;
+    image.height = sh_texture.height;
+    header.num_channels = 1;
+    header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
+
+    const char* err = nullptr;
+    int ret =
+        SaveEXRImageToFile(&image, &header, sub_path.string().c_str(), &err);
+
+    free(header.channels);
+    free(header.pixel_types);
+    free(header.requested_pixel_types);
+
+    if (ret != TINYEXR_SUCCESS) {
+      LOG(ERROR) << "SaveEXRImageToFile failed for " << sub_path << ": "
+                 << (err ? err : "Unknown error");
+      FreeEXRErrorMessage(err);
+      return false;
+    }
+    LOG(INFO) << "Saved: " << sub_path;
+  }
+
   return true;
 }
 
 bool SavePackedLuminance(const SHTexture& sh_texture,
+                         const Texture32F& environment_visibility_texture,
                          const std::filesystem::path& path) {
   // We will save 3 RGBA files:
-  // _packed_0.exr: L0.rgb, L1m1.Y
-  // _packed_1.exr: L10.Y, L11.Y, L2m2.Y, L2m1.Y
-  // _packed_2.exr: L20.Y, L21.Y, L22.Y, 1.0 (Alpha/Unused)
+  // _packed_0.exr: L0.r, L0.g, L0.b, EnvVisibility
+  // _packed_1.exr: L1m1.Y, L10.Y, L11.Y, L2m2.Y
+  // _packed_2.exr: L2m1.Y, L20.Y, L21.Y, L22.Y
 
   std::filesystem::path parent = path.parent_path();
   std::string stem = path.stem().string();
@@ -312,26 +384,25 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
         const auto& coeffs = sh_texture.pixels[p].coeffs;
 
         if (file_idx == 0) {
-          // File 0: L0.r, L0.g, L0.b, L1m1.Y (indices 0, 1)
+          // File 0: L0.r, L0.g, L0.b, EnvOcclusion
           if (c < 3) {
-            // L0 RGB
+            // L0 RGB (coeff 0)
             val = coeffs[0][c];  // x, y, z
           } else {
-            // L1m1 Luminance
-            val = coeffs[1].dot(kLumWeights);
+            // EnvVisibility
+            if (p < environment_visibility_texture.pixel_data.size())
+              val = environment_visibility_texture.pixel_data[p];
+            else
+              val = 0.0f;
           }
         } else if (file_idx == 1) {
-          // File 1: L10.Y, L11.Y, L2m2.Y, L2m1.Y (indices 2, 3, 4, 5)
-          int sh_idx = 2 + c;
+          // File 1: L1m1.Y, L10.Y, L11.Y, L2m2.Y (coeffs 1, 2, 3, 4)
+          int sh_idx = 1 + c;
           val = coeffs[sh_idx].dot(kLumWeights);
         } else if (file_idx == 2) {
-          // File 2: L20.Y, L21.Y, L22.Y, Unused (indices 6, 7, 8)
-          if (c < 3) {
-            int sh_idx = 6 + c;
-            val = coeffs[sh_idx].dot(kLumWeights);
-          } else {
-            val = 1.0f;  // Padding (Alpha)
-          }
+          // File 2: L2m1.Y, L20.Y, L21.Y, L22.Y (coeffs 5, 6, 7, 8)
+          int sh_idx = 5 + c;
+          val = coeffs[sh_idx].dot(kLumWeights);
         }
         channels[c][p] = val;
       }
@@ -375,6 +446,7 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
 }  // namespace
 
 bool SaveSHLightMap(const SHTexture& sh_texture,
+                    const Texture32F& environment_visibility_texture,
                     const std::filesystem::path& path, SaveMode mode) {
   if (sh_texture.pixels.empty() || sh_texture.width <= 0 ||
       sh_texture.height <= 0) {
@@ -383,11 +455,12 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
   }
 
   if (mode == SaveMode::kCombined) {
-    return SaveCombined(sh_texture, path);
+    return SaveCombined(sh_texture, environment_visibility_texture, path);
   } else if (mode == SaveMode::kLuminancePacked) {
-    return SavePackedLuminance(sh_texture, path);
+    return SavePackedLuminance(sh_texture, environment_visibility_texture,
+                               path);
   } else {
-    return SaveSplit(sh_texture, path);
+    return SaveSplit(sh_texture, environment_visibility_texture, path);
   }
 }
 

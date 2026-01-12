@@ -2,6 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <Eigen/Dense>
+
+#include "sh_coeffs.h"
+
 namespace sh_baker {
 
 TEST(DilationTest, SimpleFill) {

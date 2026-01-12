@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";
   auto start_time = std::chrono::high_resolution_clock::now();
-  sh_baker::SHTexture texture =
+  sh_baker::BakeResult result =
       sh_baker::BakeSHLightMap(scene, surface_points, raster_config, config);
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
@@ -141,7 +141,11 @@ int main(int argc, char* argv[]) {
   // Downsample if needed
   if (FLAGS_supersample_scale > 1) {
     LOG(INFO) << "Downsampling from scale " << FLAGS_supersample_scale << "...";
-    texture = sh_baker::DownsampleSHTexture(texture, FLAGS_supersample_scale);
+    result.sh_texture = sh_baker::DownsampleSHTexture(result.sh_texture,
+                                                      FLAGS_supersample_scale);
+    result.environment_visibility_texture =
+        sh_baker::DownsampleEnvironmentVisibilityTexture(
+            result.environment_visibility_texture, FLAGS_supersample_scale);
     validity_mask = sh_baker::DownsampleValidityMask(
         validity_mask, raster_config.width, raster_config.height,
         raster_config.supersample_scale);
@@ -150,7 +154,11 @@ int main(int argc, char* argv[]) {
   // Dilate
   if (FLAGS_dilation > 0) {
     LOG(INFO) << "Dilating " << FLAGS_dilation << " passes...";
-    sh_baker::Dilate(texture.width, texture.height, texture.pixels,
+    sh_baker::Dilate(result.sh_texture.width, result.sh_texture.height,
+                     result.sh_texture.pixels, validity_mask, FLAGS_dilation);
+    sh_baker::Dilate(result.environment_visibility_texture.width,
+                     result.environment_visibility_texture.height,
+                     result.environment_visibility_texture.pixel_data,
                      validity_mask, FLAGS_dilation);
   }
 
@@ -169,7 +177,9 @@ int main(int argc, char* argv[]) {
       mode = sh_baker::SaveMode::kSplitChannels;
     }
 
-    if (!sh_baker::SaveSHLightMap(texture, lightmap_path, mode)) {
+    if (!sh_baker::SaveSHLightMap(result.sh_texture,
+                                  result.environment_visibility_texture,
+                                  lightmap_path, mode)) {
       LOG(ERROR) << "Failed to save output.";
       return 1;
     }

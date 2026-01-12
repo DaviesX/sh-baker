@@ -1,14 +1,15 @@
 #include "dilation.h"
 
-#include <algorithm>
+#include "sh_coeffs.h"
 
 namespace sh_baker {
 
-void Dilate(int width, int height, std::vector<SHCoeffs>& pixels,
+template <typename T>
+void Dilate(int width, int height, std::vector<T>& pixels,
             std::vector<uint8_t>& mask, int passes) {
   if (pixels.empty() || mask.empty() || pixels.size() != mask.size()) return;
 
-  std::vector<SHCoeffs> next_pixels = pixels;
+  std::vector<T> next_pixels = pixels;
   std::vector<uint8_t> next_mask = mask;
 
   for (int p = 0; p < passes; ++p) {
@@ -30,7 +31,7 @@ void Dilate(int width, int height, std::vector<SHCoeffs>& pixels,
         }
 
         // It is invalid. Check neighbors.
-        SHCoeffs accum;
+        T accum = T();
         // Initialize zero? SHCoeffs constructor does zero.
 
         int count = 0;
@@ -70,5 +71,14 @@ void Dilate(int width, int height, std::vector<SHCoeffs>& pixels,
     if (!changed) break;
   }
 }
+
+template void Dilate<SHCoeffs>(int width, int height,
+                               std::vector<SHCoeffs>& pixels,
+                               std::vector<uint8_t>& mask, int passes);
+template void Dilate<float>(int width, int height, std::vector<float>& pixels,
+                            std::vector<uint8_t>& mask, int passes);
+template void Dilate<uint8_t>(int width, int height,
+                              std::vector<uint8_t>& pixels,
+                              std::vector<uint8_t>& mask, int passes);
 
 }  // namespace sh_baker

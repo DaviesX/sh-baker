@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <random>
 
@@ -16,8 +17,23 @@
 #include "rasterizer.h"
 
 namespace sh_baker {
-
 namespace {
+
+struct TraceConfig {
+  TraceConfig(const RTCScene rtc_scene, const Scene& scene, int max_depth,
+              int num_light_samples, std::function<void()> on_direct_hit_sky_fn)
+      : rtc_scene(rtc_scene),
+        scene(scene),
+        max_depth(max_depth),
+        num_light_samples(num_light_samples),
+        on_direct_hit_sky_fn(on_direct_hit_sky_fn) {}
+
+  const RTCScene rtc_scene;
+  const Scene& scene;
+  const int max_depth;
+  const int num_light_samples;
+  const std::function<void()> on_direct_hit_sky_fn;
+};
 
 Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
   std::uniform_real_distribution<float> dist(0.0f, 1.0f);
@@ -51,28 +67,31 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
 // to the surface.
 //
 // This is also known as a technique called next event estimation (NEE).
-Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
-                      const Eigen::Vector3f& origin, const Eigen::Vector3f& dir,
-                      int depth, int max_depth, int num_light_samples,
+Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
+                      const Eigen::Vector3f& dir, int depth,
                       std::mt19937& rng) {
-  if (depth > max_depth) return Eigen::Vector3f::Zero();
+  if (depth > config.max_depth) return Eigen::Vector3f::Zero();
 
   Ray visibility_ray;
   visibility_ray.origin = origin;
   visibility_ray.direction = dir;
   visibility_ray.tnear = 0.001f;
 
-  std::optional<Occlusion> occ = FindOcclusion(rtc_scene, visibility_ray);
+  std::optional<Occlusion> occ =
+      FindOcclusion(config.rtc_scene, visibility_ray);
 
   if (!occ.has_value()) {
     // Sky is handled by NEE (EvaluateLights() and
     // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
     // counting.
+    if (depth == 0) {
+      config.on_direct_hit_sky_fn();
+    }
     return Eigen::Vector3f::Zero();
   }
 
   // Hit surface
-  const Material& mat = scene.materials[occ->material_id];
+  const Material& mat = config.scene.materials[occ->material_id];
   float alpha = GetAlpha(mat, occ->uv);
 
   Eigen::Vector3f color = Eigen::Vector3f::Zero();
@@ -81,8 +100,7 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   if (alpha < 1.0f) {
     // Transmission
     Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
-    Eigen::Vector3f transmission = Trace(rtc_scene, scene, hit_pos, dir, depth,
-                                         max_depth, num_light_samples, rng);
+    Eigen::Vector3f transmission = Trace(config, hit_pos, dir, depth + 1, rng);
     color += (1.0f - alpha) * transmission;
   }
 
@@ -106,8 +124,8 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
   Eigen::Vector3f L_direct =
-      EvaluateLightSamples(scene, rtc_scene, hit_pos, occ->normal, -dir, mat,
-                           occ->uv, num_light_samples, rng);
+      EvaluateLightSamples(config.scene, config.rtc_scene, hit_pos, occ->normal,
+                           -dir, mat, occ->uv, config.num_light_samples, rng);
   color += alpha * L_direct;
 
   // Indirect Lighting (Recursive)
@@ -119,8 +137,7 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   }
 
   Eigen::Vector3f incoming =
-      Trace(rtc_scene, scene, hit_pos, sample.direction, depth + 1, max_depth,
-            num_light_samples, rng);
+      Trace(config, hit_pos, sample.direction, depth + 1, rng);
   Eigen::Vector3f brdf =
       EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
   float cosine_term = occ->normal.dot(sample.direction);
@@ -131,13 +148,43 @@ Eigen::Vector3f Trace(RTCScene rtc_scene, const Scene& scene,
   return color;
 }
 
+template <typename T>
+std::vector<T> DownsampleTexture(const std::vector<T>& input, int width,
+                                 int height, int scale) {
+  if (scale <= 1) return input;
+
+  std::vector<T> output(width * height);
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      T avg = T();
+      int count = 0;
+      for (int dy = 0; dy < scale; ++dy) {
+        for (int dx = 0; dx < scale; ++dx) {
+          int sx = x * scale + dx;
+          int sy = y * scale + dy;
+          if (sx < width && sy < height) {
+            avg += input[sy * width + sx];
+            count++;
+          }
+        }
+      }
+      if (count > 0) {
+        output[y * width + x] = avg * (1.f / float(count));
+      }
+    }
+  }
+
+  return output;
+}
+
 }  // namespace
 
-SHTexture BakeSHLightMap(const Scene& scene,
-                         const std::vector<SurfacePoint>& surface_points,
-                         const RasterConfig& raster_config,
-                         const BakeConfig& config) {
-  SHTexture output;
+BakeResult BakeSHLightMap(const Scene& scene,
+                          const std::vector<SurfacePoint>& surface_points,
+                          const RasterConfig& raster_config,
+                          const BakeConfig& config) {
+  BakeResult result;
   // If supersampling is used, the rasterized points size might be larger than
   // config.width * config.height implies if config was the original size.
   // Actually, RasterConfig passed here should match surface_points.
@@ -157,9 +204,13 @@ SHTexture BakeSHLightMap(const Scene& scene,
     // supersample_scale tells us the factor.
   }
 
-  output.width = width;
-  output.height = height;
-  output.pixels.resize(width * height);
+  result.sh_texture.width = width;
+  result.sh_texture.height = height;
+  result.sh_texture.pixels.resize(width * height);
+
+  result.environment_visibility_texture.width = width;
+  result.environment_visibility_texture.height = height;
+  result.environment_visibility_texture.pixel_data.resize(width * height);
 
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
@@ -222,16 +273,22 @@ SHTexture BakeSHLightMap(const Scene& scene,
                                            rng, &sh_accum);
 
             // Indirect lighting.
+            TraceConfig trace_config(
+                rtc_scene, scene, config.bounces, config.num_light_samples,
+                /*on_direct_hit_sky_fn=*/[&result, idx]() {
+                  result.environment_visibility_texture.pixel_data[idx] += 1.0f;
+                });
             Eigen::Vector3f Li_indirect =
-                Trace(rtc_scene, scene, origin, dir_world, /*depth=*/0,
-                      config.bounces, config.num_light_samples, rng) *
+                Trace(trace_config, origin, dir_world, /*depth=*/0, rng) *
                 inv_pdf_uniform;
 
             AccumulateRadiance(Li_indirect, dir_world, &sh_accum);
           }
 
           // Average
-          output.pixels[idx] = sh_accum * (1.0f / config.samples);
+          result.sh_texture.pixels[idx] = sh_accum * (1.0f / config.samples);
+          result.environment_visibility_texture.pixel_data[idx] *=
+              (1.0f / config.samples);
         }
       });
   std::cout << std::endl;
@@ -240,36 +297,25 @@ SHTexture BakeSHLightMap(const Scene& scene,
   ReleaseBVH(rtc_scene);
   rtcReleaseDevice(device);
 
-  return output;
+  return result;
 }
 
 SHTexture DownsampleSHTexture(const SHTexture& input, int scale) {
-  if (scale <= 1) return input;
-
   SHTexture output;
   output.width = input.width / scale;
   output.height = input.height / scale;
-  output.pixels.resize(output.width * output.height);
+  output.pixels =
+      DownsampleTexture(input.pixels, input.width, input.height, scale);
+  return output;
+}
 
-  for (int y = 0; y < output.height; ++y) {
-    for (int x = 0; x < output.width; ++x) {
-      SHCoeffs avg;
-      int count = 0;
-      for (int dy = 0; dy < scale; ++dy) {
-        for (int dx = 0; dx < scale; ++dx) {
-          int sx = x * scale + dx;
-          int sy = y * scale + dy;
-          if (sx < input.width && sy < input.height) {
-            avg += input.pixels[sy * input.width + sx];
-            count++;
-          }
-        }
-      }
-      if (count > 0) {
-        output.pixels[y * output.width + x] = avg * (1.0f / count);
-      }
-    }
-  }
+Texture32F DownsampleEnvironmentVisibilityTexture(const Texture32F& input,
+                                                  int scale) {
+  Texture32F output;
+  output.width = input.width / scale;
+  output.height = input.height / scale;
+  output.pixel_data =
+      DownsampleTexture(input.pixel_data, input.width, input.height, scale);
   return output;
 }
 
