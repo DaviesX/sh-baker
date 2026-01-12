@@ -552,12 +552,19 @@ void ProcessLight(const tinygltf::Model& model,
 
   // Position/Direction from transform
   l.position = transform.translation();
-  // Default direction is -Z. Apply rotation to it.
   l.direction = transform.rotation() * Eigen::Vector3f(0, 0, -1);
-  l.direction.normalize();
 
-  if (light_obj.Has("name")) {
-    // We could store name if Light struct had one
+  float len_sq = l.direction.squaredNorm();
+  if (len_sq > 1e-8f) {
+    if (std::isinf(len_sq) || std::isnan(len_sq)) {
+      LOG(WARNING) << "Light direction is NaN/Inf. Fallback to -Z.";
+      l.direction = Eigen::Vector3f(0, 0, -1);
+    } else {
+      l.direction.normalize();
+    }
+  } else {
+    LOG(WARNING) << "Light direction is zero. Fallback to -Z.";
+    l.direction = Eigen::Vector3f(0, 0, -1);
   }
 
   std::string type_str;
@@ -675,7 +682,6 @@ std::optional<Environment> LoadEnvironmentFromImage(
 
   // Load directly using stbi
   int w, h, c;
-  // Try loading as float (HDR)
   // Try loading as float (HDR)
   if (stbi_is_hdr(abs_path.string().c_str())) {
     float* data = stbi_loadf(abs_path.string().c_str(), &w, &h, &c, 3);
@@ -795,13 +801,16 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     LOG(ERROR) << "TinyGLTF error: " << err;
   }
   if (!ret) {
+    LOG(INFO) << "LoadScene: tinygltf failed";
     return std::nullopt;
   }
 
   Scene scene;
 
+  // Process Materials
   ProcessMaterials(model, gltf_file.parent_path(), &scene);
 
+  // Traverse Nodes to find Meshes/Lights
   const tinygltf::Scene& gltf_scene =
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
   for (int node_index : gltf_scene.nodes) {

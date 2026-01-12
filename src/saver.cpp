@@ -739,10 +739,20 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
         type_str = "spot";
 
         tinygltf::Value::Object spot_obj;
+        // Clamp to [-1, 1] to avoid NaN from std::acos with -ffast-math
+        // Use manual clamping to avoid potential issues with -ffast-math
+        // optimizations impacting std::clamp or std::acos behavior with edge
+        // cases.
+        auto safe_acos = [](float cos_val) -> double {
+          if (cos_val >= 1.0f) return 0.0;
+          if (cos_val <= -1.0f) return 3.14159265358979323846;
+          return std::acos(cos_val);
+        };
+
         spot_obj["innerConeAngle"] =
-            tinygltf::Value(double(std::acos(light.cos_inner_cone)));
+            tinygltf::Value(safe_acos(light.cos_inner_cone));
         spot_obj["outerConeAngle"] =
-            tinygltf::Value(double(std::acos(light.cos_outer_cone)));
+            tinygltf::Value(safe_acos(light.cos_outer_cone));
         light_obj["spot"] = tinygltf::Value(spot_obj);
       }
       light_obj["type"] = tinygltf::Value(type_str);
