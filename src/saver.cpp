@@ -710,6 +710,106 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     }
   }
 
+  // Export Lights (KHR_lights_punctual)
+  if (!scene.lights.empty()) {
+    tinygltf::Value::Array light_array;
+    std::vector<int> light_node_indices;
+
+    int light_idx = 0;
+    for (const auto& light : scene.lights) {
+      if (light.type == Light::Type::Area) continue;
+
+      tinygltf::Value::Object light_obj;
+
+      // Color
+      std::vector<tinygltf::Value> color_vec;
+      color_vec.push_back(tinygltf::Value(double(light.color.x())));
+      color_vec.push_back(tinygltf::Value(double(light.color.y())));
+      color_vec.push_back(tinygltf::Value(double(light.color.z())));
+      light_obj["color"] = tinygltf::Value(color_vec);
+
+      light_obj["intensity"] = tinygltf::Value(double(light.intensity));
+
+      std::string type_str;
+      if (light.type == Light::Type::Directional) {
+        type_str = "directional";
+      } else if (light.type == Light::Type::Point) {
+        type_str = "point";
+      } else if (light.type == Light::Type::Spot) {
+        type_str = "spot";
+
+        tinygltf::Value::Object spot_obj;
+        spot_obj["innerConeAngle"] =
+            tinygltf::Value(double(std::acos(light.cos_inner_cone)));
+        spot_obj["outerConeAngle"] =
+            tinygltf::Value(double(std::acos(light.cos_outer_cone)));
+        light_obj["spot"] = tinygltf::Value(spot_obj);
+      }
+      light_obj["type"] = tinygltf::Value(type_str);
+      light_obj["name"] = tinygltf::Value("Light_" + std::to_string(light_idx));
+
+      light_array.push_back(tinygltf::Value(light_obj));
+
+      // Create Node for this light
+      tinygltf::Node node;
+      node.name = "LightNode_" + std::to_string(light_idx);
+
+      // Position (Translation)
+      node.translation.push_back(light.position.x());
+      node.translation.push_back(light.position.y());
+      node.translation.push_back(light.position.z());
+
+      // Orientation (Rotation)
+      // glTF lights point down -Z. We need to align -Z with light.direction.
+      if (light.type == Light::Type::Directional ||
+          light.type == Light::Type::Spot) {
+        // Construct Basis
+        // Z = -direction
+        Eigen::Vector3f Z = -light.direction.normalized();
+        // Handle Up vector case
+        Eigen::Vector3f up = Eigen::Vector3f::UnitY();
+        if (std::abs(Z.dot(up)) > 0.99f) up = Eigen::Vector3f::UnitX();
+
+        Eigen::Vector3f X = up.cross(Z).normalized();
+        Eigen::Vector3f Y = Z.cross(X).normalized();
+
+        // Convert to Quaternion
+        // Matrix: [X Y Z]
+        Eigen::Matrix3f rot;
+        rot.col(0) = X;
+        rot.col(1) = Y;
+        rot.col(2) = Z;
+
+        Eigen::Quaternionf q(rot);
+        node.rotation.push_back(q.x());
+        node.rotation.push_back(q.y());
+        node.rotation.push_back(q.z());
+        node.rotation.push_back(q.w());
+      }
+
+      // Extension on Node
+      // Using node.light tells tinygltf to write the KHR_lights_punctual
+      // extension
+      node.light = light_idx;
+
+      model.nodes.push_back(node);
+      gscene.nodes.push_back(static_cast<int>(model.nodes.size() - 1));
+
+      light_idx++;
+    }
+
+    if (light_idx > 0) {
+      if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
+                    "KHR_lights_punctual") == model.extensionsUsed.end()) {
+        model.extensionsUsed.push_back("KHR_lights_punctual");
+      }
+
+      tinygltf::Value::Object ext_container;
+      ext_container["lights"] = tinygltf::Value(light_array);
+      model.extensions["KHR_lights_punctual"] = tinygltf::Value(ext_container);
+    }
+  }
+
   model.scenes.push_back(gscene);
   model.defaultScene = 0;
 
