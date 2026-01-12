@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace sh_baker {
@@ -22,6 +23,18 @@ struct Texture {
   uint32_t height = 0;
   uint32_t channels = 0;
   std::vector<uint8_t> pixel_data;
+};
+
+// --- Texture32F ---
+struct Texture32F {
+  // If set, the texture is loaded from a file. This denotes the provenance of
+  // the texture.
+  std::optional<std::filesystem::path> file_path;
+
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t channels = 0;
+  std::vector<float> pixel_data;
 };
 
 // --- Material ---
@@ -71,17 +84,17 @@ struct Light {
   int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
+// --- Environment ---
 struct Environment {
   enum class Type { Texture, Preetham };
   Type type;
 
   // For Texture type (HDRi)
-  Texture texture;
-  // CDFs for Importance Sampling
-  std::vector<float> marginal_cdf;                   // V-axis
-  std::vector<std::vector<float>> conditional_cdfs;  // U-axis per V
+  std::variant<Texture, Texture32F> texture;
 
   // For Preetham type
+  // Direction of sun (geometric up for noon sun or from surface looking to
+  // sky).
   Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0);
   float turbidity = 2.5f;
 
@@ -95,9 +108,6 @@ struct Scene {
   std::vector<Light> lights;
   std::optional<Environment> environment;
 };
-
-// Builds the CDFs for the environment texture if present.
-void BuildEnvironmentCDF(Environment& env);
 
 // Transforms the geometry by the transform matrix.
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);

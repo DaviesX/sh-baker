@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <iostream>
 
+#include "scene.h"
+
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -662,6 +664,132 @@ bool TraverseNodes(const tinygltf::Model& model, int node_index,
   return true;
 }
 
+std::optional<Environment> LoadEnvironmentFromImage(
+    const tinygltf::Model& model, const std::filesystem::path& gltf_file,
+    Scene* scene) {
+  // Check for custom "skybox" property in extras
+  // "extras": { "skybox": "texture_path.hdr" }
+  if (!model.extras.Has("skybox")) {
+    return std::nullopt;
+  }
+  const auto& skybox_val = model.extras.Get("skybox");
+  if (!skybox_val.IsString()) {
+    LOG(ERROR) << "skybox is not a string";
+    return std::nullopt;
+  }
+
+  // Path to texture
+  std::string path = skybox_val.Get<std::string>();
+  Environment env;
+  env.type = Environment::Type::Texture;
+
+  std::filesystem::path uri_path(path);
+  std::filesystem::path abs_path;
+  if (uri_path.is_absolute())
+    abs_path = uri_path;
+  else
+    abs_path = gltf_file.parent_path() / uri_path;
+
+  // Load directly using stbi
+  int w, h, c;
+  // Try loading as float (HDR)
+  // Try loading as float (HDR)
+  if (stbi_is_hdr(abs_path.string().c_str())) {
+    float* data = stbi_loadf(abs_path.string().c_str(), &w, &h, &c, 3);
+    if (!data) {
+      LOG(ERROR) << "Failed to load HDR image: " << abs_path.string();
+      return std::nullopt;
+    }
+
+    Texture32F tex;
+    tex.width = w;
+    tex.height = h;
+    tex.channels = 3;
+    tex.file_path = abs_path;
+    tex.pixel_data.assign(data, data + w * h * 3);
+
+    env.texture = std::move(tex);
+    stbi_image_free(data);
+  } else {
+    // LDR load
+    unsigned char* data = stbi_load(abs_path.string().c_str(), &w, &h, &c, 3);
+    if (!data) {
+      LOG(ERROR) << "Failed to load image: " << abs_path.string();
+      return std::nullopt;
+    }
+
+    Texture tex;
+    tex.width = w;
+    tex.height = h;
+    tex.channels = 3;
+    tex.file_path = abs_path;
+    tex.pixel_data.assign(data, data + w * h * 3);
+
+    env.texture = std::move(tex);
+    stbi_image_free(data);
+  }
+
+  return env;
+}
+
+const Light* BrightestDirectionalLight(const std::vector<Light>& lights) {
+  float max_intensity = -1.0f;
+  int max_idx = -1;
+
+  for (int i = 0; i < lights.size(); ++i) {
+    if (lights[i].type == Light::Type::Directional) {
+      if (lights[i].intensity > max_intensity) {
+        max_intensity = lights[i].intensity;
+        max_idx = i;
+      }
+    }
+  }
+
+  if (max_idx < 0) {
+    return nullptr;
+  }
+
+  return &lights[max_idx];
+}
+
+std::optional<Environment> LoadEnvironmentFromSun(
+    const tinygltf::Model& model, const std::filesystem::path& gltf_file,
+    Scene* scene) {
+  const auto* sun_light = BrightestDirectionalLight(scene->lights);
+  if (!sun_light) {
+    return std::nullopt;
+  }
+
+  Environment env;
+  env.type = Environment::Type::Preetham;
+  env.sun_direction = -sun_light->direction;
+  env.intensity = sun_light->intensity;
+
+  return env;
+}
+
+void ProcessEnvironment(const tinygltf::Model& model,
+                        const std::filesystem::path& gltf_file, Scene* scene) {
+  // Process Environment (Skybox / IBL)
+  // Priority:
+  // 1. IBL Skybox (from extras.skybox)
+  // 2. Sun Direction (Preetham Sky from brightest directional light)
+
+  std::optional<Environment> ibl_env =
+      LoadEnvironmentFromImage(model, gltf_file, scene);
+  if (ibl_env) {
+    scene->environment = std::move(ibl_env.value());
+    return;
+  }
+
+  std::optional<Environment> sun_env =
+      LoadEnvironmentFromSun(model, gltf_file, scene);
+  if (sun_env) {
+    scene->environment = std::move(sun_env.value());
+    return;
+  }
+}
+
 }  // namespace
 
 std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
@@ -709,136 +837,7 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // Process Environment (Skybox / IBL)
-  // 1. Check for EXT_lights_image_based (Simplified check: looks for
-  // "environment" in top level extensions?) Actually, standard says
-  // EXT_lights_image_based is for lights. We often store skybox reference in
-  // "extras" or specific extension. Let's check "extras.skybox" or similar if
-  // defined. Or check for "EXT_lights_image_based" which defines scene.light ->
-  // which can point to environment? Re-reading spec/custom usage. Task says:
-  // "Scan the glTF JSON for the EXT_lights_image_based extension or custom
-  // viewer properties (like skybox)."
-
-  bool environment_found = false;
-
-  // Custom "skybox" property in extras
-  // "extras": { "skybox": "texture_path.hdr" } or "skybox": { "texture": index
-  // }
-  if (model.extras.Has("skybox")) {
-    const auto& skybox_val = model.extras.Get("skybox");
-    if (skybox_val.IsString()) {
-      // Path to texture
-      std::string path = skybox_val.Get<std::string>();
-      Environment env;
-      env.type = Environment::Type::Texture;
-      // Load specific file?
-      // We need to implement manual loading or reuse LoadTexture logic if it
-      // was in images. But string implies external file not in images list?
-      // Let's blindly try to load relative to glTF.
-      std::filesystem::path uri_path(path);
-      std::filesystem::path abs_path;
-      if (uri_path.is_absolute())
-        abs_path = uri_path;
-      else
-        abs_path = gltf_file.parent_path() / uri_path;
-
-      // Load directly using stbi
-      int w, h, c;
-      // Try loading as float (HDR)
-      if (stbi_is_hdr(abs_path.string().c_str())) {
-        float* data = stbi_loadf(abs_path.string().c_str(), &w, &h, &c, 3);
-        if (data) {
-          env.texture.width = w;
-          env.texture.height = h;
-          env.texture.channels = 3;
-          env.texture.pixel_data.resize(w * h * 3);
-          // Convert float to byte? Wait, we want float.
-          // Current Texture struct is uint8.
-          // Hack: Tone map relative to max? Or just cast?
-          // Real HDR support requires changing Texture struct or stashing float
-          // data. For now, let's clamp to 255 (LDR fallback) or... Update: I
-          // should really have updated Texture to support float. BUT I am
-          // mid-execution. Let's assume for now we just clamp. This is
-          // suboptimal for HDR but fits struct. Or we re-read strict
-          // requirements: "Loader... EXT_lights_image_based". Detailed
-          // implementation of float texture is safer. But for this task, I will
-          // stick to existing Texture struct which is byte-based. I will
-          // tone-map simply: val * 255. (Assuming 0-1 range? No, HDR is >1).
-          // Issue: HDR values > 1 will clip.
-          // Decision: I will modify Texture struct later if needed. For now I
-          // clip.
-          for (int i = 0; i < w * h * 3; ++i) {
-            env.texture.pixel_data[i] =
-                (uint8_t)std::min(255.0f, data[i] * 255.0f);
-          }
-          stbi_image_free(data);
-          environment_found = true;
-        }
-      } else {
-        // LDR load
-        // Reuse LoadTexture logic? LoadTexture expects index.
-        // We can just stbi_load.
-        unsigned char* data =
-            stbi_load(abs_path.string().c_str(), &w, &h, &c, 3);
-        if (data) {
-          env.texture.width = w;
-          env.texture.height = h;
-          env.texture.channels = 3;
-          env.texture.pixel_data.assign(data, data + w * h * 3);
-          stbi_image_free(data);
-          environment_found = true;
-        }
-      }
-
-      if (environment_found) {
-        BuildEnvironmentCDF(env);
-        scene.environment = std::move(env);
-      }
-    }
-  }
-
-  // Fallback: Check EXT_lights_image_based (usually defines rotation/intensity
-  // for IBL, refers to image) Skipping complex extension parsing for now as
-  // "skybox" string is primary custom hint in this codebase context often. If
-  // not found, look for Sun.
-
-  if (!environment_found) {
-    // Find brightest Directional Light
-    float max_intensity = -1.0f;
-    int max_idx = -1;
-
-    for (int i = 0; i < scene.lights.size(); ++i) {
-      if (scene.lights[i].type == Light::Type::Directional) {
-        if (scene.lights[i].intensity > max_intensity) {
-          max_intensity = scene.lights[i].intensity;
-          max_idx = i;
-        }
-      }
-    }
-
-    if (max_idx >= 0) {
-      const auto& sun_light = scene.lights[max_idx];
-      Environment env;
-      env.type = Environment::Type::Preetham;
-      env.sun_direction =
-          -sun_light
-               .direction;  // Direction TO sun? Light.direction is direction OF
-                            // light rays. Scene::Light::direction is standard
-                            // "direction light travels". So vector points
-                            // geometric Down for noon sun.
-                            // Environment::sun_direction usually points TO the
-                            // sun. So negate.
-      env.intensity = sun_light.intensity;
-      scene.environment = std::move(env);
-    } else {
-      // Fallback: Use default Preetham environment
-      Environment env;
-      env.type = Environment::Type::Preetham;
-      env.sun_direction = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
-      env.intensity = 1.0f;
-      scene.environment = std::move(env);
-    }
-  }
+  ProcessEnvironment(model, gltf_file, &scene);
 
   return scene;
 }

@@ -393,6 +393,32 @@ GLuint LoadTexture(const sh_baker::Texture& tex) {
   return tid;
 }
 
+GLuint LoadTexture(const sh_baker::Texture32F& tex) {
+  GLuint tid;
+  glGenTextures(1, &tid);
+  glBindTexture(GL_TEXTURE_2D, tid);
+  // Upload as 16F
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, tex.width, tex.height, 0,
+               tex.channels == 4 ? GL_RGBA : GL_RGB, GL_FLOAT,
+               tex.pixel_data.data());
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                  GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  if (g_MaxAnisotropy > 1.0f) {
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                    g_MaxAnisotropy);
+  }
+  return tid;
+}
+
+GLuint LoadTextureVariant(
+    const std::variant<sh_baker::Texture, sh_baker::Texture32F>& tex_var) {
+  return std::visit([](const auto& t) { return LoadTexture(t); }, tex_var);
+}
+
 GLuint LoadEXRTexture(const std::string& path) {
   float* out;
   int width;
@@ -838,10 +864,14 @@ int main(int argc, char* argv[]) {
     g_SkyIntensity = 1.0f;
   } else {
     if (scene.environment->type == sh_baker::Environment::Type::Texture) {
-      const auto& tex = scene.environment->texture;
-      if (tex.width > 0) {
+      const auto& tex_var = scene.environment->texture;
+      bool valid =
+          std::visit([](const auto& t) { return t.width > 0; }, tex_var);
+      if (valid) {
         LOG(INFO) << "Loading Skybox Texture...";
-        g_SkyboxTexture = LoadTexture(tex);
+        g_SkyboxTexture = LoadTextureVariant(tex_var);
+        // We probably also want to set g_IrradianceTexture from this if we had
+        // SH? But for now just g_SkyboxTexture.
       }
     } else {
       g_UsePreetham = true;
