@@ -202,52 +202,6 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
   return incoming.radiance.cwiseProduct(cos_brdf);
 }
 
-struct EnvironmentSample {
-  Eigen::Vector3f direction;  // Incoming direction (L)
-  Eigen::Vector3f radiance;
-  float pdf = 0.f;
-};
-
-EnvironmentSample SampleEnvironment(const Scene& scene, std::mt19937& rng);
-
-struct EnvironmentIncoming {
-  Eigen::Vector3f radiance;
-  Eigen::Vector3f incident;
-  float cos_n;
-};
-
-inline EnvironmentIncoming EnvironmentIncomingRadiance(
-    const EnvironmentSample& sample, const Eigen::Vector3f& P,
-    const Eigen::Vector3f& N, Ray* visibility_ray) {
-  // Infinite distance, but for ray tracing we set tfar large.
-  visibility_ray->origin = P;
-  visibility_ray->direction = sample.direction;
-  visibility_ray->tnear = 0.001f;
-  visibility_ray->tfar = 1.0e10f;
-
-  float cos_n = N.dot(sample.direction);
-  if (cos_n < 0.f) {
-    return EnvironmentIncoming{Eigen::Vector3f::Zero(), sample.direction,
-                               cos_n};
-  }
-  return EnvironmentIncoming{sample.radiance, sample.direction, cos_n};
-}
-
-template <typename Brdf>
-Eigen::Vector3f EnvironmentRadiance(const EnvironmentSample& sample,
-                                    const Eigen::Vector3f& P,
-                                    const Eigen::Vector3f& N, Brdf brdf,
-                                    Ray* visibility_ray) {
-  EnvironmentIncoming incoming =
-      EnvironmentIncomingRadiance(sample, P, N, visibility_ray);
-  if (incoming.cos_n < 0.f) {
-    return Eigen::Vector3f::Zero();
-  }
-
-  Eigen::Vector3f cos_brdf = incoming.cos_n * brdf(incoming.incident);
-  return incoming.radiance.cwiseProduct(cos_brdf);
-}
-
 }  // namespace light_internal
 
 // Evaluates the sun and samples `num_samples` lights based on the distribution

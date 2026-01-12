@@ -840,8 +840,6 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // scene.environment.reset();
-
   return scene;
 }
 
