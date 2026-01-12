@@ -330,7 +330,7 @@ TEST(SaverTest, SaveComplexScene) {
   EXPECT_EQ(dir_count, 1);
 
   // Cleanup
-  // std::filesystem::remove_all(temp_dir);
+  std::filesystem::remove_all(temp_dir);
 }
 
 }  // namespace sh_baker
