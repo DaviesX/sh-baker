@@ -677,6 +677,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   const auto& scene = *scene_opt;
+  LOG(INFO) << "Scene loaded successfully.";
+  LOG(INFO) << "  Geometries: " << scene.geometries.size();
+  LOG(INFO) << "  Materials: " << scene.materials.size();
+  LOG(INFO) << "  Lights: " << scene.lights.size();
 
   // --- Upload Geometry ---
   for (const auto& geo : scene.geometries) {
