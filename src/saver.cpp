@@ -594,6 +594,49 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     gscene.nodes.push_back(static_cast<int>(model.nodes.size() - 1));
   }
 
+  // Export Environment (Skybox)
+  if (scene.environment &&
+      scene.environment->type == Environment::Type::Texture) {
+    const auto& env_tex_var = scene.environment->texture;
+    std::optional<std::filesystem::path> env_path;
+
+    std::visit([&](const auto& tex) { env_path = tex.file_path; }, env_tex_var);
+
+    if (env_path) {
+      std::filesystem::path filename = env_path->filename();
+      std::filesystem::path destination = path.parent_path() / filename;
+
+      try {
+        std::filesystem::copy_file(
+            *env_path, destination,
+            std::filesystem::copy_options::overwrite_existing);
+
+        // Add "skybox" to extras
+        tinygltf::Value::Object extras_obj;
+        // If extras already exists and is object, use it?
+        // tinygltf::Model::extras is Value.
+
+        // Simpler: Just set "skybox" in extras value.
+        // But tinygltf::Value is immutable-ish wrapper? No, it has Setters?
+        // Actually model.extras is a tinygltf::Value.
+        // We need to construct a Value that is an Object.
+
+        // Current model.extras is empty (default).
+        // Let's create an object.
+        tinygltf::Value::Object extras_map;
+        if (model.extras.IsObject()) {
+          // Keep existing? Not implemented yet. Assuming new model.
+        }
+        extras_map["skybox"] = tinygltf::Value(filename.string());
+        model.extras = tinygltf::Value(extras_map);
+
+      } catch (const std::filesystem::filesystem_error& e) {
+        LOG(ERROR) << "Failed to copy environment map from " << *env_path
+                   << " to " << destination << ". Cause: " << e.what();
+      }
+    }
+  }
+
   model.scenes.push_back(gscene);
   model.defaultScene = 0;
 

@@ -114,6 +114,9 @@ std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
 std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry);
 std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 
+// Returns the surface area of the geometry.
+float SurfaceArea(const Geometry& geometry);
+
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);
 

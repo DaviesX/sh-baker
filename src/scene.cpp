@@ -41,6 +41,18 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry) {
   return tangents;
 }
 
+float SurfaceArea(const Geometry& geometry) {
+  float total_area = 0.0f;
+  for (size_t i = 0; i < geometry.indices.size(); i += 3) {
+    Eigen::Vector3f v0 = geometry.vertices[geometry.indices[i]];
+    Eigen::Vector3f v1 = geometry.vertices[geometry.indices[i + 1]];
+    Eigen::Vector3f v2 = geometry.vertices[geometry.indices[i + 2]];
+    float tri_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
+    total_area += tri_area;
+  }
+  return total_area;
+}
+
 RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
   if (!device) {
     LOG(ERROR) << "Invalid RTCDevice provided to BuildBVH";

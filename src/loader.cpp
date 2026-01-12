@@ -402,24 +402,7 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     area_light.geometry_index = static_cast<int>(scene->geometries.size()) - 1;
 
     // Surface Area
-    float total_area = 0.0f;
-
-    for (size_t i = 0; i < added_geo.indices.size(); i += 3) {
-      uint32_t i0 = added_geo.indices[i];
-      uint32_t i1 = added_geo.indices[i + 1];
-      uint32_t i2 = added_geo.indices[i + 2];
-
-      if (i0 < added_geo.vertices.size() && i1 < added_geo.vertices.size() &&
-          i2 < added_geo.vertices.size()) {
-        const Eigen::Vector3f& v0 = added_geo.vertices[i0];
-        const Eigen::Vector3f& v1 = added_geo.vertices[i1];
-        const Eigen::Vector3f& v2 = added_geo.vertices[i2];
-
-        float tri_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
-        total_area += tri_area;
-      }
-    }
-    area_light.area = total_area;
+    area_light.area = SurfaceArea(added_geo);
 
     // Intensity. Color will come from the material's albedo texture.
     area_light.intensity = mat.emission_intensity;
