@@ -92,13 +92,14 @@ struct Environment {
   Type type;
 
   // For Texture type (HDRi)
-  std::variant<Texture, Texture32F> texture;
-  float intensity = 1.0f;
+  Texture32F texture;
+  float intensity_multiplier = 1.0f;
 
   // For Preetham type
   // Direction of sun (geometric up for noon sun or from surface looking to
   // sky).
   Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0);
+  float sun_intensity = 1.0f;
   float turbidity = 2.5f;
 
   // For both types.

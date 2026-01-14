@@ -5,7 +5,6 @@ out vec4 FragColor;
 uniform sampler2D u_SkyboxTex;  // Equirectangular
 uniform int u_UsePreetham;
 uniform vec3 u_SunDir;
-uniform float u_SkyIntensity;
 
 in vec3 vWorldPos;
 
@@ -29,7 +28,7 @@ vec3 PreethamSky(vec3 viewDir, vec3 sunDir) {
   float sunUtils = step(0.9995, cosGamma);  // Small disk
 
   vec3 skyColor = rayleigh * 0.5 + vec3(mie) + vec3(sunUtils) * 20.0;
-  return skyColor * u_SkyIntensity;
+  return skyColor;
 }
 
 vec3 SampleSkybox(vec3 dir) {
@@ -44,7 +43,7 @@ vec3 SampleSkybox(vec3 dir) {
     // Flip UV
     uv.y = 1.0 - uv.y;
 
-    return texture(u_SkyboxTex, uv).rgb * u_SkyIntensity;
+    return texture(u_SkyboxTex, uv).rgb;
   }
 }
 

@@ -707,12 +707,19 @@ std::optional<Environment> LoadEnvironmentFromImage(
       return std::nullopt;
     }
 
-    Texture tex;
+    Texture32F tex;
     tex.width = w;
     tex.height = h;
     tex.channels = 3;
     tex.file_path = abs_path;
-    tex.pixel_data.assign(data, data + w * h * 3);
+
+    for (int i = 0; i < w * h; ++i) {
+      tex.pixel_data.push_back(data[i * 3] / 255.0f * env.intensity_multiplier);
+      tex.pixel_data.push_back(data[i * 3 + 1] / 255.0f *
+                               env.intensity_multiplier);
+      tex.pixel_data.push_back(data[i * 3 + 2] / 255.0f *
+                               env.intensity_multiplier);
+    }
 
     env.texture = std::move(tex);
     stbi_image_free(data);
@@ -752,7 +759,7 @@ std::optional<Environment> LoadEnvironmentFromSun(
   Environment env;
   env.type = Environment::Type::Preetham;
   env.sun_direction = -sun_light->direction;
-  env.intensity = sun_light->intensity;
+  env.sun_intensity = sun_light->intensity;
 
   return env;
 }

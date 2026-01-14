@@ -95,12 +95,12 @@ TEST_F(SceneTest, TransformedTangents) {
 
 TEST_F(SceneTest, ProjectEnvironmentUniformWhite) {
   // Create a 64x32 uniform white texture
-  Texture tex;
+  Texture32F tex;
   tex.width = 64;
   tex.height = 32;
   tex.channels = 3;
   // White (255, 255, 255)
-  tex.pixel_data.resize(tex.width * tex.height * 3, 255);
+  tex.pixel_data.resize(tex.width * tex.height * 3, 1.0f);
 
   Environment env;
   env.type = Environment::Type::Texture;

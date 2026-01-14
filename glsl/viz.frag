@@ -29,16 +29,17 @@ uniform sampler2D u_PackedTex0;
 uniform sampler2D u_PackedTex1;
 uniform sampler2D u_PackedTex2;
 
+// -- SH Sky ---
+uniform vec3 u_SkySH[9];
+
 // --- Attributes ---
 in vec3 vWorldPos;
 in vec3 vTangent;
 in vec3 vBitangent;
 
-// --- Helper: Sample SH ---
-// --- Helper: Sample SH ---
-// Returns .rgb = SH Color, .a = Environment Visibility
-vec4 SampleSH(vec3 normal, vec2 uv) {
-  // Basis functions:
+// -- Helper: Evaluate SH Basis ---
+// -- Helper: Evaluate SH Basis ---
+vec3 EvalSHBasis(vec3 normal, vec3 sh_coeffs[9]) {
   float x = normal.x;
   float y = normal.y;
   float z = normal.z;
@@ -59,7 +60,17 @@ vec4 SampleSH(vec3 normal, vec2 uv) {
   float b7 = c3 * x * z;
   float b8 = c5 * (x * x - y * y);
 
-  vec3 L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22;
+  vec3 result = sh_coeffs[0] * b0 + sh_coeffs[1] * b1 + sh_coeffs[2] * b2 +
+                sh_coeffs[3] * b3 + sh_coeffs[4] * b4 + sh_coeffs[5] * b5 +
+                sh_coeffs[6] * b6 + sh_coeffs[7] * b7 + sh_coeffs[8] * b8;
+
+  return max(result, 0.0);
+}
+
+// --- Helper: Sample SH ---
+// Returns .rgb = SH Color, .a = Environment Visibility
+vec4 SampleSH(vec3 normal, vec2 uv) {
+  vec3 sh_coeffs[9];
   float visibility = 1.0;
 
   if (u_UsePackedLuminance == 1) {
@@ -67,44 +78,43 @@ vec4 SampleSH(vec3 normal, vec2 uv) {
     vec4 p1 = texture(u_PackedTex1, uv);
     vec4 p2 = texture(u_PackedTex2, uv);
 
-    L0 = p0.rgb;
+    sh_coeffs[0] = p0.rgb;
     visibility = p0.a;
 
     // Chroma reconstruction for higher bands
-    float L0_lum = dot(L0, vec3(0.2126, 0.7152, 0.0722));
+    float L0_lum = dot(sh_coeffs[0], vec3(0.2126, 0.7152, 0.0722));
     vec3 chroma = vec3(1.0);
     if (L0_lum > 1e-6) {
-      chroma = L0 / L0_lum;
+      chroma = sh_coeffs[0] / L0_lum;
     }
 
     // New Mapping:
     // File 1: L1m1, L10, L11, L2m2
-    L1m1 = vec3(p1.r) * chroma;
-    L10 = vec3(p1.g) * chroma;
-    L11 = vec3(p1.b) * chroma;
-    L2m2 = vec3(p1.a) * chroma;
+    sh_coeffs[1] = vec3(p1.r) * chroma;
+    sh_coeffs[2] = vec3(p1.g) * chroma;
+    sh_coeffs[3] = vec3(p1.b) * chroma;
+    sh_coeffs[4] = vec3(p1.a) * chroma;
 
     // File 2: L2m1, L20, L21, L22
-    L2m1 = vec3(p2.r) * chroma;
-    L20 = vec3(p2.g) * chroma;
-    L21 = vec3(p2.b) * chroma;
-    L22 = vec3(p2.a) * chroma;
-
+    sh_coeffs[5] = vec3(p2.r) * chroma;
+    sh_coeffs[6] = vec3(p2.g) * chroma;
+    sh_coeffs[7] = vec3(p2.b) * chroma;
+    sh_coeffs[8] = vec3(p2.a) * chroma;
   } else {
-    L0 = texture(u_L0, uv).rgb;
-    L1m1 = texture(u_L1m1, uv).rgb;
-    L10 = texture(u_L10, uv).rgb;
-    L11 = texture(u_L11, uv).rgb;
-    L2m2 = texture(u_L2m2, uv).rgb;
-    L2m1 = texture(u_L2m1, uv).rgb;
-    L20 = texture(u_L20, uv).rgb;
-    L21 = texture(u_L21, uv).rgb;
-    L22 = texture(u_L22, uv).rgb;
-    // visibility = texture(u_EnvVisibility, uv).r; // Not bound yet
+    vec4 l0 = texture(u_L0, uv);
+    sh_coeffs[0] = l0.rgb;
+    visibility = l0.a;
+    sh_coeffs[1] = texture(u_L1m1, uv).rgb;
+    sh_coeffs[2] = texture(u_L10, uv).rgb;
+    sh_coeffs[3] = texture(u_L11, uv).rgb;
+    sh_coeffs[4] = texture(u_L2m2, uv).rgb;
+    sh_coeffs[5] = texture(u_L2m1, uv).rgb;
+    sh_coeffs[6] = texture(u_L20, uv).rgb;
+    sh_coeffs[7] = texture(u_L21, uv).rgb;
+    sh_coeffs[8] = texture(u_L22, uv).rgb;
   }
 
-  vec3 result = L0 * b0 + L1m1 * b1 + L10 * b2 + L11 * b3 + L2m2 * b4 +
-                L2m1 * b5 + L20 * b6 + L21 * b7 + L22 * b8;
+  vec3 result = EvalSHBasis(normal, sh_coeffs);
   return vec4(max(result, 0.0), visibility);
 }
 
@@ -139,11 +149,11 @@ void main() {
   // Diffuse Irradiance (SH along Normal)
   vec4 shSample = SampleSH(N, vTexCoord1);
   vec3 irradiance = shSample.rgb;
-  float visibility = shSample.a;
+  float skyVisibility = shSample.a;
 
   // Ambient Sky
-  vec3 ambient = vec3(0.05, 0.07, 0.15) * 5.0 * visibility;  // Bluish
-  irradiance += ambient;
+  vec3 skyIrradiance = skyVisibility * EvalSHBasis(N, u_SkySH);
+  irradiance += skyIrradiance;
 
   // Specular Radiance (SH along Reflection) -> Rough approximation
   vec3 specularIrradiance = SampleSH(R, vTexCoord1).rgb;

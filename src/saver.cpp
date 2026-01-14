@@ -280,6 +280,8 @@ bool SaveSplit(const SHTexture& sh_texture,
     LOG(INFO) << "Saved: " << sub_path;
   }
 
+  // FIXME(Gemini): Save the environment visibility to the alpha channel of the
+  // first file.
   // Save Environment Visibility
   {
     std::string filename = stem + "_EnvVisibility" + extension;
@@ -670,10 +672,8 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
   // Export Environment (Skybox)
   if (scene.environment &&
       scene.environment->type == Environment::Type::Texture) {
-    const auto& env_tex_var = scene.environment->texture;
-    std::optional<std::filesystem::path> env_path;
-
-    std::visit([&](const auto& tex) { env_path = tex.file_path; }, env_tex_var);
+    std::optional<std::filesystem::path> env_path =
+        scene.environment->texture.file_path;
 
     if (env_path) {
       std::filesystem::path filename = env_path->filename();

@@ -4,7 +4,6 @@
 #include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
 
-#include "colorspace.h"
 #include "sh_coeffs.h"
 
 namespace sh_baker {
@@ -20,14 +19,6 @@ const float perez_C = 10.0f;   // Relative intensity of circumsolar region
 const float perez_D = -3.0f;   // Width of circumsolar region
 const float perez_E = 0.45f;   // Relative backscatter
 
-Eigen::Vector3f GetPixel(const Texture& tex, int x, int y) {
-  int idx = (y * tex.width + x) * tex.channels;
-  float r = SRGBToLinear(tex.pixel_data[idx + 0]);
-  float g = SRGBToLinear(tex.pixel_data[idx + 1]);
-  float b = SRGBToLinear(tex.pixel_data[idx + 2]);
-  return Eigen::Vector3f(r, g, b);
-}
-
 Eigen::Vector3f GetPixel(const Texture32F& tex, int x, int y) {
   int idx = (y * tex.width + x) * tex.channels;
   float r = tex.pixel_data[idx + 0];
@@ -37,8 +28,7 @@ Eigen::Vector3f GetPixel(const Texture32F& tex, int x, int y) {
 }
 
 // Projects an Equirectangular (LatLong) map to SH
-template <typename TexType>
-SHCoeffs ProjectLatLongMap(const TexType& tex) {
+SHCoeffs ProjectLatLongMap(const Texture32F& tex) {
   SHCoeffs coeffs;
   int w = tex.width;
   int h = tex.height;
@@ -145,8 +135,8 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
 
       // Convert luminance to RGB (Simplified: Blue sky color scaled by
       // luminance)
-      Eigen::Vector3f radiance = Eigen::Vector3f(0.2f, 0.5f, 0.9f) *
-                                 (luminance / zenith_val) * env.intensity;
+      Eigen::Vector3f radiance =
+          Eigen::Vector3f(0.2f, 0.5f, 0.9f) * (luminance / zenith_val);
 
       // 3. Differential solid angle (dA = sin(theta) * dTheta * dPhi)
       float differential_solid_angle = sin_theta * d_theta * d_phi;
@@ -163,11 +153,7 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
 
 SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
   if (env.type == Environment::Type::Texture) {
-    if (std::holds_alternative<Texture>(env.texture)) {
-      return ProjectLatLongMap(std::get<Texture>(env.texture));
-    } else {
-      return ProjectLatLongMap(std::get<Texture32F>(env.texture));
-    }
+    return ProjectLatLongMap(env.texture);
   } else {
     return ProjectPreethamToSH(env);
   }

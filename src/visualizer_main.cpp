@@ -91,7 +91,6 @@ GLuint g_QuadVBO = 0;
 GLuint g_SkyboxTexture = 0;
 bool g_UsePreetham = false;
 Eigen::Vector3f g_SunDir(0, 1, 0);
-float g_SkyIntensity = 1.0f;
 static GLuint g_CubeVAO = 0;
 static GLuint g_CubeVBO = 0;
 
@@ -414,11 +413,6 @@ GLuint LoadTexture(const sh_baker::Texture32F& tex) {
   return tid;
 }
 
-GLuint LoadTextureVariant(
-    const std::variant<sh_baker::Texture, sh_baker::Texture32F>& tex_var) {
-  return std::visit([](const auto& t) { return LoadTexture(t); }, tex_var);
-}
-
 GLuint LoadEXRTexture(const std::string& path) {
   float* out;
   int width;
@@ -605,8 +599,6 @@ void DrawSky(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj) {
   glUniform1i(glGetUniformLocation(g_SkyProgram, "u_SkyboxTex"), 0);
   glUniform3fv(glGetUniformLocation(g_SkyProgram, "u_SunDir"), 1,
                g_SunDir.data());
-  glUniform1f(glGetUniformLocation(g_SkyProgram, "u_SkyIntensity"),
-              g_SkyIntensity);
 
   glBindVertexArray(g_CubeVAO);
   glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
@@ -859,31 +851,47 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // --- Load Skybox Data ---
-  if (!scene.environment) {
-    LOG(ERROR) << "No environment found.";
-    // Fallback?
-    g_UsePreetham = true;
-    g_SunDir = Eigen::Vector3f(0.2f, 0.8f, 0.2f).normalized();
-    g_SkyIntensity = 1.0f;
+  // --- Set Sky SH Uniforms ---
+  std::vector<float> sky_sh_data;
+  sky_sh_data.reserve(9 * 3);
+
+  if (scene.environment) {
+    const auto& sh = scene.environment->sh_coeffs;
+    for (int i = 0; i < 9; ++i) {
+      sky_sh_data.push_back(sh.coeffs[i].x());
+      sky_sh_data.push_back(sh.coeffs[i].y());
+      sky_sh_data.push_back(sh.coeffs[i].z());
+    }
   } else {
+    // Placeholder: L0 = 3.5449 (so convolution with Y00=0.282 yields ~1.0)
+    float c0 = 3.5449f;
+    sky_sh_data.push_back(c0);
+    sky_sh_data.push_back(c0);
+    sky_sh_data.push_back(c0);
+    for (int i = 1; i < 9; ++i) {
+      sky_sh_data.push_back(0.0f);
+      sky_sh_data.push_back(0.0f);
+      sky_sh_data.push_back(0.0f);
+    }
+  }
+
+  GLint skySHLoc = glGetUniformLocation(g_MeshProgram, "u_SkySH");
+  if (skySHLoc != -1) {
+    glUniform3fv(skySHLoc, 9, sky_sh_data.data());
+  }
+
+  // --- Load Skybox Data ---
+  if (scene.environment) {
     if (scene.environment->type == sh_baker::Environment::Type::Texture) {
-      const auto& tex_var = scene.environment->texture;
-      bool valid =
-          std::visit([](const auto& t) { return t.width > 0; }, tex_var);
-      if (valid) {
-        LOG(INFO) << "Loading Skybox Texture...";
-        g_SkyboxTexture = LoadTextureVariant(tex_var);
-        // We probably also want to set g_IrradianceTexture from this if we had
-        // SH? But for now just g_SkyboxTexture.
-      }
+      g_SkyboxTexture = LoadTexture(scene.environment->texture);
     } else {
       g_UsePreetham = true;
       g_SunDir = scene.environment->sun_direction;
-      g_SkyIntensity = scene.environment->intensity;
       LOG(INFO) << "Using Preetham Sky (Scene). Sun Dir: "
                 << g_SunDir.transpose();
     }
+  } else {
+    LOG(WARNING) << "No environment found in scene. Using default sky.";
   }
 
   // --- Main Loop ---
