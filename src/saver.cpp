@@ -226,30 +226,42 @@ bool SaveSplit(const SHTexture& sh_texture,
     EXRImage image;
     InitEXRImage(&image);
 
-    image.num_channels = 3;
+    // L0 (i == 0) gets 4 channels (RGBA), others get 3 (RGB)
+    int num_channels = (i == 0) ? 4 : 3;
+    image.num_channels = num_channels;
 
-    std::vector<float> channels[3];
-    float* image_ptr[3];
-    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 3);
-    header.pixel_types = (int*)malloc(sizeof(int) * 3);
-    header.requested_pixel_types = (int*)malloc(sizeof(int) * 3);
+    std::vector<float> channels[4];
+    float* image_ptr[4];
+    header.channels =
+        (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * num_channels);
+    header.pixel_types = (int*)malloc(sizeof(int) * num_channels);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * num_channels);
 
-    for (int c = 0; c < 3; ++c) {
+    for (int c = 0; c < num_channels; ++c) {
       channels[c].resize(num_pixels);
       image_ptr[c] = channels[c].data();
 
       // Collect data
       for (int p = 0; p < num_pixels; ++p) {
-        if (c == 0)
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].x();
-        else if (c == 1)
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].y();
-        else
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].z();
+        if (c < 3) {
+          if (c == 0)
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].x();
+          else if (c == 1)
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].y();
+          else
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].z();
+        } else {
+          // Alpha channel for L0 -> Environment Visibility
+          if (p < environment_visibility_texture.pixel_data.size()) {
+            channels[c][p] = environment_visibility_texture.pixel_data[p];
+          } else {
+            channels[c][p] = 0.0f;
+          }
+        }
       }
 
-      // Channel names: R, G, B
-      const char* names[] = {"R", "G", "B"};
+      // Channel names: R, G, B, A
+      const char* names[] = {"R", "G", "B", "A"};
       strncpy(header.channels[c].name, names[c], 255);
       header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
       header.requested_pixel_types[c] =
@@ -260,64 +272,7 @@ bool SaveSplit(const SHTexture& sh_texture,
     image.width = sh_texture.width;
     image.height = sh_texture.height;
 
-    header.num_channels = 3;
-    header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
-
-    const char* err = nullptr;
-    int ret =
-        SaveEXRImageToFile(&image, &header, sub_path.string().c_str(), &err);
-
-    free(header.channels);
-    free(header.pixel_types);
-    free(header.requested_pixel_types);
-
-    if (ret != TINYEXR_SUCCESS) {
-      LOG(ERROR) << "SaveEXRImageToFile failed for " << sub_path << ": "
-                 << (err ? err : "Unknown error");
-      FreeEXRErrorMessage(err);
-      return false;
-    }
-    LOG(INFO) << "Saved: " << sub_path;
-  }
-
-  // FIXME(Gemini): Save the environment visibility to the alpha channel of the
-  // first file.
-  // Save Environment Visibility
-  {
-    std::string filename = stem + "_EnvVisibility" + extension;
-    std::filesystem::path sub_path = parent / filename;
-
-    EXRHeader header;
-    InitEXRHeader(&header);
-    EXRImage image;
-    InitEXRImage(&image);
-
-    image.num_channels = 1;
-
-    std::vector<float> channel;
-    channel.resize(num_pixels);
-    // Copy data
-    if (environment_visibility_texture.pixel_data.size() == num_pixels) {
-      std::copy(environment_visibility_texture.pixel_data.begin(),
-                environment_visibility_texture.pixel_data.end(),
-                channel.begin());
-    }
-
-    float* image_ptr[1];
-    image_ptr[0] = channel.data();
-
-    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 1);
-    header.pixel_types = (int*)malloc(sizeof(int) * 1);
-    header.requested_pixel_types = (int*)malloc(sizeof(int) * 1);
-
-    strncpy(header.channels[0].name, "Y", 255);
-    header.pixel_types[0] = TINYEXR_PIXELTYPE_FLOAT;
-    header.requested_pixel_types[0] = TINYEXR_PIXELTYPE_HALF;
-
-    image.images = (unsigned char**)image_ptr;
-    image.width = sh_texture.width;
-    image.height = sh_texture.height;
-    header.num_channels = 1;
+    header.num_channels = num_channels;
     header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
 
     const char* err = nullptr;

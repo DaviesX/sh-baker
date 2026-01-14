@@ -66,7 +66,7 @@ TEST(SaverTest, SaveSplitChannels) {
 
   // Cleanup
   const char* suffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
-                            "L2m1", "L20",  "L21", "L22", "EnvVisibility"};
+                            "L2m1", "L20",  "L21", "L22"};
   for (const char* suffix : suffixes) {
     std::string filename = std::string("test_split_") + suffix + ".exr";
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
@@ -79,12 +79,27 @@ TEST(SaverTest, SaveSplitChannels) {
   for (const char* suffix : suffixes) {
     std::string filename = std::string("test_split_") + suffix + ".exr";
     EXPECT_TRUE(std::filesystem::exists(filename)) << "Missing " << filename;
-    int verify_ret = IsEXR(filename.c_str());
-    EXPECT_EQ(verify_ret, TINYEXR_SUCCESS);
+
+    // Verify EXR
+    float* out;
+    int width;
+    int height;
+    const char* err = nullptr;
+    int ret = LoadEXR(&out, &width, &height, filename.c_str(), &err);
+    EXPECT_EQ(ret, TINYEXR_SUCCESS) << err;
+    free(out);
+    // TODO: Verify L0 has 4 channels if possible with LoadEXR or check header
+    // separately. TinyEXR LoadEXR returns flattened RGBA floats by default if I
+    // recall correctly unless using custom loader. But here we just want to
+    // know if it saved successfully.
 
     // Clean up
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+
+  // Verify that EnvVisibility file does NOT exist
+  std::string env_filename = "test_split_EnvVisibility.exr";
+  EXPECT_FALSE(std::filesystem::exists(env_filename));
 }
 
 TEST(SaverTest, SaveSceneWithTexture) {
