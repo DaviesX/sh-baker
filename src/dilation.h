@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "sh_coeffs.h"
-
 namespace sh_baker {
 
 // Dilates the valid pixels into invalid pixels to fill gaps/seams.
@@ -13,7 +11,8 @@ namespace sh_baker {
 // pixels: The SH coefficient data (modified in place).
 // mask: Validity mask (1 = valid, 0 = invalid).
 // passes: Number of dilation passes.
-void Dilate(int width, int height, std::vector<SHCoeffs>& pixels,
+template <typename T>
+void Dilate(int width, int height, std::vector<T>& pixels,
             std::vector<uint8_t>& mask, int passes = 1);
 
 }  // namespace sh_baker

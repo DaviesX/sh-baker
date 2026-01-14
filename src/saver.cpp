@@ -106,6 +106,7 @@ const char* kCoeffNames[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
                              "L2m1", "L20",  "L21", "L22"};
 
 bool SaveCombined(const SHTexture& sh_texture,
+                  const Texture32F& environment_visibility_texture,
                   const std::filesystem::path& path) {
   EXRHeader header;
   InitEXRHeader(&header);
@@ -113,12 +114,12 @@ bool SaveCombined(const SHTexture& sh_texture,
   EXRImage image;
   InitEXRImage(&image);
 
-  image.num_channels = 27;  // 9 coeffs * 3 (RGB)
+  image.num_channels = 28;  // 9 coeffs * 3 (RGB) + 1 EnvOcclusion
 
   // Channel names
   std::vector<std::string> channel_names;
   // We need C-strings for header.channels[i].name, so keep the strings alive
-  channel_names.reserve(27);
+  channel_names.reserve(28);
 
   // Band 0: L0
   // Band 1: L1m1, L10, L11
@@ -130,9 +131,10 @@ bool SaveCombined(const SHTexture& sh_texture,
       channel_names.push_back(std::string(kCoeffNames[i]) + rgb_suffix[c]);
     }
   }
+  channel_names.push_back("EnvVisibility");
 
-  std::vector<float> channels[27];
-  float* image_ptr[27];
+  std::vector<float> channels[28];
+  float* image_ptr[28];
   header.channels =
       (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * image.num_channels);
 
@@ -143,21 +145,32 @@ bool SaveCombined(const SHTexture& sh_texture,
   int num_pixels = sh_texture.width * sh_texture.height;
 
   // Split SoA
-  for (int i = 0; i < 27; ++i) {
+  for (int i = 0; i < 28; ++i) {
     channels[i].resize(num_pixels);
     image_ptr[i] = channels[i].data();
 
-    // Map i to (coeff_idx, rgb_idx)
-    int coeff_idx = i / 3;
-    int rgb_idx = i % 3;
+    // Map i to (coeff_idx, rgb_idx) or EnvOcclusion
+    if (i < 27) {
+      int coeff_idx = i / 3;
+      int rgb_idx = i % 3;
 
-    for (int p = 0; p < num_pixels; ++p) {
-      if (rgb_idx == 0)
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].x();
-      else if (rgb_idx == 1)
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].y();
-      else
-        channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].z();
+      for (int p = 0; p < num_pixels; ++p) {
+        if (rgb_idx == 0)
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].x();
+        else if (rgb_idx == 1)
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].y();
+        else
+          channels[i][p] = sh_texture.pixels[p].coeffs[coeff_idx].z();
+      }
+    } else {
+      // EnvVisibility (index 27)
+      for (int p = 0; p < num_pixels; ++p) {
+        // Handle mismatched sizes? Assuming aligned.
+        if (p < environment_visibility_texture.pixel_data.size())
+          channels[i][p] = environment_visibility_texture.pixel_data[p];
+        else
+          channels[i][p] = 0.0f;
+      }
     }
 
     // Set header info
@@ -191,7 +204,9 @@ bool SaveCombined(const SHTexture& sh_texture,
   return true;
 }
 
-bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
+bool SaveSplit(const SHTexture& sh_texture,
+               const Texture32F& environment_visibility_texture,
+               const std::filesystem::path& path) {
   // path is "dir/filename.exr". We want "dir/filename_L0.exr" etc.
   std::filesystem::path parent = path.parent_path();
   std::string stem = path.stem().string();
@@ -199,6 +214,7 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
 
   int num_pixels = sh_texture.width * sh_texture.height;
 
+  // Save SH Coefficients
   for (int i = 0; i < 9; ++i) {
     std::string coeff_name = kCoeffNames[i];
     std::string filename = stem + "_" + coeff_name + extension;
@@ -210,30 +226,42 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
     EXRImage image;
     InitEXRImage(&image);
 
-    image.num_channels = 3;
+    // L0 (i == 0) gets 4 channels (RGBA), others get 3 (RGB)
+    int num_channels = (i == 0) ? 4 : 3;
+    image.num_channels = num_channels;
 
-    std::vector<float> channels[3];
-    float* image_ptr[3];
-    header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 3);
-    header.pixel_types = (int*)malloc(sizeof(int) * 3);
-    header.requested_pixel_types = (int*)malloc(sizeof(int) * 3);
+    std::vector<float> channels[4];
+    float* image_ptr[4];
+    header.channels =
+        (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * num_channels);
+    header.pixel_types = (int*)malloc(sizeof(int) * num_channels);
+    header.requested_pixel_types = (int*)malloc(sizeof(int) * num_channels);
 
-    for (int c = 0; c < 3; ++c) {
+    for (int c = 0; c < num_channels; ++c) {
       channels[c].resize(num_pixels);
       image_ptr[c] = channels[c].data();
 
       // Collect data
       for (int p = 0; p < num_pixels; ++p) {
-        if (c == 0)
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].x();
-        else if (c == 1)
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].y();
-        else
-          channels[c][p] = sh_texture.pixels[p].coeffs[i].z();
+        if (c < 3) {
+          if (c == 0)
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].x();
+          else if (c == 1)
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].y();
+          else
+            channels[c][p] = sh_texture.pixels[p].coeffs[i].z();
+        } else {
+          // Alpha channel for L0 -> Environment Visibility
+          if (p < environment_visibility_texture.pixel_data.size()) {
+            channels[c][p] = environment_visibility_texture.pixel_data[p];
+          } else {
+            channels[c][p] = 0.0f;
+          }
+        }
       }
 
-      // Channel names: R, G, B
-      const char* names[] = {"R", "G", "B"};
+      // Channel names: R, G, B, A
+      const char* names[] = {"R", "G", "B", "A"};
       strncpy(header.channels[c].name, names[c], 255);
       header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;  // Input is float
       header.requested_pixel_types[c] =
@@ -244,7 +272,7 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
     image.width = sh_texture.width;
     image.height = sh_texture.height;
 
-    header.num_channels = 3;
+    header.num_channels = num_channels;
     header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
 
     const char* err = nullptr;
@@ -268,11 +296,12 @@ bool SaveSplit(const SHTexture& sh_texture, const std::filesystem::path& path) {
 }
 
 bool SavePackedLuminance(const SHTexture& sh_texture,
+                         const Texture32F& environment_visibility_texture,
                          const std::filesystem::path& path) {
   // We will save 3 RGBA files:
-  // _packed_0.exr: L0.rgb, L1m1.Y
-  // _packed_1.exr: L10.Y, L11.Y, L2m2.Y, L2m1.Y
-  // _packed_2.exr: L20.Y, L21.Y, L22.Y, 1.0 (Alpha/Unused)
+  // _packed_0.exr: L0.r, L0.g, L0.b, EnvVisibility
+  // _packed_1.exr: L1m1.Y, L10.Y, L11.Y, L2m2.Y
+  // _packed_2.exr: L2m1.Y, L20.Y, L21.Y, L22.Y
 
   std::filesystem::path parent = path.parent_path();
   std::string stem = path.stem().string();
@@ -312,26 +341,25 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
         const auto& coeffs = sh_texture.pixels[p].coeffs;
 
         if (file_idx == 0) {
-          // File 0: L0.r, L0.g, L0.b, L1m1.Y (indices 0, 1)
+          // File 0: L0.r, L0.g, L0.b, EnvOcclusion
           if (c < 3) {
-            // L0 RGB
+            // L0 RGB (coeff 0)
             val = coeffs[0][c];  // x, y, z
           } else {
-            // L1m1 Luminance
-            val = coeffs[1].dot(kLumWeights);
+            // EnvVisibility
+            if (p < environment_visibility_texture.pixel_data.size())
+              val = environment_visibility_texture.pixel_data[p];
+            else
+              val = 0.0f;
           }
         } else if (file_idx == 1) {
-          // File 1: L10.Y, L11.Y, L2m2.Y, L2m1.Y (indices 2, 3, 4, 5)
-          int sh_idx = 2 + c;
+          // File 1: L1m1.Y, L10.Y, L11.Y, L2m2.Y (coeffs 1, 2, 3, 4)
+          int sh_idx = 1 + c;
           val = coeffs[sh_idx].dot(kLumWeights);
         } else if (file_idx == 2) {
-          // File 2: L20.Y, L21.Y, L22.Y, Unused (indices 6, 7, 8)
-          if (c < 3) {
-            int sh_idx = 6 + c;
-            val = coeffs[sh_idx].dot(kLumWeights);
-          } else {
-            val = 1.0f;  // Padding (Alpha)
-          }
+          // File 2: L2m1.Y, L20.Y, L21.Y, L22.Y (coeffs 5, 6, 7, 8)
+          int sh_idx = 5 + c;
+          val = coeffs[sh_idx].dot(kLumWeights);
         }
         channels[c][p] = val;
       }
@@ -375,6 +403,7 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
 }  // namespace
 
 bool SaveSHLightMap(const SHTexture& sh_texture,
+                    const Texture32F& environment_visibility_texture,
                     const std::filesystem::path& path, SaveMode mode) {
   if (sh_texture.pixels.empty() || sh_texture.width <= 0 ||
       sh_texture.height <= 0) {
@@ -383,11 +412,12 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
   }
 
   if (mode == SaveMode::kCombined) {
-    return SaveCombined(sh_texture, path);
+    return SaveCombined(sh_texture, environment_visibility_texture, path);
   } else if (mode == SaveMode::kLuminancePacked) {
-    return SavePackedLuminance(sh_texture, path);
+    return SavePackedLuminance(sh_texture, environment_visibility_texture,
+                               path);
   } else {
-    return SaveSplit(sh_texture, path);
+    return SaveSplit(sh_texture, environment_visibility_texture, path);
   }
 }
 
@@ -592,6 +622,157 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
 
     model.nodes.push_back(node);
     gscene.nodes.push_back(static_cast<int>(model.nodes.size() - 1));
+  }
+
+  // Export Environment (Skybox)
+  if (scene.environment &&
+      scene.environment->type == Environment::Type::Texture) {
+    std::optional<std::filesystem::path> env_path =
+        scene.environment->texture.file_path;
+
+    if (env_path) {
+      std::filesystem::path filename = env_path->filename();
+      std::filesystem::path destination = path.parent_path() / filename;
+
+      try {
+        std::filesystem::copy_file(
+            *env_path, destination,
+            std::filesystem::copy_options::overwrite_existing);
+
+        // Add "skybox" to extras
+        tinygltf::Value::Object extras_obj;
+        // If extras already exists and is object, use it?
+        // tinygltf::Model::extras is Value.
+
+        // Simpler: Just set "skybox" in extras value.
+        // But tinygltf::Value is immutable-ish wrapper? No, it has Setters?
+        // Actually model.extras is a tinygltf::Value.
+        // We need to construct a Value that is an Object.
+
+        // Current model.extras is empty (default).
+        // Let's create an object.
+        tinygltf::Value::Object extras_map;
+        if (model.extras.IsObject()) {
+          // Keep existing? Not implemented yet. Assuming new model.
+        }
+        extras_map["skybox"] = tinygltf::Value(filename.string());
+        model.extras = tinygltf::Value(extras_map);
+
+      } catch (const std::filesystem::filesystem_error& e) {
+        LOG(ERROR) << "Failed to copy environment map from " << *env_path
+                   << " to " << destination << ". Cause: " << e.what();
+      }
+    }
+  }
+
+  // Export Lights (KHR_lights_punctual)
+  if (!scene.lights.empty()) {
+    tinygltf::Value::Array light_array;
+    std::vector<int> light_node_indices;
+
+    int light_idx = 0;
+    for (const auto& light : scene.lights) {
+      if (light.type == Light::Type::Area) continue;
+
+      tinygltf::Value::Object light_obj;
+
+      // Color
+      std::vector<tinygltf::Value> color_vec;
+      color_vec.push_back(tinygltf::Value(double(light.color.x())));
+      color_vec.push_back(tinygltf::Value(double(light.color.y())));
+      color_vec.push_back(tinygltf::Value(double(light.color.z())));
+      light_obj["color"] = tinygltf::Value(color_vec);
+
+      light_obj["intensity"] = tinygltf::Value(double(light.intensity));
+
+      std::string type_str;
+      if (light.type == Light::Type::Directional) {
+        type_str = "directional";
+      } else if (light.type == Light::Type::Point) {
+        type_str = "point";
+      } else if (light.type == Light::Type::Spot) {
+        type_str = "spot";
+
+        tinygltf::Value::Object spot_obj;
+        // Clamp to [-1, 1] to avoid NaN from std::acos with -ffast-math
+        // Use manual clamping to avoid potential issues with -ffast-math
+        // optimizations impacting std::clamp or std::acos behavior with edge
+        // cases.
+        auto safe_acos = [](float cos_val) -> double {
+          if (cos_val >= 1.0f) return 0.0;
+          if (cos_val <= -1.0f) return 3.14159265358979323846;
+          return std::acos(cos_val);
+        };
+
+        spot_obj["innerConeAngle"] =
+            tinygltf::Value(safe_acos(light.cos_inner_cone));
+        spot_obj["outerConeAngle"] =
+            tinygltf::Value(safe_acos(light.cos_outer_cone));
+        light_obj["spot"] = tinygltf::Value(spot_obj);
+      }
+      light_obj["type"] = tinygltf::Value(type_str);
+      light_obj["name"] = tinygltf::Value("Light_" + std::to_string(light_idx));
+
+      light_array.push_back(tinygltf::Value(light_obj));
+
+      // Create Node for this light
+      tinygltf::Node node;
+      node.name = "LightNode_" + std::to_string(light_idx);
+
+      // Position (Translation)
+      node.translation.push_back(light.position.x());
+      node.translation.push_back(light.position.y());
+      node.translation.push_back(light.position.z());
+
+      // Orientation (Rotation)
+      // glTF lights point down -Z. We need to align -Z with light.direction.
+      if (light.type == Light::Type::Directional ||
+          light.type == Light::Type::Spot) {
+        // Construct Basis
+        // Z = -direction
+        Eigen::Vector3f Z = -light.direction.normalized();
+        // Handle Up vector case
+        Eigen::Vector3f up = Eigen::Vector3f::UnitY();
+        if (std::abs(Z.dot(up)) > 0.99f) up = Eigen::Vector3f::UnitX();
+
+        Eigen::Vector3f X = up.cross(Z).normalized();
+        Eigen::Vector3f Y = Z.cross(X).normalized();
+
+        // Convert to Quaternion
+        // Matrix: [X Y Z]
+        Eigen::Matrix3f rot;
+        rot.col(0) = X;
+        rot.col(1) = Y;
+        rot.col(2) = Z;
+
+        Eigen::Quaternionf q(rot);
+        node.rotation.push_back(q.x());
+        node.rotation.push_back(q.y());
+        node.rotation.push_back(q.z());
+        node.rotation.push_back(q.w());
+      }
+
+      // Extension on Node
+      // Using node.light tells tinygltf to write the KHR_lights_punctual
+      // extension
+      node.light = light_idx;
+
+      model.nodes.push_back(node);
+      gscene.nodes.push_back(static_cast<int>(model.nodes.size() - 1));
+
+      light_idx++;
+    }
+
+    if (light_idx > 0) {
+      if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
+                    "KHR_lights_punctual") == model.extensionsUsed.end()) {
+        model.extensionsUsed.push_back("KHR_lights_punctual");
+      }
+
+      tinygltf::Value::Object ext_container;
+      ext_container["lights"] = tinygltf::Value(light_array);
+      model.extensions["KHR_lights_punctual"] = tinygltf::Value(ext_container);
+    }
   }
 
   model.scenes.push_back(gscene);

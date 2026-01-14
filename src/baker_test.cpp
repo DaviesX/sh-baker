@@ -56,11 +56,11 @@ TEST(BakerTest, BakeSimpleQuad) {
   config.samples = 64;
   config.bounces = 0;  // Direct light only
 
-  SHTexture output =
+  BakeResult output =
       BakeSHLightMap(scene, surface_points, raster_config, config);
 
   // Check center pixel
-  SHCoeffs result = output.pixels[5];
+  SHCoeffs result = output.sh_texture.pixels[5];
   EXPECT_GT(result.coeffs[0].x(), 0.1f);
 }
 

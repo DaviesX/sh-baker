@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <iostream>
 
+#include "scene.h"
+
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -400,24 +402,7 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     area_light.geometry_index = static_cast<int>(scene->geometries.size()) - 1;
 
     // Surface Area
-    float total_area = 0.0f;
-
-    for (size_t i = 0; i < added_geo.indices.size(); i += 3) {
-      uint32_t i0 = added_geo.indices[i];
-      uint32_t i1 = added_geo.indices[i + 1];
-      uint32_t i2 = added_geo.indices[i + 2];
-
-      if (i0 < added_geo.vertices.size() && i1 < added_geo.vertices.size() &&
-          i2 < added_geo.vertices.size()) {
-        const Eigen::Vector3f& v0 = added_geo.vertices[i0];
-        const Eigen::Vector3f& v1 = added_geo.vertices[i1];
-        const Eigen::Vector3f& v2 = added_geo.vertices[i2];
-
-        float tri_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
-        total_area += tri_area;
-      }
-    }
-    area_light.area = total_area;
+    area_light.area = SurfaceArea(added_geo);
 
     // Intensity. Color will come from the material's albedo texture.
     area_light.intensity = mat.emission_intensity;
@@ -567,12 +552,19 @@ void ProcessLight(const tinygltf::Model& model,
 
   // Position/Direction from transform
   l.position = transform.translation();
-  // Default direction is -Z. Apply rotation to it.
   l.direction = transform.rotation() * Eigen::Vector3f(0, 0, -1);
-  l.direction.normalize();
 
-  if (light_obj.Has("name")) {
-    // We could store name if Light struct had one
+  float len_sq = l.direction.squaredNorm();
+  if (len_sq > 1e-8f) {
+    if (std::isinf(len_sq) || std::isnan(len_sq)) {
+      LOG(WARNING) << "Light direction is NaN/Inf. Fallback to -Z.";
+      l.direction = Eigen::Vector3f(0, 0, -1);
+    } else {
+      l.direction.normalize();
+    }
+  } else {
+    LOG(WARNING) << "Light direction is zero. Fallback to -Z.";
+    l.direction = Eigen::Vector3f(0, 0, -1);
   }
 
   std::string type_str;
@@ -662,6 +654,140 @@ bool TraverseNodes(const tinygltf::Model& model, int node_index,
   return true;
 }
 
+std::optional<Environment> LoadEnvironmentFromImage(
+    const tinygltf::Model& model, const std::filesystem::path& gltf_file,
+    Scene* scene) {
+  // Check for custom "skybox" property in extras
+  // "extras": { "skybox": "texture_path.hdr" }
+  if (!model.extras.Has("skybox")) {
+    return std::nullopt;
+  }
+  const auto& skybox_val = model.extras.Get("skybox");
+  if (!skybox_val.IsString()) {
+    LOG(ERROR) << "skybox is not a string";
+    return std::nullopt;
+  }
+
+  // Path to texture
+  std::string path = skybox_val.Get<std::string>();
+  Environment env;
+  env.type = Environment::Type::Texture;
+
+  std::filesystem::path uri_path(path);
+  std::filesystem::path abs_path;
+  if (uri_path.is_absolute())
+    abs_path = uri_path;
+  else
+    abs_path = gltf_file.parent_path() / uri_path;
+
+  // Load directly using stbi
+  int w, h, c;
+  // Try loading as float (HDR)
+  if (stbi_is_hdr(abs_path.string().c_str())) {
+    float* data = stbi_loadf(abs_path.string().c_str(), &w, &h, &c, 3);
+    if (!data) {
+      LOG(ERROR) << "Failed to load HDR image: " << abs_path.string();
+      return std::nullopt;
+    }
+
+    Texture32F tex;
+    tex.width = w;
+    tex.height = h;
+    tex.channels = 3;
+    tex.file_path = abs_path;
+    tex.pixel_data.assign(data, data + w * h * 3);
+
+    env.texture = std::move(tex);
+    stbi_image_free(data);
+  } else {
+    // LDR load
+    unsigned char* data = stbi_load(abs_path.string().c_str(), &w, &h, &c, 3);
+    if (!data) {
+      LOG(ERROR) << "Failed to load image: " << abs_path.string();
+      return std::nullopt;
+    }
+
+    Texture32F tex;
+    tex.width = w;
+    tex.height = h;
+    tex.channels = 3;
+    tex.file_path = abs_path;
+
+    for (int i = 0; i < w * h; ++i) {
+      tex.pixel_data.push_back(data[i * 3] / 255.0f * env.intensity_multiplier);
+      tex.pixel_data.push_back(data[i * 3 + 1] / 255.0f *
+                               env.intensity_multiplier);
+      tex.pixel_data.push_back(data[i * 3 + 2] / 255.0f *
+                               env.intensity_multiplier);
+    }
+
+    env.texture = std::move(tex);
+    stbi_image_free(data);
+  }
+
+  return env;
+}
+
+const Light* BrightestDirectionalLight(const std::vector<Light>& lights) {
+  float max_intensity = -1.0f;
+  int max_idx = -1;
+
+  for (int i = 0; i < lights.size(); ++i) {
+    if (lights[i].type == Light::Type::Directional) {
+      if (lights[i].intensity > max_intensity) {
+        max_intensity = lights[i].intensity;
+        max_idx = i;
+      }
+    }
+  }
+
+  if (max_idx < 0) {
+    return nullptr;
+  }
+
+  return &lights[max_idx];
+}
+
+std::optional<Environment> LoadEnvironmentFromSun(
+    const tinygltf::Model& model, const std::filesystem::path& gltf_file,
+    Scene* scene) {
+  const auto* sun_light = BrightestDirectionalLight(scene->lights);
+  if (!sun_light) {
+    return std::nullopt;
+  }
+
+  Environment env;
+  env.type = Environment::Type::Preetham;
+  env.sun_direction = -sun_light->direction;
+  env.sun_intensity = sun_light->intensity;
+
+  return env;
+}
+
+void ProcessEnvironment(const tinygltf::Model& model,
+                        const std::filesystem::path& gltf_file, Scene* scene) {
+  // Process Environment (Skybox / IBL)
+  // Priority:
+  // 1. IBL Skybox (from extras.skybox)
+  // 2. Sun Direction (Preetham Sky from brightest directional light)
+
+  std::optional<Environment> ibl_env =
+      LoadEnvironmentFromImage(model, gltf_file, scene);
+  if (ibl_env) {
+    ibl_env->sh_coeffs = ProjectEnvironmentToSH(ibl_env.value());
+    scene->environment = std::move(ibl_env.value());
+    return;
+  }
+
+  std::optional<Environment> sun_env =
+      LoadEnvironmentFromSun(model, gltf_file, scene);
+  if (sun_env) {
+    sun_env->sh_coeffs = ProjectEnvironmentToSH(sun_env.value());
+    scene->environment = std::move(sun_env.value());
+    return;
+  }
+}
+
 }  // namespace
 
 std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
@@ -684,13 +810,16 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     LOG(ERROR) << "TinyGLTF error: " << err;
   }
   if (!ret) {
+    LOG(INFO) << "LoadScene: tinygltf failed";
     return std::nullopt;
   }
 
   Scene scene;
 
+  // Process Materials
   ProcessMaterials(model, gltf_file.parent_path(), &scene);
 
+  // Traverse Nodes to find Meshes/Lights
   const tinygltf::Scene& gltf_scene =
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
   for (int node_index : gltf_scene.nodes) {
@@ -708,6 +837,8 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
       light.geometry = &scene.geometries[light.geometry_index];
     }
   }
+
+  ProcessEnvironment(model, gltf_file, &scene);
 
   return scene;
 }

@@ -2,7 +2,6 @@
 #define SH_BAKER_SRC_SAVER_H_
 
 #include <filesystem>
-#include <string>
 #include <vector>
 
 #include "scene.h"
@@ -30,12 +29,20 @@ enum class SaveMode {
 //   Channels will be named "L0_R", "L0_G", "L0_B", "L1m1_R", etc.
 //
 // In kSplitChannels mode:
-//   Saves 9 separate files.
+//   Saves 10 separate files.
 //   'path' is treated as a base name. If 'path' is "output/lightmap.exr",
 //   it generates "output/lightmap_L0.exr", "output/lightmap_L1m1.exr", etc.
+//   The 10th file is "output/lightmap_EnvVisibility.exr".
+//
+// In kLuminancePacked mode:
+//   Saves 3 RGBA textures.
+//   'path' is treated as a base name. If 'path' is "output/lightmap.exr",
+//   it generates "output/lightmap_0.exr", "output/lightmap_1.exr", etc.
+//   The 3rd file is "output/lightmap_2.exr".
 //
 // Returns true on success.
 bool SaveSHLightMap(const SHTexture& sh_texture,
+                    const Texture32F& environment_visibility_texture,
                     const std::filesystem::path& path,
                     SaveMode mode = SaveMode::kCombined);
 
