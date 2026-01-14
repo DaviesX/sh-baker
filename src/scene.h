@@ -8,7 +8,10 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
+
+#include "sh_coeffs.h"
 
 namespace sh_baker {
 
@@ -22,6 +25,18 @@ struct Texture {
   uint32_t height = 0;
   uint32_t channels = 0;
   std::vector<uint8_t> pixel_data;
+};
+
+// --- Texture32F ---
+struct Texture32F {
+  // If set, the texture is loaded from a file. This denotes the provenance of
+  // the texture.
+  std::optional<std::filesystem::path> file_path;
+
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t channels = 0;
+  std::vector<float> pixel_data;
 };
 
 // --- Material ---
@@ -71,17 +86,44 @@ struct Light {
   int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
+// --- Environment ---
+struct Environment {
+  enum class Type { Texture, Preetham };
+  Type type;
+
+  // For Texture type (HDRi)
+  Texture32F texture;
+  float intensity_multiplier = 1.0f;
+
+  // For Preetham type
+  // Direction of sun (geometric up for noon sun or from surface looking to
+  // sky).
+  Eigen::Vector3f sun_direction = Eigen::Vector3f(0, 1, 0);
+  float sun_intensity = 1.0f;
+  float turbidity = 2.5f;
+
+  // For both types.
+  SHCoeffs sh_coeffs;
+};
+
 // --- Scene ---
 struct Scene {
   std::vector<Geometry> geometries;
   std::vector<Material> materials;
   std::vector<Light> lights;
+  std::optional<Environment> environment;
 };
 
 // Transforms the geometry by the transform matrix.
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
 std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry);
 std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
+
+// Returns the surface area of the geometry.
+float SurfaceArea(const Geometry& geometry);
+
+// Projects the environment to SH coefficients.
+SHCoeffs ProjectEnvironmentToSH(const Environment& env);
 
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);

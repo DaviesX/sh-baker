@@ -93,4 +93,36 @@ TEST_F(SceneTest, TransformedTangents) {
   EXPECT_EQ(transformed[0].w(), 1.0f);
 }
 
+TEST_F(SceneTest, ProjectEnvironmentUniformWhite) {
+  // Create a 64x32 uniform white texture
+  Texture32F tex;
+  tex.width = 64;
+  tex.height = 32;
+  tex.channels = 3;
+  // White (255, 255, 255)
+  tex.pixel_data.resize(tex.width * tex.height * 3, 1.0f);
+
+  Environment env;
+  env.type = Environment::Type::Texture;
+  env.texture = tex;
+
+  SHCoeffs coeffs = ProjectEnvironmentToSH(env);
+
+  // Expected L0: Integral(1 * Y00) = Y00 * 4pi
+  // Y00 = 0.282095
+  // 4pi = 12.56637
+  // L0 = 3.5449
+  // However, discrete sampling error exists.
+  float expected_L0 = 0.282095f * 4.0f * M_PI;
+
+  EXPECT_NEAR(coeffs.coeffs[0].x(), expected_L0, 0.1f);
+  EXPECT_NEAR(coeffs.coeffs[0].y(), expected_L0, 0.1f);
+  EXPECT_NEAR(coeffs.coeffs[0].z(), expected_L0, 0.1f);
+
+  // Other bands should be near zero
+  for (int i = 1; i < 9; ++i) {
+    EXPECT_NEAR(coeffs.coeffs[i].x(), 0.0f, 0.1f) << "Band " << i;
+  }
+}
+
 }  // namespace sh_baker

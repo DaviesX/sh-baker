@@ -4,8 +4,8 @@
 #include <tiny_gltf.h>
 
 #include <filesystem>
-#include <fstream>
 
+#include "loader.h"
 #include "scene.h"
 #include "stb_image_write.h"
 #include "tinyexr.h"
@@ -18,6 +18,11 @@ TEST(SaverTest, SaveCombinedImage) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 1.0f);
+
   // Fill with dummy data
   for (auto& sh : tex.pixels) {
     sh.coeffs[0] = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
@@ -28,7 +33,7 @@ TEST(SaverTest, SaveCombinedImage) {
     std::filesystem::remove(test_path);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kCombined);
+  bool success = SaveSHLightMap(tex, env_tex, test_path, SaveMode::kCombined);
   EXPECT_TRUE(success);
   EXPECT_TRUE(std::filesystem::exists(test_path));
 
@@ -46,6 +51,11 @@ TEST(SaverTest, SaveSplitChannels) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 0.5f);
+
   for (auto& sh : tex.pixels) {
     sh.coeffs[0] = Eigen::Vector3f(1.0f, 0.0f, 0.0f);  // L0
     sh.coeffs[1] = Eigen::Vector3f(0.0f, 1.0f, 0.0f);  // L1m1
@@ -62,18 +72,34 @@ TEST(SaverTest, SaveSplitChannels) {
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kSplitChannels);
+  bool success =
+      SaveSHLightMap(tex, env_tex, test_path, SaveMode::kSplitChannels);
   EXPECT_TRUE(success);
 
   for (const char* suffix : suffixes) {
     std::string filename = std::string("test_split_") + suffix + ".exr";
     EXPECT_TRUE(std::filesystem::exists(filename)) << "Missing " << filename;
-    int verify_ret = IsEXR(filename.c_str());
-    EXPECT_EQ(verify_ret, TINYEXR_SUCCESS);
+
+    // Verify EXR
+    float* out;
+    int width;
+    int height;
+    const char* err = nullptr;
+    int ret = LoadEXR(&out, &width, &height, filename.c_str(), &err);
+    EXPECT_EQ(ret, TINYEXR_SUCCESS) << err;
+    free(out);
+    // TODO: Verify L0 has 4 channels if possible with LoadEXR or check header
+    // separately. TinyEXR LoadEXR returns flattened RGBA floats by default if I
+    // recall correctly unless using custom loader. But here we just want to
+    // know if it saved successfully.
 
     // Clean up
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+
+  // Verify that EnvVisibility file does NOT exist
+  std::string env_filename = "test_split_EnvVisibility.exr";
+  EXPECT_FALSE(std::filesystem::exists(env_filename));
 }
 
 TEST(SaverTest, SaveSceneWithTexture) {
@@ -194,6 +220,11 @@ TEST(SaverTest, SavePackedLuminance) {
   tex.height = 16;
   tex.pixels.resize(16 * 16);
 
+  Texture32F env_tex;
+  env_tex.width = 16;
+  env_tex.height = 16;
+  env_tex.pixel_data.resize(16 * 16, 0.2f);
+
   // Fill with dummy data
   for (auto& sh : tex.pixels) {
     // L0 = (1.0, 0.5, 0.25)
@@ -210,7 +241,8 @@ TEST(SaverTest, SavePackedLuminance) {
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
 
-  bool success = SaveSHLightMap(tex, test_path, SaveMode::kLuminancePacked);
+  bool success =
+      SaveSHLightMap(tex, env_tex, test_path, SaveMode::kLuminancePacked);
   EXPECT_TRUE(success);
 
   for (int i = 0; i < 3; ++i) {
@@ -224,6 +256,96 @@ TEST(SaverTest, SavePackedLuminance) {
     // Clean up
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+}
+
+TEST(SaverTest, SaveComplexScene) {
+  Scene scene;
+
+  // 1. Materials
+  for (int i = 0; i < 5; ++i) {
+    Material mat;
+    mat.name = "Mat_" + std::to_string(i);
+    // 1x1 albedo to avoid file copy overhead in test
+    mat.albedo.width = 1;
+    mat.albedo.height = 1;
+    mat.albedo.pixel_data = {255, 255, 255, 255};
+    scene.materials.push_back(mat);
+  }
+
+  // 2. Geometries
+  for (int i = 0; i < 3; ++i) {
+    Geometry geo;
+    geo.vertices = {Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(1, 0, 0),
+                    Eigen::Vector3f(0, 1, 0)};
+    geo.normals = {Eigen::Vector3f(0, 0, 1), Eigen::Vector3f(0, 0, 1),
+                   Eigen::Vector3f(0, 0, 1)};
+    geo.texture_uvs = {Eigen::Vector2f(0, 0), Eigen::Vector2f(1, 0),
+                       Eigen::Vector2f(0, 1)};
+    geo.indices = {0, 1, 2};
+    geo.material_id = i;  // Use different materials
+    scene.geometries.push_back(geo);
+  }
+
+  // 3. Lights
+  Light pointLight;
+  pointLight.type = Light::Type::Point;
+  pointLight.position = Eigen::Vector3f(10, 10, 10);
+  pointLight.intensity = 5.0f;
+  scene.lights.push_back(pointLight);
+
+  Light spotLight;
+  spotLight.type = Light::Type::Spot;
+  spotLight.position = Eigen::Vector3f(0, 5, 0);
+  spotLight.direction = Eigen::Vector3f(0, -1, 0);
+  // cos(angle)
+  spotLight.cos_inner_cone = std::cos(0.5f);
+  spotLight.cos_outer_cone = std::cos(0.8f);
+  scene.lights.push_back(spotLight);
+
+  Light dirLight;
+  dirLight.type = Light::Type::Directional;
+  dirLight.direction = Eigen::Vector3f(1, 0, 0);
+  scene.lights.push_back(dirLight);
+
+  // Setup path
+  std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() / "sh_baker_test_complex";
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path output_path = temp_dir / "complex.gltf";
+
+  // Save
+  bool ret = SaveScene(scene, output_path);
+  ASSERT_TRUE(ret);
+
+  // Load back using sh_baker::LoadScene
+  auto loaded_scene_opt = LoadScene(output_path);
+  ASSERT_TRUE(loaded_scene_opt.has_value())
+      << "Failed to load saved scene from " << output_path;
+  const Scene& loaded_scene = *loaded_scene_opt;
+
+  // Checks
+  EXPECT_EQ(loaded_scene.materials.size(), 5);
+  EXPECT_EQ(loaded_scene.geometries.size(), 3);
+
+  // Check Lights
+  EXPECT_EQ(loaded_scene.lights.size(), 3);
+
+  // Verify light types
+  int point_count = 0;
+  int spot_count = 0;
+  int dir_count = 0;
+
+  for (const auto& l : loaded_scene.lights) {
+    if (l.type == Light::Type::Point) point_count++;
+    if (l.type == Light::Type::Spot) spot_count++;
+    if (l.type == Light::Type::Directional) dir_count++;
+  }
+  EXPECT_EQ(point_count, 1);
+  EXPECT_EQ(spot_count, 1);
+  EXPECT_EQ(dir_count, 1);
+
+  // Cleanup
+  std::filesystem::remove_all(temp_dir);
 }
 
 }  // namespace sh_baker

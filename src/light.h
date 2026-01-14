@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-#include <vector>
 
 #include "occlusion.h"
 #include "scene.h"
@@ -212,11 +211,13 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
 // Then, it computes the radiance L_e(x) combined with the geometric visibility
 // term. The estimated radiance is of lower variance if the lights set is
 // potentially visible.
-Eigen::Vector3f EvaluateLightSamples(
-    const std::vector<Light>& lights, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    const Eigen::Vector3f& reflected, const Material& mat,
-    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
+Eigen::Vector3f EvaluateLightSamples(const Scene& scene, RTCScene rtc_scene,
+                                     const Eigen::Vector3f& hit_point,
+                                     const Eigen::Vector3f& hit_point_normal,
+                                     const Eigen::Vector3f& reflected,
+                                     const Material& mat,
+                                     const Eigen::Vector2f& uv,
+                                     unsigned num_samples, std::mt19937& rng);
 
 // Computes the direct lighting (Next Event Estimation) and accumulates the
 // projected SH coefficients into the accumulator.
@@ -225,8 +226,7 @@ Eigen::Vector3f EvaluateLightSamples(
 // cannot simply return a summed radiance covering multiple light sources.
 // Instead, we must project each light sample into the SH basis using its
 // specific incoming direction.
-void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
-                                    RTCScene rtc_scene,
+void AccumulateIncomingLightSamples(const Scene& scene, RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,

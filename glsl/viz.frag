@@ -29,14 +29,17 @@ uniform sampler2D u_PackedTex0;
 uniform sampler2D u_PackedTex1;
 uniform sampler2D u_PackedTex2;
 
+// -- SH Sky ---
+uniform vec3 u_SkySH[9];
+
 // --- Attributes ---
 in vec3 vWorldPos;
 in vec3 vTangent;
 in vec3 vBitangent;
 
-// --- Helper: Sample SH ---
-vec3 SampleSH(vec3 normal, vec2 uv) {
-  // Basis functions:
+// -- Helper: Evaluate SH Basis ---
+// -- Helper: Evaluate SH Basis ---
+vec3 EvalSHBasis(vec3 normal, vec3 sh_coeffs[9]) {
   float x = normal.x;
   float y = normal.y;
   float z = normal.z;
@@ -57,60 +60,67 @@ vec3 SampleSH(vec3 normal, vec2 uv) {
   float b7 = c3 * x * z;
   float b8 = c5 * (x * x - y * y);
 
-  vec3 L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22;
+  vec3 result = sh_coeffs[0] * b0 + sh_coeffs[1] * b1 + sh_coeffs[2] * b2 +
+                sh_coeffs[3] * b3 + sh_coeffs[4] * b4 + sh_coeffs[5] * b5 +
+                sh_coeffs[6] * b6 + sh_coeffs[7] * b7 + sh_coeffs[8] * b8;
+
+  return max(result, 0.0);
+}
+
+// --- Helper: Sample SH ---
+// Returns .rgb = SH Color, .a = Environment Visibility
+vec4 SampleSH(vec3 normal, vec2 uv) {
+  vec3 sh_coeffs[9];
+  float visibility = 1.0;
 
   if (u_UsePackedLuminance == 1) {
     vec4 p0 = texture(u_PackedTex0, uv);
     vec4 p1 = texture(u_PackedTex1, uv);
     vec4 p2 = texture(u_PackedTex2, uv);
 
-    L0 = p0.rgb;
-    float L0_lum = dot(L0, vec3(0.2126, 0.7152, 0.0722));
+    sh_coeffs[0] = p0.rgb;
+    visibility = p0.a;
+
+    // Chroma reconstruction for higher bands
+    float L0_lum = dot(sh_coeffs[0], vec3(0.2126, 0.7152, 0.0722));
     vec3 chroma = vec3(1.0);
     if (L0_lum > 1e-6) {
-      chroma = L0 / L0_lum;
+      chroma = sh_coeffs[0] / L0_lum;
     }
 
-    L1m1 = vec3(p0.a) * chroma;
-    L10 = vec3(p1.r) * chroma;
-    L11 = vec3(p1.g) * chroma;
-    L2m2 = vec3(p1.b) * chroma;
-    L2m1 = vec3(p1.a) * chroma;
-    L20 = vec3(p2.r) * chroma;
-    L21 = vec3(p2.g) * chroma;
-    L22 = vec3(p2.b) * chroma;
+    // New Mapping:
+    // File 1: L1m1, L10, L11, L2m2
+    sh_coeffs[1] = vec3(p1.r) * chroma;
+    sh_coeffs[2] = vec3(p1.g) * chroma;
+    sh_coeffs[3] = vec3(p1.b) * chroma;
+    sh_coeffs[4] = vec3(p1.a) * chroma;
+
+    // File 2: L2m1, L20, L21, L22
+    sh_coeffs[5] = vec3(p2.r) * chroma;
+    sh_coeffs[6] = vec3(p2.g) * chroma;
+    sh_coeffs[7] = vec3(p2.b) * chroma;
+    sh_coeffs[8] = vec3(p2.a) * chroma;
   } else {
-    L0 = texture(u_L0, uv).rgb;
-    L1m1 = texture(u_L1m1, uv).rgb;
-    L10 = texture(u_L10, uv).rgb;
-    L11 = texture(u_L11, uv).rgb;
-    L2m2 = texture(u_L2m2, uv).rgb;
-    L2m1 = texture(u_L2m1, uv).rgb;
-    L20 = texture(u_L20, uv).rgb;
-    L21 = texture(u_L21, uv).rgb;
-    L22 = texture(u_L22, uv).rgb;
+    vec4 l0 = texture(u_L0, uv);
+    sh_coeffs[0] = l0.rgb;
+    visibility = l0.a;
+    sh_coeffs[1] = texture(u_L1m1, uv).rgb;
+    sh_coeffs[2] = texture(u_L10, uv).rgb;
+    sh_coeffs[3] = texture(u_L11, uv).rgb;
+    sh_coeffs[4] = texture(u_L2m2, uv).rgb;
+    sh_coeffs[5] = texture(u_L2m1, uv).rgb;
+    sh_coeffs[6] = texture(u_L20, uv).rgb;
+    sh_coeffs[7] = texture(u_L21, uv).rgb;
+    sh_coeffs[8] = texture(u_L22, uv).rgb;
   }
 
-  vec3 result = L0 * b0 + L1m1 * b1 + L10 * b2 + L11 * b3 + L2m2 * b4 +
-                L2m1 * b5 + L20 * b6 + L21 * b7 + L22 * b8;
-  return max(result, 0.0);
+  vec3 result = EvalSHBasis(normal, sh_coeffs);
+  return vec4(max(result, 0.0), visibility);
 }
 
 // --- Fresnel ---
 vec3 FresnelSchlick(float cosTheta, vec3 F0) {
   return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
-}
-
-float A = 0.15;
-float B = 0.50;
-float C = 0.10;
-float D = 0.20;
-float E = 0.02;
-float F = 0.30;
-float W = 11.2;
-
-vec3 Uncharted2Tonemap(vec3 x) {
-  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
 }
 
 void main() {
@@ -137,13 +147,16 @@ void main() {
 
   // 3. Shading
   // Diffuse Irradiance (SH along Normal)
-  vec3 irradiance = SampleSH(N, vTexCoord1);
+  vec4 shSample = SampleSH(N, vTexCoord1);
+  vec3 irradiance = shSample.rgb;
+  float skyVisibility = shSample.a;
+
+  // Ambient Sky
+  vec3 skyIrradiance = skyVisibility * EvalSHBasis(N, u_SkySH);
+  irradiance += skyIrradiance;
 
   // Specular Radiance (SH along Reflection) -> Rough approximation
-  // Ideally we convolve SH with Specular Lobe, but cheap way is sampling along
-  // R. We can blur the lookup based on roughness if we had MIPs of coeffs? For
-  // now, just sample along R.
-  vec3 specularIrradiance = SampleSH(R, vTexCoord1);
+  vec3 specularIrradiance = SampleSH(R, vTexCoord1).rgb;
 
   // Compute F0
   vec3 F0 = vec3(0.04);
@@ -156,22 +169,9 @@ void main() {
   kD *= (1.0 - metallic);
 
   vec3 diffuse = kD * irradiance * albedo;
-
-  // Simple Specular term
-  // (Usually use Split Sum approx with Pre-filtered env map + BRDF LUT)
-  // Here we use SH as Pre-filtered env map (very low freq).
-  // It works okay for rough surfaces. For shiny, it will look blurry (which is
-  // SH limitation).
   vec3 specular = specularIrradiance * F;
 
-  // Uncharted2 Tone Mapping.
+  // Output Linear HDR Color
   vec3 color = diffuse + specular;
-
-  float exposureBias = 4.0f;
-  vec3 curr = Uncharted2Tonemap(exposureBias * color);
-
-  vec3 whiteScale = 1.0f / Uncharted2Tonemap(vec3(W));
-  color = curr * whiteScale;
-
   FragColor = vec4(color, 1.0);
 }

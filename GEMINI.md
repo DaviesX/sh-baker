@@ -94,7 +94,29 @@ Task: Please implement a scaling heuristic for xatlas mesh declarations based on
 
 Goal: Provide the C++ logic to calculate these scales during the mesh processing loop and apply them to the xatlas setup.
 
-Phase 8 Visibility-Aware Importance Sampling
+Phase 8: Decoupled Environment & Occlusion Masking
+Context: We are moving to a decoupled environment model for `sh-baker`. The sky will not be "baked" into the SH coefficients. Instead, we will store a **Sky Visibility** mask and resolve the sky contribution at runtime using global SH uniforms.
+
+Task: Please implement the following architecture:
+
+1. Runtime Environment Initialization (`loader.cpp` / `scene.h`)
+    * **Dual-Path Initialization:**
+        - **Cubemap Path:** If a glTF environment texture is present, implement `ProjectCubeMapToSH()` to generate 9 RGB SH coefficients at load-time.
+        - **Analytical Path:** If no texture is found, use the Sun's direction and intensity to run the **Preetham Sky** projection (with a 30x Zenith intensity cap to prevent ringing).
+    * **Storage:** Store these 9 coefficients in the `Scene` struct (as SHCoeffs) for transmission to the visualizer as **Uniforms** (`u_SkySH[9]`).
+
+2. The Occlusion Baker (`integrator.cpp`)
+    * **The "Hole Punch" Integrator:** During the lightmap bake, modify the integration loop. When a ray is fired:
+        - **If it hits geometry:** Accumulate radiance as usual (Indirect Sun Bounces).
+        - **If it hits the "Miss" (Sky):** Do not accumulate radiance. Instead, increment a **Visibility Counter**.
+    * **Monte Carlo Estimator:** Calculate the probability .
+    * **Storage:** Store this scalar value ( to ) in the **Alpha Channel** of the third SH Lightmap texture (Texture C).
+
+3. Visualizer Reconstruction (`visualizer_main.cpp` / `viz.frag`)
+    * **The Shader Bridge:** Update the fragment shader to incorporate the ambient:
+        - **Sky Ambient:** Evaluate the 9 Global SH Uniforms () and multiply the result by the **Sky Visibility** fetched from the lightmap's Alpha channel.
+
+Phase 9: Visibility-Aware Importance Sampling
 Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.

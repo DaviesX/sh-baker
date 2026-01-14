@@ -79,25 +79,31 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 
 }  // namespace light_internal
 
-Eigen::Vector3f EvaluateLightSamples(
-    const std::vector<Light>& lights, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    const Eigen::Vector3f& reflected, const Material& mat,
-    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng) {
+Eigen::Vector3f EvaluateLightSamples(const Scene& scene, RTCScene rtc_scene,
+                                     const Eigen::Vector3f& hit_point,
+                                     const Eigen::Vector3f& hit_point_normal,
+                                     const Eigen::Vector3f& reflected,
+                                     const Material& mat,
+                                     const Eigen::Vector2f& uv,
+                                     unsigned num_samples, std::mt19937& rng) {
   // Build sampling distribution using the cheap heuristic:
   // score = L(sample) * brdf * \cos \theta / dist^2.
   // By omitting the visibility term, we can sample the distribution extremely
   // efficiently. Given the lights set we have here is potentially visible, our
   // probability distribution is very close to the actual radiance function,
   // yielding low variance.
+
+  const std::vector<Light>& lights = scene.lights;
+  size_t total_candidates = lights.size() + (scene.environment ? 1 : 0);
+
   std::vector<Eigen::Vector3f> radiances_without_visibility;
   std::vector<Ray> visibility_rays;
   std::vector<float> area_sample_pdfs;
   std::vector<float> weights;
-  radiances_without_visibility.reserve(lights.size());
-  visibility_rays.reserve(lights.size());
-  area_sample_pdfs.reserve(lights.size());
-  weights.reserve(lights.size());
+  radiances_without_visibility.reserve(total_candidates);
+  visibility_rays.reserve(total_candidates);
+  area_sample_pdfs.reserve(total_candidates);
+  weights.reserve(total_candidates);
 
   auto brdf_fn = [&](const Eigen::Vector3f& light_dir) {
     // EvalMaterial expects (..., incident, reflected).
@@ -182,8 +188,7 @@ Eigen::Vector3f EvaluateLightSamples(
   return result / num_samples;
 }
 
-void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
-                                    RTCScene rtc_scene,
+void AccumulateIncomingLightSamples(const Scene& scene, RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,
@@ -194,14 +199,18 @@ void AccumulateIncomingLightSamples(const std::vector<Light>& lights,
   // efficiently. Given the lights set we have here is potentially visible, our
   // probability distribution is very close to the actual incoming radiance
   // function, yielding low variance.
+
+  const std::vector<Light>& lights = scene.lights;
+  size_t total_candidates = lights.size() + (scene.environment ? 1 : 0);
+
   std::vector<Eigen::Vector3f> radiances_without_visibility;
   std::vector<Ray> visibility_rays;
   std::vector<float> area_sample_pdfs;
   std::vector<float> weights;
-  radiances_without_visibility.reserve(lights.size());
-  visibility_rays.reserve(lights.size());
-  area_sample_pdfs.reserve(lights.size());
-  weights.reserve(lights.size());
+  radiances_without_visibility.reserve(total_candidates);
+  visibility_rays.reserve(total_candidates);
+  area_sample_pdfs.reserve(total_candidates);
+  weights.reserve(total_candidates);
 
   for (const auto& light : lights) {
     Eigen::Vector3f radiance;
