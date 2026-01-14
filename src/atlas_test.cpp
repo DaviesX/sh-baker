@@ -165,4 +165,43 @@ TEST(AtlasTest, CalculateGeometryScales_DensityMultiplier) {
   EXPECT_NEAR(scales[0], 200.0f, 1e-4f);
 }
 
+TEST(AtlasTest, SkipParameterization) {
+  Geometry input_geo;
+  // Two triangles with distinct UV islands so they pack easily.
+  input_geo.vertices = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0},
+                        {2, 2, 0}, {3, 2, 0}, {2, 3, 0}};
+  input_geo.normals.resize(6, Eigen::Vector3f(0, 0, 1));
+  input_geo.tangents.resize(6, Eigen::Vector4f(1, 0, 0, 1));
+  input_geo.indices = {0, 1, 2, 3, 4, 5};
+  input_geo.texture_uvs = {{0.0f, 0.0f}, {0.4f, 0.0f}, {0.0f, 0.4f},
+                           {0.6f, 0.6f}, {1.0f, 0.6f}, {0.6f, 1.0f}};
+
+  input_geo.material_id = 0;
+
+  Scene scene;
+  scene.geometries.push_back(input_geo);
+  Material mat;
+  mat.albedo.width = 100;
+  mat.albedo.height = 100;
+  scene.materials.push_back(mat);
+
+  // Call with skip_parameterization = true
+  std::optional<AtlasResult> atlas_result =
+      CreateAtlasGeometries(scene, 1024, 2, 1.0f, true);
+
+  ASSERT_TRUE(atlas_result.has_value());
+  EXPECT_GT(atlas_result->width, 0);
+  EXPECT_GT(atlas_result->height, 0);
+
+  const auto& out_geo = atlas_result->geometries[0];
+  ASSERT_EQ(out_geo.lightmap_uvs.size(), 6);
+
+  for (const auto& uv : out_geo.lightmap_uvs) {
+    EXPECT_GE(uv.x(), 0.0f);
+    EXPECT_LE(uv.x(), 1.0f);
+    EXPECT_GE(uv.y(), 0.0f);
+    EXPECT_LE(uv.y(), 1.0f);
+  }
+}
+
 }  // namespace sh_baker

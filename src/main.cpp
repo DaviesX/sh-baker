@@ -34,6 +34,10 @@ DEFINE_bool(luminance_only, false,
 DEFINE_bool(debug_output, false,
             "If true, output debug information to the output folder.");
 
+DEFINE_bool(skip_parameterization, false,
+            "Skip mesh parameterization and use existing texture UVs for atlas "
+            "packing.");
+
 const char* kLightmapFileName = "lightmap.exr";
 const char* kGLTFFileName = "scene.gltf";
 
@@ -77,7 +81,8 @@ int main(int argc, char* argv[]) {
   std::optional<sh_baker::AtlasResult> atlas_result =
       sh_baker::CreateAtlasGeometries(
           scene, FLAGS_width, FLAGS_dilation,
-          static_cast<float>(FLAGS_density_multiplier));
+          static_cast<float>(FLAGS_density_multiplier),
+          FLAGS_skip_parameterization);
   if (!atlas_result) {
     LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
     return 1;
