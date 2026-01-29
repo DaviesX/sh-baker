@@ -106,18 +106,24 @@ int main(int argc, char* argv[]) {
     int scaled_h = raster_config.height * raster_config.supersample_scale;
     LOG(INFO) << "Generating Material Map (" << scaled_w << "x" << scaled_h
               << ")...";
-    sh_baker::Texture mat_map =
+    sh_baker::Texture mat_map1 =
+        sh_baker::RasterizeSceneMaterial(scene, raster_config);
+    sh_baker::Texture mat_map2 =
         sh_baker::CreateMaterialMap(surface_points, scaled_w, scaled_h);
 
     std::filesystem::path out_dir = FLAGS_output.empty()
                                         ? std::filesystem::current_path()
                                         : std::filesystem::path(FLAGS_output);
     std::filesystem::create_directories(out_dir);
-    std::filesystem::path map_path = out_dir / "material_map.png";
-    if (sh_baker::SaveTexture(mat_map, map_path)) {
-      LOG(INFO) << "Material map saved to: " << map_path;
+    std::filesystem::path map_path1 = out_dir / "material_map1.png";
+    std::filesystem::path map_path2 = out_dir / "material_map2.png";
+    if (sh_baker::SaveTexture(mat_map1, map_path1) &&
+        sh_baker::SaveTexture(mat_map2, map_path2)) {
+      LOG(INFO) << "Material map saved to: " << map_path1 << " and "
+                << map_path2;
     } else {
-      LOG(ERROR) << "Failed to save material map to: " << map_path;
+      LOG(ERROR) << "Failed to save material map to: " << map_path1 << " and "
+                 << map_path2;
     }
   }
 

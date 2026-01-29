@@ -125,4 +125,39 @@ TEST(RasterizerTest, DownsampleValidityMask) {
   EXPECT_EQ(mask[3], 1);  // (1,1)
 }
 
+TEST(RasterizerTest, RasterizeSceneMaterial) {
+  Scene scene;
+  Geometry quad;
+  // Full 0-1 UV quad
+  quad.material_id = 123;
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+  quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
+  quad.indices = {0, 1, 2, 0, 2, 3};
+  scene.geometries.push_back(quad);
+
+  RasterConfig config;
+  config.width = 4;
+  config.height = 4;
+
+  Texture result = RasterizeSceneMaterial(scene, config);
+
+  EXPECT_EQ(result.width, 4);
+  EXPECT_EQ(result.height, 4);
+  EXPECT_EQ(result.channels, 3);
+  EXPECT_EQ(result.pixel_data.size(), 4 * 4 * 3);
+
+  // All pixels should be colored with the material color
+  for (int i = 0; i < 16; ++i) {
+    uint8_t r = result.pixel_data[i * 3 + 0];
+    uint8_t g = result.pixel_data[i * 3 + 1];
+    uint8_t b = result.pixel_data[i * 3 + 2];
+    // Color should NOT be black
+    EXPECT_TRUE(r != 0 || g != 0 || b != 0)
+        << "Pixel " << i << " should be colored";
+  }
+}
+
 }  // namespace sh_baker

@@ -211,66 +211,82 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
 }
 
 Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
-  // TODO: Implement the triangle rasterization based on this method.
-  //
-  // static void SetPixel(uint8_t* dest, int destWidth, int x, int y,
-  //                      const uint8_t* color) {
-  //   uint8_t* pixel = &dest[x * 3 + y * (destWidth * 3)];
-  //   pixel[0] = color[0];
-  //   pixel[1] = color[1];
-  //   pixel[2] = color[2];
-  // }
-  //
-  // /*
-  // https://github.com/ssloy/tinyrenderer/wiki/Lesson-2:-Triangle-rasterization-and-back-face-culling
-  // Copyright Dmitry V. Sokolov
+  Texture texture;
+  texture.width = config.width;
+  texture.height = config.height;
+  texture.channels = 3;
+  texture.pixel_data.resize(config.width * config.height * 3, 0);
 
-  // This software is provided 'as-is', without any express or implied warranty.
-  // In no event will the authors be held liable for any damages arising from
-  // the use of this software. Permission is granted to anyone to use this
-  // software for any purpose, including commercial applications, and to alter
-  // it and redistribute it freely, subject to the following restrictions:
+  auto SetPixel = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+    if (x >= 0 && x < config.width && y >= 0 && y < config.height) {
+      size_t index = (y * config.width + x) * 3;
+      texture.pixel_data[index + 0] = r;
+      texture.pixel_data[index + 1] = g;
+      texture.pixel_data[index + 2] = b;
+    }
+  };
 
-  // 1. The origin of this software must not be misrepresented; you must not
-  // claim that you wrote the original software. If you use this software in a
-  // product, an acknowledgment in the product documentation would be
-  // appreciated but is not required.
-  // 2. Altered source versions must be plainly marked as such, and must not be
-  // misrepresented as being the original software.
-  // 3. This notice may not be removed or altered from any source distribution.
-  // */
-  // static void RasterizeTriangle(uint8_t *dest, int destWidth, const int *t0,
-  // const int *t1, const int *t2, const uint8_t *color)
-  // {
-  // 	if (t0[1] > t1[1]) std::swap(t0, t1);
-  // 	if (t0[1] > t2[1]) std::swap(t0, t2);
-  // 	if (t1[1] > t2[1]) std::swap(t1, t2);
-  // 	int total_height = t2[1] - t0[1];
-  // 	for (int i = 0; i < total_height; i++) {
-  // 		bool second_half = i > t1[1] - t0[1] || t1[1] == t0[1];
-  // 		int segment_height = second_half ? t2[1] - t1[1] : t1[1] -
-  // t0[1]; 		float alpha = (float)i / total_height; 		float
-  // beta = (float)(i - (second_half ? t1[1] - t0[1] : 0)) / segment_height;
-  // int A[2], B[2]; 		for (int j = 0; j < 2; j++) {
-  // A[j] = int(t0[j] + (t2[j] - t0[j]) * alpha); 			B[j] =
-  // int(second_half ? t1[j] + (t2[j] - t1[j]) * beta : t0[j] + (t1[j] - t0[j])
-  // * beta);
-  // 		}
-  // 		if (A[0] > B[0]) std::swap(A, B);
-  // 		for (int j = A[0]; j <= B[0]; j++)
-  // 			SetPixel(dest, destWidth, j, t0[1] + i, color);
-  // 	}
-  // }
-  //
-  // t0, t1 and t2 are the triangle vertices in screen space, each storing u and
-  // v pixel coordinates.
-  // color is the color coded material ID of the triangle.
-  // dest is the destination image buffer.
-  //
-  // You don't have to copy exactly. Please adapt the code according to our data
-  // types.
+  for (const auto& geo : scene.geometries) {
+    uint32_t id = geo.material_id;
+    // Gold Noise / Hash
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = (id >> 16) ^ id;
 
-  return {};
+    uint8_t r = (id & 0xFF);
+    uint8_t g = ((id >> 8) & 0xFF);
+    uint8_t b = ((id >> 16) & 0xFF);
+
+    if (r < 50 && g < 50 && b < 50) {
+      r += 50;
+      g += 50;
+      b += 50;
+    }
+
+    size_t tri_count = geo.indices.size() / 3;
+    for (size_t i = 0; i < tri_count; ++i) {
+      uint32_t idx0 = geo.indices[i * 3 + 0];
+      uint32_t idx1 = geo.indices[i * 3 + 1];
+      uint32_t idx2 = geo.indices[i * 3 + 2];
+
+      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+
+      Eigen::Vector2i t0((int)(uv0.x() * config.width),
+                         (int)(uv0.y() * config.height));
+      Eigen::Vector2i t1((int)(uv1.x() * config.width),
+                         (int)(uv1.y() * config.height));
+      Eigen::Vector2i t2((int)(uv2.x() * config.width),
+                         (int)(uv2.y() * config.height));
+
+      if (t0.y() > t1.y()) std::swap(t0, t1);
+      if (t0.y() > t2.y()) std::swap(t0, t2);
+      if (t1.y() > t2.y()) std::swap(t1, t2);
+
+      int total_height = t2.y() - t0.y();
+      for (int i = 0; i < total_height; i++) {
+        bool second_half = i > t1.y() - t0.y() || t1.y() == t0.y();
+        int segment_height = second_half ? t2.y() - t1.y() : t1.y() - t0.y();
+        float alpha = (float)i / total_height;
+        float beta =
+            (float)(i - (second_half ? t1.y() - t0.y() : 0)) / segment_height;
+        Eigen::Vector2i A = t0 + ((t2 - t0).cast<float>() * alpha).cast<int>();
+        Eigen::Vector2i B;
+        if (second_half) {
+          B = t1 + ((t2 - t1).cast<float>() * beta).cast<int>();
+        } else {
+          B = t0 + ((t1 - t0).cast<float>() * beta).cast<int>();
+        }
+        if (A.x() > B.x()) std::swap(A, B);
+        for (int j = A.x(); j <= B.x(); j++) {
+          SetPixel(j, t0.y() + i, r, g, b);
+        }
+      }
+    }
+  }
+
+  return texture;
 }
 
 std::vector<uint8_t> CreateValidityMask(
