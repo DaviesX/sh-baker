@@ -21,6 +21,8 @@
 namespace sh_baker {
 namespace {
 
+const float kLightIntensityScale = 1e-3f;
+
 // MikkTSpace Interface
 struct MikkTSpaceContext {
   Geometry* geometry;
@@ -405,11 +407,44 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     area_light.area = SurfaceArea(added_geo);
 
     // Intensity. Color will come from the material's albedo texture.
-    area_light.intensity = mat.emission_intensity;
+    area_light.intensity = mat.emission_intensity * kLightIntensityScale;
 
     scene->lights.push_back(std::move(area_light));
   }
   return true;
+}
+
+// Helper to decode URI (e.g. %20 -> space)
+std::string UrlDecode(const std::string& str) {
+  std::string ret;
+  ret.reserve(str.length());
+  for (size_t i = 0; i < str.length(); ++i) {
+    if (str[i] == '%' && i + 2 < str.length()) {
+      int value = 0;
+      bool valid = true;
+      for (int j = 1; j <= 2; ++j) {
+        char c = str[i + j];
+        if (c >= '0' && c <= '9') {
+          value = (value << 4) | (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+          value = (value << 4) | (c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+          value = (value << 4) | (c - 'A' + 10);
+        } else {
+          valid = false;
+          break;
+        }
+      }
+
+      if (valid) {
+        ret += static_cast<char>(value);
+        i += 2;
+        continue;
+      }
+    }
+    ret += str[i];
+  }
+  return ret;
 }
 
 // Helper to load a texture
@@ -425,7 +460,7 @@ void LoadTexture(const tinygltf::Model& model, int tex_idx,
       out_tex->channels = img.component;
       out_tex->pixel_data = img.image;  // Copy data
       if (!img.uri.empty()) {
-        std::filesystem::path uri_path(img.uri);
+        std::filesystem::path uri_path(UrlDecode(img.uri));
         if (uri_path.is_absolute()) {
           out_tex->file_path = uri_path;
         } else {
@@ -589,7 +624,8 @@ void ProcessLight(const tinygltf::Model& model,
   }
 
   if (light_obj.Has("intensity")) {
-    l.intensity = static_cast<float>(light_obj.Get("intensity").Get<double>());
+    l.intensity = static_cast<float>(light_obj.Get("intensity").Get<double>()) *
+                  kLightIntensityScale;
   }
 
   if (l.type == Light::Type::Spot && light_obj.Has("spot")) {

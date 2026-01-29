@@ -16,6 +16,8 @@ namespace sh_baker {
 
 namespace {
 
+const float kLightIntensityScale = 1e+3f;
+
 // Helpers for buffer management
 void AddBufferView(const void* data, size_t size, size_t stride, int target,
                    int& view_index, tinygltf::Model* model) {
@@ -683,7 +685,8 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       color_vec.push_back(tinygltf::Value(double(light.color.z())));
       light_obj["color"] = tinygltf::Value(color_vec);
 
-      light_obj["intensity"] = tinygltf::Value(double(light.intensity));
+      light_obj["intensity"] =
+          tinygltf::Value(double(light.intensity * kLightIntensityScale));
 
       std::string type_str;
       if (light.type == Light::Type::Directional) {
