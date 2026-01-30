@@ -118,8 +118,8 @@ bool AnyValidSubSamples(int x, int y, int stride, int scale,
 }
 
 template <typename VertexType, typename DrawFn>
-void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
-                       Eigen::Vector2f t2, VertexType v0, VertexType v1,
+void RasterizeTriangle(Eigen::Vector2i t0, Eigen::Vector2i t1,
+                       Eigen::Vector2i t2, VertexType v0, VertexType v1,
                        VertexType v2, const DrawFn& draw_fn) {
   // Sort vertices by y-coordinate.
   if (t0.y() > t1.y()) {
@@ -136,56 +136,59 @@ void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
   }
 
   // Align to pixel centers: start at first half-integer >= t0.y()
-  float start_y = std::ceil(t0.y() - 0.5f) + 0.5f;
-  float total_height = t2.y() - t0.y();
+  int total_height = t2.y() - t0.y();
 
-  for (float y = start_y; y < t2.y(); y += 1.0f) {
-    float h = y - t0.y();
-    bool second_half = y > t1.y() || t1.y() == t0.y();
+  for (int h = 0; h < total_height; ++h) {
+    bool second_half = (h + 0.5f) > (t1.y() - t0.y()) || t1.y() == t0.y();
 
-    float segment_height;
+    int segment_height;
     if (second_half) {
       segment_height = t2.y() - t1.y();
     } else {
       segment_height = t1.y() - t0.y();
     }
 
-    float alpha = h / total_height;
+    if (segment_height == 0) continue;
+
+    float alpha = float(h + 0.5f) / total_height;
     float beta;
     if (second_half) {
-      beta = (y - t1.y()) / segment_height;
+      beta = float(h + 0.5f - (t1.y() - t0.y())) / segment_height;
     } else {
-      beta = h / segment_height;
+      beta = float(h + 0.5f) / segment_height;
     }
 
-    Eigen::Vector2f ta = t0 + (t2 - t0) * alpha;
-    Eigen::Vector2f tb;
+    Eigen::Vector2f ta_f = t0.cast<float>() + (t2 - t0).cast<float>() * alpha;
+    Eigen::Vector2f tb_f;
     VertexType va = v0 + (v2 - v0) * alpha;
     VertexType vb;
+
     if (second_half) {
-      tb = t1 + (t2 - t1) * beta;
+      tb_f = t1.cast<float>() + (t2 - t1).cast<float>() * beta;
       vb = v1 + (v2 - v1) * beta;
     } else {
-      tb = t0 + (t1 - t0) * beta;
+      tb_f = t0.cast<float>() + (t1 - t0).cast<float>() * beta;
       vb = v0 + (v1 - v0) * beta;
     }
 
-    if (ta.x() > tb.x()) {
-      std::swap(ta, tb);
+    if (ta_f.x() > tb_f.x()) {
+      std::swap(ta_f, tb_f);
       std::swap(va, vb);
     }
 
-    float scanline_width = tb.x() - ta.x();
+    float span = tb_f.x() - ta_f.x();
+    if (span <= 1e-5f) continue;
 
-    // Align to pixel centers: start at first half-integer >= ta.x()
-    float start_x = std::ceil(ta.x() - 0.5f) + 0.5f;
-    for (float tx = start_x; tx <= tb.x(); tx += 1.0f) {
-      Eigen::Vector2f tc(tx, y);
+    // Pixel coverage: center (x+0.5) must be within [ta_f.x, tb_f.x]
+    int x_start = std::ceil(ta_f.x() - 0.5f);
+    int x_end = std::floor(tb_f.x() - 0.5f);
 
-      float gamma = (tx - ta.x()) / scanline_width;
-      VertexType vc = va + (vb - va) * gamma;
+    VertexType grad = (vb - va) * (1.0f / span);
 
-      draw_fn(tc, vc);
+    for (int x = x_start; x <= x_end; ++x) {
+      float dist = (x + 0.5f) - ta_f.x();
+      VertexType vc = va + grad * dist;
+      draw_fn(Eigen::Vector2i(x, t0.y() + h), vc);
     }
   }
 }
@@ -359,10 +362,13 @@ std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
       Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
       Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      // Convert UV to raster coordinates (float for sub-pixel precision)
-      Eigen::Vector2f t0(uv0.x() * scaled_width, uv0.y() * scaled_height);
-      Eigen::Vector2f t1(uv1.x() * scaled_width, uv1.y() * scaled_height);
-      Eigen::Vector2f t2(uv2.x() * scaled_width, uv2.y() * scaled_height);
+      // Convert UV to raster coordinates
+      Eigen::Vector2i t0(int(uv0.x() * scaled_width),
+                         int(uv0.y() * scaled_height));
+      Eigen::Vector2i t1(int(uv1.x() * scaled_width),
+                         int(uv1.y() * scaled_height));
+      Eigen::Vector2i t2(int(uv2.x() * scaled_width),
+                         int(uv2.y() * scaled_height));
 
       SurfaceVertex v0(vertices[idx0], normals[idx0], tangents[idx0]);
       SurfaceVertex v1(vertices[idx1], normals[idx1], tangents[idx1]);
@@ -370,14 +376,15 @@ std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
 
       RasterizeTriangle(
           t0, t1, t2, v0, v1, v2,
-          [&](const Eigen::Vector2f& p, const SurfaceVertex& v) {
-            int x = static_cast<int>(p.x());
-            int y = static_cast<int>(p.y());
+          [&](const Eigen::Vector2i& p, const SurfaceVertex& v) {
+            int x = p.x();
+            int y = p.y();
 
             // Boundary check
-            if (x < 0 || x >= scaled_width || y < 0 || y >= scaled_height) {
-              return;
-            }
+            CHECK_GE(x, 0);
+            CHECK_GE(y, 0);
+            CHECK_LT(x, scaled_width);
+            CHECK_LT(y, scaled_height);
 
             int pixel_idx = y * scaled_width + x;
 
@@ -421,17 +428,24 @@ Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
       Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
       Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      Eigen::Vector2f t0(uv0.x() * config.width, uv0.y() * config.height);
-      Eigen::Vector2f t1(uv1.x() * config.width, uv1.y() * config.height);
-      Eigen::Vector2f t2(uv2.x() * config.width, uv2.y() * config.height);
+      Eigen::Vector2i t0(int(uv0.x() * config.width),
+                         int(uv0.y() * config.height));
+      Eigen::Vector2i t1(int(uv1.x() * config.width),
+                         int(uv1.y() * config.height));
+      Eigen::Vector2i t2(int(uv2.x() * config.width),
+                         int(uv2.y() * config.height));
 
       RasterizeTriangle(
           t0, t1, t2, vertex, vertex, vertex,
           [&texture, width = config.width, height = config.height](
-              const Eigen::Vector2f& t, const MaterialIdVertex& v) {
-            unsigned x = unsigned(t.x());
-            unsigned y = unsigned(t.y());
-            unsigned index = (y * width + x) * sizeof(MaterialIdVertex);
+              const Eigen::Vector2i& t, const MaterialIdVertex& v) {
+            int x = t.x();
+            int y = t.y();
+            CHECK_GE(x, 0);
+            CHECK_GE(y, 0);
+            CHECK_LT(x, width);
+            CHECK_LT(y, height);
+            int index = (y * width + x) * sizeof(MaterialIdVertex);
             texture.pixel_data[index + 0] = v.r;
             texture.pixel_data[index + 1] = v.g;
             texture.pixel_data[index + 2] = v.b;

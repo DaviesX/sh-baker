@@ -193,6 +193,13 @@ TEST(RasterizerTest, RasterizeQuadScanline) {
   EXPECT_NEAR(result[5].position.x(), -0.25f, 0.001f);
   EXPECT_NEAR(result[5].position.y(), -0.25f, 0.001f);
   EXPECT_NEAR(result[5].normal.z(), 1.0f, 0.001f);
+
+  // Check Pixel 6 (2,1) -> UV (0.625, 0.375)
+  // (-1) + (1 - (-1)) * 0.625 = -1 + 2 * 0.625 = 0.25
+  // (-1) + (1 - (-1)) * 0.375 = -1 + 2 * 0.375 = -0.25
+  EXPECT_NEAR(result[6].position.x(), 0.25f, 0.001f);
+  EXPECT_NEAR(result[6].position.y(), -0.25f, 0.001f);
+  EXPECT_NEAR(result[6].normal.z(), 1.0f, 0.001f);
 }
 
 }  // namespace sh_baker
