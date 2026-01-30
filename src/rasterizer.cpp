@@ -44,6 +44,29 @@ struct MaterialIdVertex {
   uint8_t b;
 };
 
+struct SurfaceVertex {
+  SurfaceVertex() = default;
+  SurfaceVertex(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
+                const Eigen::Vector4f& t)
+      : position(p), normal(n), tangent(t) {}
+
+  SurfaceVertex operator+(const SurfaceVertex& other) const {
+    return SurfaceVertex(position + other.position, normal + other.normal,
+                         tangent + other.tangent);
+  }
+  SurfaceVertex operator-(const SurfaceVertex& other) const {
+    return SurfaceVertex(position - other.position, normal - other.normal,
+                         tangent - other.tangent);
+  }
+  SurfaceVertex operator*(float s) const {
+    return SurfaceVertex(position * s, normal * s, tangent * s);
+  }
+
+  Eigen::Vector3f position;
+  Eigen::Vector3f normal;
+  Eigen::Vector4f tangent;
+};
+
 // Helper to compute Barycentric coordinates
 // Returns true if inside triangle.
 bool Barycentric(const Eigen::Vector2f& p, const Eigen::Vector2f& a,
@@ -112,9 +135,13 @@ void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
     std::swap(v1, v2);
   }
 
+  // Align to pixel centers: start at first half-integer >= t0.y()
+  float start_y = std::ceil(t0.y() - 0.5f) + 0.5f;
   float total_height = t2.y() - t0.y();
-  for (float h = 0; h < total_height; h++) {
-    bool second_half = h > t1.y() - t0.y() || t1.y() == t0.y();
+
+  for (float y = start_y; y < t2.y(); y += 1.0f) {
+    float h = y - t0.y();
+    bool second_half = y > t1.y() || t1.y() == t0.y();
 
     float segment_height;
     if (second_half) {
@@ -126,7 +153,7 @@ void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
     float alpha = h / total_height;
     float beta;
     if (second_half) {
-      beta = (h - (t1.y() - t0.y())) / segment_height;
+      beta = (y - t1.y()) / segment_height;
     } else {
       beta = h / segment_height;
     }
@@ -149,8 +176,11 @@ void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
     }
 
     float scanline_width = tb.x() - ta.x();
-    for (float tx = ta.x(); tx <= tb.x(); tx++) {
-      Eigen::Vector2f tc(tx, t0.y() + h);
+
+    // Align to pixel centers: start at first half-integer >= ta.x()
+    float start_x = std::ceil(ta.x() - 0.5f) + 0.5f;
+    for (float tx = start_x; tx <= tb.x(); tx += 1.0f) {
+      Eigen::Vector2f tc(tx, y);
 
       float gamma = (tx - ta.x()) / scanline_width;
       VertexType vc = va + (vb - va) * gamma;
@@ -329,36 +359,41 @@ std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
       Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
       Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      // Convert UV to raster coordinates (integer)
-      Eigen::Vector2f t0(int(uv0.x() * scaled_width),
-                         int(uv0.y() * scaled_height));
-      Eigen::Vector2f t1(int(uv1.x() * scaled_width),
-                         int(uv1.y() * scaled_height));
-      Eigen::Vector2f t2(int(uv2.x() * scaled_width),
-                         int(uv2.y() * scaled_height));
+      // Convert UV to raster coordinates (float for sub-pixel precision)
+      Eigen::Vector2f t0(uv0.x() * scaled_width, uv0.y() * scaled_height);
+      Eigen::Vector2f t1(uv1.x() * scaled_width, uv1.y() * scaled_height);
+      Eigen::Vector2f t2(uv2.x() * scaled_width, uv2.y() * scaled_height);
 
-      int pixel_idx = y_idx * scaled_width + x_idx;
+      SurfaceVertex v0(vertices[idx0], normals[idx0], tangents[idx0]);
+      SurfaceVertex v1(vertices[idx1], normals[idx1], tangents[idx1]);
+      SurfaceVertex v2(vertices[idx2], normals[idx2], tangents[idx2]);
 
-      SurfacePoint sp;
-      sp.material_id = geo.material_id;
+      RasterizeTriangle(
+          t0, t1, t2, v0, v1, v2,
+          [&](const Eigen::Vector2f& p, const SurfaceVertex& v) {
+            int x = static_cast<int>(p.x());
+            int y = static_cast<int>(p.y());
 
-      sp.position =
-          vertices[idx0] * u + vertices[idx1] * v + vertices[idx2] * w;
+            // Boundary check
+            if (x < 0 || x >= scaled_width || y < 0 || y >= scaled_height) {
+              return;
+            }
 
-      sp.normal = (normals[idx0] * u + normals[idx1] * v + normals[idx2] * w)
-                      .normalized();
+            int pixel_idx = y * scaled_width + x;
 
-      Eigen::Vector4f tangent0 = tangents[idx0];
-      Eigen::Vector4f tangent1 = tangents[idx1];
-      Eigen::Vector4f tangent2 = tangents[idx2];
-      sp.tangent = tangent0 * u + tangent1 * v + tangent2 * w;
-      Eigen::Vector3f tangent3 = sp.tangent.head<3>();
-      tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
-                     .normalized();  // Gram-Schmidt orthogonalization
-      sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(), tangent3.z(),
-                                   sp.tangent.w());
+            SurfacePoint sp;
+            sp.material_id = geo.material_id;
+            sp.position = v.position;
+            sp.normal = v.normal.normalized();
 
-      surface_map[pixel_idx] = sp;
+            Eigen::Vector3f tangent3 = v.tangent.head<3>();
+            tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
+                           .normalized();  // Gram-Schmidt orthogonalization
+            sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
+                                         tangent3.z(), v.tangent.w());
+
+            surface_map[pixel_idx] = sp;
+          });
     }
   }
 
@@ -386,12 +421,9 @@ Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
       Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
       Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      Eigen::Vector2f t0(int(uv0.x() * config.width),
-                         int(uv0.y() * config.height));
-      Eigen::Vector2f t1(int(uv1.x() * config.width),
-                         int(uv1.y() * config.height));
-      Eigen::Vector2f t2(int(uv2.x() * config.width),
-                         int(uv2.y() * config.height));
+      Eigen::Vector2f t0(uv0.x() * config.width, uv0.y() * config.height);
+      Eigen::Vector2f t1(uv1.x() * config.width, uv1.y() * config.height);
+      Eigen::Vector2f t2(uv2.x() * config.width, uv2.y() * config.height);
 
       RasterizeTriangle(
           t0, t1, t2, vertex, vertex, vertex,
