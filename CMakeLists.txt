@@ -9,10 +9,13 @@ add_compile_options(
   $<$<CONFIG:Release>:-O3>
   $<$<CONFIG:Release>:-flto=auto>
   $<$<CONFIG:Release>:-march=native>
+  $<$<CONFIG:Debug>:-fsanitize=address>
+  $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
 )
 add_link_options(
   $<$<CONFIG:Release>:-flto=auto>
   $<$<CONFIG:Release>:-O3>
+  $<$<CONFIG:Debug>:-fsanitize=address>
 )
 
 include(FetchContent)

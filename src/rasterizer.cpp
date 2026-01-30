@@ -38,6 +38,7 @@ struct MaterialIdVertex {
   MaterialIdVertex operator+(const MaterialIdVertex& b) { return *this; }
   MaterialIdVertex operator-(const MaterialIdVertex& b) { return *this; }
   MaterialIdVertex operator*(float s) const { return *this; }
+  MaterialIdVertex operator/(float s) const { return *this; }
 
   uint8_t r;
   uint8_t g;
@@ -60,6 +61,9 @@ struct SurfaceVertex {
   }
   SurfaceVertex operator*(float s) const {
     return SurfaceVertex(position * s, normal * s, tangent * s);
+  }
+  SurfaceVertex operator/(float s) const {
+    return SurfaceVertex(position / s, normal / s, tangent / s);
   }
 
   Eigen::Vector3f position;
@@ -137,6 +141,38 @@ void RasterizeTriangle(Eigen::Vector2i t0, Eigen::Vector2i t1,
 
   // Align to pixel centers: start at first half-integer >= t0.y()
   int total_height = t2.y() - t0.y();
+  if (total_height == 0) {
+    // Let's sort by x.
+    if (t0.x() > t1.x()) {
+      std::swap(t0, t1);
+      std::swap(v0, v1);
+    }
+    if (t0.x() > t2.x()) {
+      std::swap(t0, t2);
+      std::swap(v0, v2);
+    }
+    if (t1.x() > t2.x()) {
+      std::swap(t1, t2);
+      std::swap(v1, v2);
+    }
+
+    // Draw a line.
+    int total_width = t2.x() - t0.x();
+    if (total_width == 0) {
+      // Draw a point.
+      draw_fn(t0, v0);
+      return;
+    }
+
+    CHECK_GE(t0.x(), 0);
+
+    for (int w = 0; w < total_width; ++w) {
+      float alpha = float(w + 0.5f) / total_width;
+      VertexType vc = v0 + (v2 - v0) * alpha;
+      draw_fn(Eigen::Vector2i(t0.x() + w, t0.y()), vc);
+    }
+    return;
+  }
 
   for (int h = 0; h < total_height; ++h) {
     bool second_half = (h + 0.5f) > (t1.y() - t0.y()) || t1.y() == t0.y();
@@ -148,7 +184,7 @@ void RasterizeTriangle(Eigen::Vector2i t0, Eigen::Vector2i t1,
       segment_height = t1.y() - t0.y();
     }
 
-    if (segment_height == 0) continue;
+    CHECK_GT(segment_height, 0);
 
     float alpha = float(h + 0.5f) / total_height;
     float beta;
@@ -176,15 +212,17 @@ void RasterizeTriangle(Eigen::Vector2i t0, Eigen::Vector2i t1,
       std::swap(va, vb);
     }
 
-    float span = tb_f.x() - ta_f.x();
-    if (span <= 1e-5f) continue;
-
     // Pixel coverage: center (x+0.5) must be within [ta_f.x, tb_f.x]
     int x_start = std::ceil(ta_f.x() - 0.5f);
     int x_end = std::floor(tb_f.x() - 0.5f);
 
-    VertexType grad = (vb - va) * (1.0f / span);
+    if (x_start >= x_end) {
+      // Draw a point.
+      draw_fn(Eigen::Vector2i(x_start, t0.y() + h), va);
+      continue;
+    }
 
+    VertexType grad = (vb - va) / (tb_f.x() - ta_f.x());
     for (int x = x_start; x <= x_end; ++x) {
       float dist = (x + 0.5f) - ta_f.x();
       VertexType vc = va + grad * dist;

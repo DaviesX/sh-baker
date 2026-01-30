@@ -256,7 +256,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
                                   // deterministic but different per pixel
           Eigen::Vector3f origin =
               sp.position +
-              sp.normal * 0.001f;  // Offset position to avoid self-intersection
+              sp.normal * 0.005f;  // Offset position to avoid self-intersection
 
           for (int s = 0; s < config.samples; ++s) {
             Eigen::Vector3f dir_local =
@@ -265,7 +265,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
             // Transform to World
             // Calculate bitangent (using w for handedness)
             Eigen::Vector3f bitangent =
-                sp.normal.cross(sp.tangent.head<3>()) * sp.tangent.w();
+                (sp.normal.cross(sp.tangent.head<3>()) * sp.tangent.w())
+                    .normalized();
             Eigen::Vector3f dir_world = sp.tangent.head<3>() * dir_local.x() +
                                         bitangent * dir_local.y() +
                                         sp.normal * dir_local.z();

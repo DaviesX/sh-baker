@@ -34,8 +34,7 @@ uniform vec3 u_SkySH[9];
 
 // --- Attributes ---
 in vec3 vWorldPos;
-in vec3 vTangent;
-in vec3 vBitangent;
+in vec4 vTangent;
 
 // -- Helper: Evaluate SH Basis ---
 // -- Helper: Evaluate SH Basis ---
@@ -129,10 +128,24 @@ void main() {
   vec3 albedo = texture(u_AlbedoTex, vTexCoord0).rgb;
 
   // Normal
+  // 1. Normalize the interpolated Normal
+  // Interpolation shortens vectors, so we must normalize back to length 1.
   vec3 N = normalize(vNormal);
+
+  // 2. Re-orthogonalize Tangent (Gram-Schmidt)
+  // We remove the part of T that points in the same direction as N.
+  // T_new = T - (N * dot(T, N))
+  vec3 T = normalize(vTangent.xyz - N * dot(vTangent.xyz, N));
+
+  // 3. Re-calculate Bitangent
+  // Do NOT trust the interpolated bitangent. It is safer and cheaper
+  // to calculate it using the Cross Product of the clean N and T.
+  // (Note: You might need a 'handedness' multiplier here if your meshes use
+  // mirrored UVs)
+  vec3 B = cross(N, T);
   vec3 mapNormal = texture(u_NormalTex, vTexCoord0).rgb;
   mapNormal = mapNormal * 2.0 - 1.0;
-  mat3 TBN = mat3(normalize(vTangent), normalize(vBitangent), N);
+  mat3 TBN = mat3(T, B, N);
   N = normalize(TBN * mapNormal);
 
   // Metallic/Roughness
