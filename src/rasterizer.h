@@ -28,6 +28,12 @@ struct SurfacePoint {
 std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                                          const RasterConfig& config);
 
+// Rasterizes the scene UVs into a buffer of SurfacePoints.
+// The buffer size will be config.width * config.supersample_scale *
+// config.height * config.supersample_scale.
+std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
+                                                 const RasterConfig& config);
+
 // Rasterizes the scene UVs into a buffer of color coded material IDs.
 // The buffer size will be config.width * config.height (supersample scale is
 // not applied).

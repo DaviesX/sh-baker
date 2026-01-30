@@ -1,17 +1,48 @@
 #include "rasterizer.h"
 
+#include <Eigen/src/Core/Matrix.h>
 #include <glog/logging.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include "scene.h"
 
 namespace sh_baker {
-
 namespace {
+
+struct MaterialIdVertex {
+  MaterialIdVertex() : r(0), g(0), b(0) {}
+
+  MaterialIdVertex(uint32_t id) {
+    // Gold Noise / Hash
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = (id >> 16) ^ id;
+
+    r = (id & 0xFF);
+    g = ((id >> 8) & 0xFF);
+    b = ((id >> 16) & 0xFF);
+
+    if (r < 50 && g < 50 && b < 50) {
+      r += 50;
+      g += 50;
+      b += 50;
+    }
+  }
+
+  // Does not support interpolation.
+  MaterialIdVertex operator+(const MaterialIdVertex& b) { return *this; }
+  MaterialIdVertex operator-(const MaterialIdVertex& b) { return *this; }
+  MaterialIdVertex operator*(float s) const { return *this; }
+
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
 
 // Helper to compute Barycentric coordinates
 // Returns true if inside triangle.
@@ -61,6 +92,72 @@ bool AnyValidSubSamples(int x, int y, int stride, int scale,
     }
   }
   return false;
+}
+
+template <typename VertexType, typename DrawFn>
+void RasterizeTriangle(Eigen::Vector2f t0, Eigen::Vector2f t1,
+                       Eigen::Vector2f t2, VertexType v0, VertexType v1,
+                       VertexType v2, const DrawFn& draw_fn) {
+  // Sort vertices by y-coordinate.
+  if (t0.y() > t1.y()) {
+    std::swap(t0, t1);
+    std::swap(v0, v1);
+  }
+  if (t0.y() > t2.y()) {
+    std::swap(t0, t2);
+    std::swap(v0, v2);
+  }
+  if (t1.y() > t2.y()) {
+    std::swap(t1, t2);
+    std::swap(v1, v2);
+  }
+
+  float total_height = t2.y() - t0.y();
+  for (float h = 0; h < total_height; h++) {
+    bool second_half = h > t1.y() - t0.y() || t1.y() == t0.y();
+
+    float segment_height;
+    if (second_half) {
+      segment_height = t2.y() - t1.y();
+    } else {
+      segment_height = t1.y() - t0.y();
+    }
+
+    float alpha = h / total_height;
+    float beta;
+    if (second_half) {
+      beta = (h - (t1.y() - t0.y())) / segment_height;
+    } else {
+      beta = h / segment_height;
+    }
+
+    Eigen::Vector2f ta = t0 + (t2 - t0) * alpha;
+    Eigen::Vector2f tb;
+    VertexType va = v0 + (v2 - v0) * alpha;
+    VertexType vb;
+    if (second_half) {
+      tb = t1 + (t2 - t1) * beta;
+      vb = v1 + (v2 - v1) * beta;
+    } else {
+      tb = t0 + (t1 - t0) * beta;
+      vb = v0 + (v1 - v0) * beta;
+    }
+
+    if (ta.x() > tb.x()) {
+      std::swap(ta, tb);
+      std::swap(va, vb);
+    }
+
+    float scanline_width = tb.x() - ta.x();
+    for (float tx = ta.x(); tx <= tb.x(); tx++) {
+      Eigen::Vector2f tc(tx, t0.y() + h);
+
+      float gamma = (tx - ta.x()) / scanline_width;
+      VertexType vc = va + (vb - va) * gamma;
+
+      draw_fn(tc, vc);
+    }
+  }
 }
 
 }  // namespace
@@ -210,38 +307,17 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
   return surface_map;
 }
 
-Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
-  Texture texture;
-  texture.width = config.width;
-  texture.height = config.height;
-  texture.channels = 3;
-  texture.pixel_data.resize(config.width * config.height * 3, 0);
+std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
+                                                 const RasterConfig& config) {
+  int scaled_width = config.width * config.supersample_scale;
+  int scaled_height = config.height * config.supersample_scale;
+  std::vector<SurfacePoint> surface_map(scaled_width * scaled_height);
 
-  auto SetPixel = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b) {
-    if (x >= 0 && x < config.width && y >= 0 && y < config.height) {
-      size_t index = (y * config.width + x) * 3;
-      texture.pixel_data[index + 0] = r;
-      texture.pixel_data[index + 1] = g;
-      texture.pixel_data[index + 2] = b;
-    }
-  };
-
+  // Serial execution as requested for correctness priority
   for (const auto& geo : scene.geometries) {
-    uint32_t id = geo.material_id;
-    // Gold Noise / Hash
-    id = ((id >> 16) ^ id) * 0x45d9f3b;
-    id = ((id >> 16) ^ id) * 0x45d9f3b;
-    id = (id >> 16) ^ id;
-
-    uint8_t r = (id & 0xFF);
-    uint8_t g = ((id >> 8) & 0xFF);
-    uint8_t b = ((id >> 16) & 0xFF);
-
-    if (r < 50 && g < 50 && b < 50) {
-      r += 50;
-      g += 50;
-      b += 50;
-    }
+    auto vertices = TransformedVertices(geo);
+    auto normals = TransformedNormals(geo);
+    auto tangents = TransformedTangents(geo);
 
     size_t tri_count = geo.indices.size() / 3;
     for (size_t i = 0; i < tri_count; ++i) {
@@ -253,36 +329,81 @@ Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
       Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
       Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
 
-      Eigen::Vector2i t0((int)(uv0.x() * config.width),
-                         (int)(uv0.y() * config.height));
-      Eigen::Vector2i t1((int)(uv1.x() * config.width),
-                         (int)(uv1.y() * config.height));
-      Eigen::Vector2i t2((int)(uv2.x() * config.width),
-                         (int)(uv2.y() * config.height));
+      // Convert UV to raster coordinates (integer)
+      Eigen::Vector2f t0(int(uv0.x() * scaled_width),
+                         int(uv0.y() * scaled_height));
+      Eigen::Vector2f t1(int(uv1.x() * scaled_width),
+                         int(uv1.y() * scaled_height));
+      Eigen::Vector2f t2(int(uv2.x() * scaled_width),
+                         int(uv2.y() * scaled_height));
 
-      if (t0.y() > t1.y()) std::swap(t0, t1);
-      if (t0.y() > t2.y()) std::swap(t0, t2);
-      if (t1.y() > t2.y()) std::swap(t1, t2);
+      int pixel_idx = y_idx * scaled_width + x_idx;
 
-      int total_height = t2.y() - t0.y();
-      for (int i = 0; i < total_height; i++) {
-        bool second_half = i > t1.y() - t0.y() || t1.y() == t0.y();
-        int segment_height = second_half ? t2.y() - t1.y() : t1.y() - t0.y();
-        float alpha = (float)i / total_height;
-        float beta =
-            (float)(i - (second_half ? t1.y() - t0.y() : 0)) / segment_height;
-        Eigen::Vector2i A = t0 + ((t2 - t0).cast<float>() * alpha).cast<int>();
-        Eigen::Vector2i B;
-        if (second_half) {
-          B = t1 + ((t2 - t1).cast<float>() * beta).cast<int>();
-        } else {
-          B = t0 + ((t1 - t0).cast<float>() * beta).cast<int>();
-        }
-        if (A.x() > B.x()) std::swap(A, B);
-        for (int j = A.x(); j <= B.x(); j++) {
-          SetPixel(j, t0.y() + i, r, g, b);
-        }
-      }
+      SurfacePoint sp;
+      sp.material_id = geo.material_id;
+
+      sp.position =
+          vertices[idx0] * u + vertices[idx1] * v + vertices[idx2] * w;
+
+      sp.normal = (normals[idx0] * u + normals[idx1] * v + normals[idx2] * w)
+                      .normalized();
+
+      Eigen::Vector4f tangent0 = tangents[idx0];
+      Eigen::Vector4f tangent1 = tangents[idx1];
+      Eigen::Vector4f tangent2 = tangents[idx2];
+      sp.tangent = tangent0 * u + tangent1 * v + tangent2 * w;
+      Eigen::Vector3f tangent3 = sp.tangent.head<3>();
+      tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
+                     .normalized();  // Gram-Schmidt orthogonalization
+      sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(), tangent3.z(),
+                                   sp.tangent.w());
+
+      surface_map[pixel_idx] = sp;
+    }
+  }
+
+  return surface_map;
+}
+
+Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
+  Texture texture;
+  texture.width = config.width;
+  texture.height = config.height;
+  texture.channels = 3;
+  texture.pixel_data.resize(config.width * config.height * 3, 0);
+
+  for (const auto& geo : scene.geometries) {
+    uint32_t id = geo.material_id;
+    MaterialIdVertex vertex(id);
+
+    size_t tri_count = geo.indices.size() / 3;
+    for (size_t i = 0; i < tri_count; ++i) {
+      uint32_t idx0 = geo.indices[i * 3 + 0];
+      uint32_t idx1 = geo.indices[i * 3 + 1];
+      uint32_t idx2 = geo.indices[i * 3 + 2];
+
+      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+
+      Eigen::Vector2f t0(int(uv0.x() * config.width),
+                         int(uv0.y() * config.height));
+      Eigen::Vector2f t1(int(uv1.x() * config.width),
+                         int(uv1.y() * config.height));
+      Eigen::Vector2f t2(int(uv2.x() * config.width),
+                         int(uv2.y() * config.height));
+
+      RasterizeTriangle(
+          t0, t1, t2, vertex, vertex, vertex,
+          [&texture, width = config.width, height = config.height](
+              const Eigen::Vector2f& t, const MaterialIdVertex& v) {
+            unsigned x = unsigned(t.x());
+            unsigned y = unsigned(t.y());
+            unsigned index = (y * width + x) * sizeof(MaterialIdVertex);
+            texture.pixel_data[index + 0] = v.r;
+            texture.pixel_data[index + 1] = v.g;
+            texture.pixel_data[index + 2] = v.b;
+          });
     }
   }
 
@@ -340,26 +461,12 @@ Texture CreateMaterialMap(const std::vector<SurfacePoint>& surface_points,
                             // Generate arbitrary color from material_id
                             // Use a simple hash to get deterministic colors
                             uint32_t id = sp.material_id;
-                            // Gold Noise / Hash
-                            id = ((id >> 16) ^ id) * 0x45d9f3b;
-                            id = ((id >> 16) ^ id) * 0x45d9f3b;
-                            id = (id >> 16) ^ id;
+                            MaterialIdVertex v(id);
 
-                            r = (id & 0xFF);
-                            g = ((id >> 8) & 0xFF);
-                            b = ((id >> 16) & 0xFF);
-
-                            // Ensure it's not too dark if valid
-                            if (r < 50 && g < 50 && b < 50) {
-                              r += 50;
-                              g += 50;
-                              b += 50;
-                            }
+                            texture.pixel_data[idx * 3 + 0] = v.r;
+                            texture.pixel_data[idx * 3 + 1] = v.g;
+                            texture.pixel_data[idx * 3 + 2] = v.b;
                           }
-
-                          texture.pixel_data[idx * 3 + 0] = r;
-                          texture.pixel_data[idx * 3 + 1] = g;
-                          texture.pixel_data[idx * 3 + 2] = b;
                         }
                       }
                     });

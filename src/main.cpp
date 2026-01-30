@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"
             << raster_config.height
             << ") scale: " << raster_config.supersample_scale << "...";
-  auto surface_points = sh_baker::RasterizeScene(scene, raster_config);
+  auto surface_points = sh_baker::RasterizeSceneScanline(scene, raster_config);
 
   // Debug Output
   if (FLAGS_debug_output) {
