@@ -8,7 +8,6 @@
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include "sh_coeffs.h"
@@ -49,7 +48,9 @@ struct Material {
   Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
 
   // Emission (for Area Lights).
-  float emission_intensity = 0.0f;
+  std::optional<Texture> emissive_texture;
+  Eigen::Vector3f emissive_factor = Eigen::Vector3f::Zero();
+  float emissive_strength = 0.f;
 };
 
 // --- Geometry ---
@@ -83,7 +84,6 @@ struct Light {
   float area = 0.0f;
   const Material* material = nullptr;
   const Geometry* geometry = nullptr;
-  int geometry_index = -1;  // For internal use: index into Scene::geometries.
 };
 
 // --- Environment ---

@@ -85,10 +85,22 @@ Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv) {
 }
 
 Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv) {
-  if (mat.emission_intensity > 0.0f) {
-    return GetAlbedo(mat, uv) * mat.emission_intensity;
+  if (!mat.emissive_texture || mat.emissive_texture->pixel_data.empty()) {
+    return mat.emissive_factor * mat.emissive_strength;
   }
-  return Eigen::Vector3f::Zero();
+
+  int tx = std::clamp((int)(uv.x() * mat.emissive_texture->width), 0,
+                      (int)mat.emissive_texture->width - 1);
+  int ty = std::clamp((int)(uv.y() * mat.emissive_texture->height), 0,
+                      (int)mat.emissive_texture->height - 1);
+  int idx =
+      (ty * mat.emissive_texture->width + tx) * mat.emissive_texture->channels;
+
+  // Convert sRGB -> Linear
+  float r = SRGBToLinear(mat.emissive_texture->pixel_data[idx]);
+  float g = SRGBToLinear(mat.emissive_texture->pixel_data[idx + 1]);
+  float b = SRGBToLinear(mat.emissive_texture->pixel_data[idx + 2]);
+  return Eigen::Vector3f(r, g, b) * mat.emissive_strength;
 }
 
 void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,

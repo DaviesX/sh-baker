@@ -65,7 +65,7 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
     uv = w * uv0 + u1 * uv1 + u2 * uv2;
   }
 
-  Eigen::Vector3f emission = GetAlbedo(*light.material, uv) * light.intensity;
+  Eigen::Vector3f emission = GetEmission(*light.material, uv);
 
   // 5. PDF
   // We first uniformly picked a triangle, then a point on the triangle.

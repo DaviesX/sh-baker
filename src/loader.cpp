@@ -145,7 +145,8 @@ Eigen::Affine3f NodeToTransform(const tinygltf::Node& node) {
 
 bool ProcessPrimitive(const tinygltf::Model& model,
                       const tinygltf::Primitive& primitive,
-                      const Eigen::Affine3f& transform, Scene* scene) {
+                      const Eigen::Affine3f& transform,
+                      std::vector<Geometry>* result) {
   // Precondition.
   if (primitive.material < 0) {
     LOG(ERROR) << "Primitive missing material.";
@@ -388,29 +389,7 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     }
   }
 
-  scene->geometries.push_back(std::move(geo));
-
-  // Check for emission and create Area Light if needed
-  Geometry& added_geo = scene->geometries.back();
-  const Material& mat = scene->materials[added_geo.material_id];
-
-  if (mat.emission_intensity > 0.0f) {
-    Light area_light;
-    area_light.type = Light::Type::Area;
-    // We can safely reference the material because it has been populated
-    // altogether, but it isn't the case for geometry. We will assign the
-    // pointer once all geometries are added.
-    area_light.material = &mat;
-    area_light.geometry_index = static_cast<int>(scene->geometries.size()) - 1;
-
-    // Surface Area
-    area_light.area = SurfaceArea(added_geo);
-
-    // Intensity. Color will come from the material's albedo texture.
-    area_light.intensity = mat.emission_intensity * kLightIntensityScale;
-
-    scene->lights.push_back(std::move(area_light));
-  }
+  result->push_back(std::move(geo));
   return true;
 }
 
@@ -473,7 +452,8 @@ void LoadTexture(const tinygltf::Model& model, int tex_idx,
 }
 
 void ProcessMaterials(const tinygltf::Model& model,
-                      const std::filesystem::path& base_path, Scene* scene) {
+                      const std::filesystem::path& base_path,
+                      std::vector<Material>* result) {
   if (model.materials.empty()) {
     Material default_mat;
     default_mat.name = "default";
@@ -496,7 +476,7 @@ void ProcessMaterials(const tinygltf::Model& model,
     default_mat.metallic_roughness_texture.pixel_data = {0, 255,
                                                          255};  // R unused
 
-    scene->materials.push_back(default_mat);
+    result->push_back(default_mat);
     return;
   }
 
@@ -504,15 +484,28 @@ void ProcessMaterials(const tinygltf::Model& model,
     Material mat;
     mat.name = gltf_mat.name;
 
-    // Emission
+    // Emissive Strength
     auto emissive_strength_it =
         gltf_mat.extensions.find("KHR_materials_emissive_strength");
     if (emissive_strength_it != gltf_mat.extensions.end()) {
       const auto& emissive_strength = emissive_strength_it->second;
       if (emissive_strength.Has("emissiveStrength")) {
-        mat.emission_intensity = float(
+        mat.emissive_strength = float(
             emissive_strength.Get("emissiveStrength").GetNumberAsDouble());
       }
+    }
+
+    // Emissive Factor
+    mat.emissive_factor =
+        Eigen::Vector3f(gltf_mat.emissiveFactor[0], gltf_mat.emissiveFactor[1],
+                        gltf_mat.emissiveFactor[2]);
+
+    // Emissive Texture
+    int emissive_idx = gltf_mat.emissiveTexture.index;
+    Texture emissive_texture;
+    LoadTexture(model, emissive_idx, base_path, &emissive_texture, true);
+    if (!emissive_texture.pixel_data.empty()) {
+      mat.emissive_texture = emissive_texture;
     }
 
     // Texture (Base Color)
@@ -573,13 +566,14 @@ void ProcessMaterials(const tinygltf::Model& model,
           static_cast<uint8_t>(metallic * 255)};
     }
 
-    scene->materials.push_back(std::move(mat));
+    result->push_back(std::move(mat));
   }
 }
 
-void ProcessLight(const tinygltf::Model& model,
-                  const tinygltf::Value& light_obj,
-                  const Eigen::Affine3f& transform, Scene* scene) {
+void ProcessPunctualLight(const tinygltf::Model& model,
+                          const tinygltf::Value& light_obj,
+                          const Eigen::Affine3f& transform,
+                          std::vector<Light>* result) {
   // Parse KHR_lights_punctual object
   if (!light_obj.IsObject()) return;
 
@@ -642,7 +636,44 @@ void ProcessLight(const tinygltf::Model& model,
     }
   }
 
-  scene->lights.push_back(std::move(l));
+  result->push_back(std::move(l));
+}
+
+void ProcessAreaLights(const std::vector<Material>& materials,
+                       const std::vector<Geometry>& geometries,
+                       std::vector<Light>* result) {
+  // Group geometries by material id for faster lookup.
+  std::unordered_map<int, std::vector<const Geometry*>> geos_by_mat;
+  for (size_t i = 0; i < geometries.size(); i++) {
+    const Geometry& geometry = geometries[i];
+    geos_by_mat[geometry.material_id].push_back(&geometry);
+  }
+
+  // Searches for emissive materials and creates area lights for the geometries
+  // that use them.
+  for (int mat_idx = 0; mat_idx < materials.size(); mat_idx++) {
+    const Material& mat = materials[mat_idx];
+    // Emission
+    if (mat.emissive_strength == 0.0f) {
+      continue;
+    }
+
+    const auto geos_it = geos_by_mat.find(mat_idx);
+    if (geos_it == geos_by_mat.end()) {
+      // No geometries use this material.
+      continue;
+    }
+    const auto& geos = geos_it->second;
+    for (const auto& geo : geos) {
+      Light area_light;
+      area_light.type = Light::Type::Area;
+      area_light.intensity = mat.emissive_strength;
+      area_light.color = mat.emissive_factor;
+      area_light.material = &materials[mat_idx];
+      area_light.geometry = geo;
+      result->emplace_back(std::move(area_light));
+    }
+  }
 }
 
 bool TraverseNodes(const tinygltf::Model& model, int node_index,
@@ -655,7 +686,8 @@ bool TraverseNodes(const tinygltf::Model& model, int node_index,
   if (node.mesh >= 0) {
     const tinygltf::Mesh& mesh = model.meshes[node.mesh];
     for (const auto& primitive : mesh.primitives) {
-      if (!ProcessPrimitive(model, primitive, global_transform, scene)) {
+      if (!ProcessPrimitive(model, primitive, global_transform,
+                            &scene->geometries)) {
         return false;
       }
     }
@@ -676,8 +708,8 @@ bool TraverseNodes(const tinygltf::Model& model, int node_index,
         if (model_ext.Has("lights")) {
           const auto& lights_arr = model_ext.Get("lights");
           if (lights_arr.IsArray() && light_idx < lights_arr.ArrayLen()) {
-            ProcessLight(model, lights_arr.Get(light_idx), global_transform,
-                         scene);
+            ProcessPunctualLight(model, lights_arr.Get(light_idx),
+                                 global_transform, &scene->lights);
           }
         }
       }
@@ -691,8 +723,7 @@ bool TraverseNodes(const tinygltf::Model& model, int node_index,
 }
 
 std::optional<Environment> LoadEnvironmentFromImage(
-    const tinygltf::Model& model, const std::filesystem::path& gltf_file,
-    Scene* scene) {
+    const tinygltf::Model& model, const std::filesystem::path& gltf_file) {
   // Check for custom "skybox" property in extras
   // "extras": { "skybox": "texture_path.hdr" }
   if (!model.extras.Has("skybox")) {
@@ -786,8 +817,8 @@ const Light* BrightestDirectionalLight(const std::vector<Light>& lights) {
 
 std::optional<Environment> LoadEnvironmentFromSun(
     const tinygltf::Model& model, const std::filesystem::path& gltf_file,
-    Scene* scene) {
-  const auto* sun_light = BrightestDirectionalLight(scene->lights);
+    const std::vector<Light>& lights) {
+  const auto* sun_light = BrightestDirectionalLight(lights);
   if (!sun_light) {
     return std::nullopt;
   }
@@ -801,25 +832,27 @@ std::optional<Environment> LoadEnvironmentFromSun(
 }
 
 void ProcessEnvironment(const tinygltf::Model& model,
-                        const std::filesystem::path& gltf_file, Scene* scene) {
+                        const std::filesystem::path& gltf_file,
+                        const std::vector<Light>& lights,
+                        std::optional<Environment>* result) {
   // Process Environment (Skybox / IBL)
   // Priority:
   // 1. IBL Skybox (from extras.skybox)
   // 2. Sun Direction (Preetham Sky from brightest directional light)
 
   std::optional<Environment> ibl_env =
-      LoadEnvironmentFromImage(model, gltf_file, scene);
+      LoadEnvironmentFromImage(model, gltf_file);
   if (ibl_env) {
     ibl_env->sh_coeffs = ProjectEnvironmentToSH(ibl_env.value());
-    scene->environment = std::move(ibl_env.value());
+    *result = std::move(ibl_env.value());
     return;
   }
 
   std::optional<Environment> sun_env =
-      LoadEnvironmentFromSun(model, gltf_file, scene);
+      LoadEnvironmentFromSun(model, gltf_file, lights);
   if (sun_env) {
     sun_env->sh_coeffs = ProjectEnvironmentToSH(sun_env.value());
-    scene->environment = std::move(sun_env.value());
+    *result = std::move(sun_env.value());
     return;
   }
 }
@@ -853,9 +886,9 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
   Scene scene;
 
   // Process Materials
-  ProcessMaterials(model, gltf_file.parent_path(), &scene);
+  ProcessMaterials(model, gltf_file.parent_path(), &scene.materials);
 
-  // Traverse Nodes to find Meshes/Lights
+  // Traverse Nodes to find Meshes/Punctual Lights
   const tinygltf::Scene& gltf_scene =
       model.scenes[model.defaultScene > -1 ? model.defaultScene : 0];
   for (int node_index : gltf_scene.nodes) {
@@ -866,15 +899,11 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // Set geometry pointers for area lights because all geometries have been
-  // added. The geometry vector is frozen from this point on.
-  for (auto& light : scene.lights) {
-    if (light.geometry_index >= 0) {
-      light.geometry = &scene.geometries[light.geometry_index];
-    }
-  }
+  // Process Area Lights (from emissive materials)
+  ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
 
-  ProcessEnvironment(model, gltf_file, &scene);
+  // Process Environment (IBL / Sun)
+  ProcessEnvironment(model, gltf_file, scene.lights, &scene.environment);
 
   return scene;
 }

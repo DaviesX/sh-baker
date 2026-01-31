@@ -62,7 +62,7 @@ Eigen::Vector3f EvalMaterialAdvanced(const Material& mat,
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv);
 
 // Helper to retrieve emission (radiance).
-// Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv);
+Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv);
 
 // Returns the alpha (transparency) value at the given UV coordinate.
 // Returns 1.0f if the texture has no alpha channel.
