@@ -100,7 +100,9 @@ Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv) {
   float r = SRGBToLinear(mat.emissive_texture->pixel_data[idx]);
   float g = SRGBToLinear(mat.emissive_texture->pixel_data[idx + 1]);
   float b = SRGBToLinear(mat.emissive_texture->pixel_data[idx + 2]);
-  return Eigen::Vector3f(r, g, b) * mat.emissive_strength;
+  Eigen::Vector3f texture_color(r, g, b);
+  return texture_color.cwiseProduct(mat.emissive_factor) *
+         mat.emissive_strength;
 }
 
 void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
