@@ -35,7 +35,7 @@ void main() {
   // Key value (Middle Gray)
   float key = 0.18;
   // Exposure Formula: Key / GeomMean
-  float exposure = key / max(lumAvg, 0.1);
+  float exposure = key / clamp(lumAvg, 0.1, 2 * key);
 
   color *= exposure;
 

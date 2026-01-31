@@ -280,8 +280,8 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
 
       if (skipped_vertices[idx0] || skipped_vertices[idx1] ||
           skipped_vertices[idx2]) {
-        LOG(WARNING) << "Triangle starting at index " << idx
-                     << " references skipped vertices. Discarding triangle.";
+        DLOG(WARNING) << "Triangle starting at index " << idx
+                      << " references skipped vertices. Discarding triangle.";
         continue;
       }
 

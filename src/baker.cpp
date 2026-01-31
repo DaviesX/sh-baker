@@ -109,17 +109,17 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
   }
 
   // Check if material is emissive
-  Eigen::Vector3f emission = GetEmission(mat, occ->uv);
-  if (!emission.isZero()) {
-    // If depth == 0, we see the emissive surface directly (Le).
-    // If depth > 0, we are bouncing. In NEE, we sample lights explicitly,
-    // so we ignore implicit hits on emissive surfaces to avoid double counting.
-    if (depth == 0) {
-      color += alpha * emission;
-    }
-  }
+  // Eigen::Vector3f emission = GetEmission(mat, occ->uv);
+  // if (!emission.isZero()) {
+  //   // If depth == 0, we see the emissive surface directly (Le).
+  //   // If depth > 0, we are bouncing. In NEE, we sample lights explicitly,
+  //   // so we ignore implicit hits on emissive surfaces to avoid double
+  //   counting. if (depth == 0) {
+  //     color += alpha * emission;
+  //   }
+  // }
 
-  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.001f;
+  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.005f;
 
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
@@ -148,9 +148,10 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
   return color;
 }
 
-template <typename T>
+template <typename T, typename ValidateFn>
 std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
-                                 int input_height, int scale) {
+                                 int input_height, int scale,
+                                 ValidateFn validate_fn) {
   if (scale <= 1) return input;
 
   const int output_width = input_width / scale;
@@ -166,8 +167,10 @@ std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
         for (int dx = 0; dx < scale; ++dx) {
           int sx = x * scale + dx;
           int sy = y * scale + dy;
-          if (sx < input_width && sy < input_height) {
-            avg += input[sy * input_width + sx];
+          int index = sy * input_width + sx;
+          if (sx < input_width && sy < input_height &&
+              validate_fn(input[index])) {
+            avg += input[index];
             count++;
           }
         }
@@ -209,11 +212,11 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
   result.sh_texture.width = width;
   result.sh_texture.height = height;
-  result.sh_texture.pixels.resize(width * height);
+  result.sh_texture.pixels.resize(width * height, SHCoeffs(-1));
 
   result.environment_visibility_texture.width = width;
   result.environment_visibility_texture.height = height;
-  result.environment_visibility_texture.pixel_data.resize(width * height);
+  result.environment_visibility_texture.pixel_data.resize(width * height, -1);
 
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
@@ -248,8 +251,10 @@ BakeResult BakeSHLightMap(const Scene& scene,
             continue;
           }
 
-          // Accumulate SH coefficients for the specified number of samples.
+          // Accumulate SH coefficients and environment visibility factor for
+          // the specified number of samples.
           SHCoeffs sh_accum;
+          float visibility_accum = 0.0f;
 
           std::mt19937 rng(12345 +
                            idx);  // Seeding RNG with index to make it
@@ -267,6 +272,12 @@ BakeResult BakeSHLightMap(const Scene& scene,
             Eigen::Vector3f bitangent =
                 (sp.normal.cross(sp.tangent.head<3>()) * sp.tangent.w())
                     .normalized();
+            if (sp.tangent.w() > 0) {
+              CHECK_NEAR(sp.tangent.w(), 1.0f, 1e-2f);
+            } else {
+              CHECK_NEAR(sp.tangent.w(), -1.0f, 1e-2f);
+            }
+
             Eigen::Vector3f dir_world = sp.tangent.head<3>() * dir_local.x() +
                                         bitangent * dir_local.y() +
                                         sp.normal * dir_local.z();
@@ -279,8 +290,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
             // Indirect lighting.
             TraceConfig trace_config(
                 rtc_scene, scene, config.bounces, config.num_light_samples,
-                /*on_direct_hit_sky_fn=*/[&result, idx]() {
-                  result.environment_visibility_texture.pixel_data[idx] += 1.0f;
+                /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
+                  visibility_accum += 1.0f;
                 });
             Eigen::Vector3f Li_indirect =
                 Trace(trace_config, origin, dir_world, /*depth=*/0, rng) *
@@ -291,8 +302,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
           // Average
           result.sh_texture.pixels[idx] = sh_accum * (1.0f / config.samples);
-          result.environment_visibility_texture.pixel_data[idx] *=
-              (1.0f / config.samples);
+          result.environment_visibility_texture.pixel_data[idx] =
+              visibility_accum / config.samples;
         }
       });
   std::cout << std::endl;
@@ -309,7 +320,10 @@ SHTexture DownsampleSHTexture(const SHTexture& input, int scale) {
   output.width = input.width / scale;
   output.height = input.height / scale;
   output.pixels =
-      DownsampleTexture(input.pixels, input.width, input.height, scale);
+      DownsampleTexture(input.pixels, input.width, input.height, scale,
+                        /*validate_fn=*/[](const SHCoeffs& sh) {
+                          return sh.coeffs[0].x() != -1;
+                        });
   return output;
 }
 
@@ -318,8 +332,9 @@ Texture32F DownsampleEnvironmentVisibilityTexture(const Texture32F& input,
   Texture32F output;
   output.width = input.width / scale;
   output.height = input.height / scale;
-  output.pixel_data =
-      DownsampleTexture(input.pixel_data, input.width, input.height, scale);
+  output.pixel_data = DownsampleTexture(
+      input.pixel_data, input.width, input.height, scale,
+      /*validate_fn=*/[](float visibility) { return visibility != -1; });
   return output;
 }
 

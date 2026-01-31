@@ -434,8 +434,9 @@ std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
             Eigen::Vector3f tangent3 = v.tangent.head<3>();
             tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
                            .normalized();  // Gram-Schmidt orthogonalization
-            sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
-                                         tangent3.z(), v.tangent.w());
+            sp.tangent =
+                Eigen::Vector4f(tangent3.x(), tangent3.y(), tangent3.z(),
+                                v.tangent.w() > 0 ? 1.0f : -1.0f);
 
             surface_map[pixel_idx] = sp;
           });

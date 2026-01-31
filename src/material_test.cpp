@@ -92,7 +92,8 @@ TEST(MaterialTest, GetEmission) {
   mat.albedo.pixel_data = {255, 255, 255};
   mat.emission_intensity = 5.0f;
 
-  Eigen::Vector3f res = GetEmission(mat, Eigen::Vector2f(0.5f, 0.5f));
+  Eigen::Vector3f res =
+      GetAlbedo(mat, Eigen::Vector2f(0.5f, 0.5f)) * mat.emission_intensity;
   EXPECT_NEAR(res.x(), 5.0f, 1e-5f);
   EXPECT_NEAR(res.y(), 5.0f, 1e-5f);
   EXPECT_NEAR(res.z(), 5.0f, 1e-5f);

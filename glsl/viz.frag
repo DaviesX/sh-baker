@@ -37,8 +37,9 @@ in vec3 vWorldPos;
 in vec4 vTangent;
 
 // -- Helper: Evaluate SH Basis ---
-// -- Helper: Evaluate SH Basis ---
-vec3 EvalSHBasis(vec3 normal, vec3 sh_coeffs[9]) {
+// --- Helper: Evaluate SH Basis (Radiance) ---
+// Reconstructs L(n) - The incident radiance from direction n
+vec3 EvalSHRadiance(vec3 normal, vec3 sh_coeffs[9]) {
   float x = normal.x;
   float y = normal.y;
   float z = normal.z;
@@ -66,11 +67,49 @@ vec3 EvalSHBasis(vec3 normal, vec3 sh_coeffs[9]) {
   return max(result, 0.0);
 }
 
-// --- Helper: Sample SH ---
-// Returns .rgb = SH Color, .a = Environment Visibility
-vec4 SampleSH(vec3 normal, vec2 uv) {
-  vec3 sh_coeffs[9];
-  float visibility = 1.0;
+// --- Helper: Evaluate SH Irradiance ---
+// Reconstructs E(n) - The irradiance (cosine-weighted integral) at normal n
+// Applies Cosine Lobe Convolution factors: A0=PI, A1=2PI/3, A2=PI/4
+vec3 EvalSHIrradiance(vec3 normal, vec3 sh_coeffs[9]) {
+  float x = normal.x;
+  float y = normal.y;
+  float z = normal.z;
+
+  // Constants pre-multiplied by A_l convolution factors
+  // Band 0: 0.282095 * 3.141593 = 0.886227
+  float c1 = 0.886227;
+
+  // Band 1: 0.488603 * 2.094395 = 1.023326
+  float c2 = 1.023326;
+
+  // Band 2: 1.092548 * 0.785398 = 0.858086
+  // Band 2: 0.315392 * 0.785398 = 0.247708
+  // Band 2: 0.546274 * 0.785398 = 0.429043
+  float c3 = 0.858086;
+  float c4 = 0.247708;
+  float c5 = 0.429043;
+
+  float b0 = c1;
+  float b1 = c2 * y;
+  float b2 = c2 * z;
+  float b3 = c2 * x;
+  float b4 = c3 * x * y;
+  float b5 = c3 * y * z;
+  float b6 = c4 * (3.0 * z * z - 1.0);
+  float b7 = c3 * x * z;
+  float b8 = c5 * (x * x - y * y);
+
+  vec3 result = sh_coeffs[0] * b0 + sh_coeffs[1] * b1 + sh_coeffs[2] * b2 +
+                sh_coeffs[3] * b3 + sh_coeffs[4] * b4 + sh_coeffs[5] * b5 +
+                sh_coeffs[6] * b6 + sh_coeffs[7] * b7 + sh_coeffs[8] * b8;
+
+  return max(result, 0.0);
+}
+
+// --- Helper: Fetch SH Coefficients ---
+// Returns coefficients and visibility from textures
+void GetSHCoeffs(vec2 uv, out vec3 sh_coeffs[9], out float visibility) {
+  visibility = 1.0;
 
   if (u_UsePackedLuminance == 1) {
     vec4 p0 = texture(u_PackedTex0, uv);
@@ -87,7 +126,6 @@ vec4 SampleSH(vec3 normal, vec2 uv) {
       chroma = sh_coeffs[0] / L0_lum;
     }
 
-    // New Mapping:
     // File 1: L1m1, L10, L11, L2m2
     sh_coeffs[1] = vec3(p1.r) * chroma;
     sh_coeffs[2] = vec3(p1.g) * chroma;
@@ -112,9 +150,6 @@ vec4 SampleSH(vec3 normal, vec2 uv) {
     sh_coeffs[7] = texture(u_L21, uv).rgb;
     sh_coeffs[8] = texture(u_L22, uv).rgb;
   }
-
-  vec3 result = EvalSHBasis(normal, sh_coeffs);
-  return vec4(max(result, 0.0), visibility);
 }
 
 // --- Fresnel ---
@@ -159,17 +194,24 @@ void main() {
   vec3 R = reflect(-V, N);  // Reflection vector
 
   // 3. Shading
-  // Diffuse Irradiance (SH along Normal)
-  vec4 shSample = SampleSH(N, vTexCoord1);
-  vec3 irradiance = shSample.rgb;
-  float skyVisibility = shSample.a;
+  // Fetch SH Coefficients from lightmap
+  vec3 sh_coeffs[9];
+  float visibility;
+  GetSHCoeffs(vTexCoord1, sh_coeffs, visibility);
 
-  // Ambient Sky
-  vec3 skyIrradiance = skyVisibility * EvalSHBasis(N, u_SkySH);
-  irradiance += skyIrradiance;
+  // Diffuse Irradiance (SH along Normal)
+  // We use EvalSHIrradiance to include the Cosine Lobe convolution (A_l
+  // factors). Note: Irradiance E = Integral(L * cos theta). For Lambertian
+  // diffuse: Lo = (Albedo / PI) * E. Evaluate E:
+  vec3 E_diffuse = EvalSHIrradiance(N, sh_coeffs);
+
+  // Add Sky Ambient (also convolved)
+  vec3 E_sky = visibility * EvalSHIrradiance(N, u_SkySH);
+  vec3 E_total = E_diffuse + E_sky;
 
   // Specular Radiance (SH along Reflection) -> Rough approximation
-  vec3 specularIrradiance = SampleSH(R, vTexCoord1).rgb;
+  // We use EvalSHRadiance to get the raw incident light L(R).
+  vec3 specularRadiance = EvalSHRadiance(R, sh_coeffs);
 
   // Compute F0
   vec3 F0 = vec3(0.04);
@@ -181,8 +223,9 @@ void main() {
   vec3 kD = vec3(1.0) - kS;
   kD *= (1.0 - metallic);
 
-  vec3 diffuse = kD * irradiance * albedo;
-  vec3 specular = specularIrradiance * F;
+  const float PI = 3.14159265359;
+  vec3 diffuse = kD * (E_total * (1.0 / PI)) * albedo;
+  vec3 specular = specularRadiance * F;
 
   // Output Linear HDR Color
   vec3 color = diffuse + specular;

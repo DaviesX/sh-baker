@@ -16,8 +16,9 @@ vec3 PreethamSky(vec3 viewDir, vec3 sunDir) {
   float cosGamma = dot(viewDir, sunDir);
 
   // Rayleigh
-  vec3 rayleigh = vec3(0.18867780436772762, 0.4978442963618773,
-                       0.6616065586417131);  // Blue sky color
+  // vec3 rayleigh = vec3(0.18867780436772762, 0.4978442963618773,
+  //                      0.6616065586417131);  // Blue sky color
+  vec3 rayleigh = vec3(0.2f, 0.5f, 0.9f);
   // Gradient based on zenith
   rayleigh *= (1.0 + 2.0 * cosTheta);
 
