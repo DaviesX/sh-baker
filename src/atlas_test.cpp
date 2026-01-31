@@ -165,4 +165,37 @@ TEST(AtlasTest, CalculateGeometryScales_DensityMultiplier) {
   EXPECT_NEAR(scales[0], 200.0f, 1e-4f);
 }
 
+TEST(AtlasTest, SkipParameterization) {
+  // Create a Quad with existing UVs
+  Geometry input_geo;
+  input_geo.vertices = {{-1, -1, 0}, {1, -1, 0}, {-1, 1, 0}, {1, 1, 0}};
+  input_geo.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  input_geo.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
+  // Perfect non-overlapping UVs
+  input_geo.texture_uvs = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+  input_geo.indices = {0, 1, 2, 2, 1, 3};
+  input_geo.material_id = 0;
+
+  Scene scene;
+  scene.geometries.push_back(input_geo);
+
+  Material mat;
+  mat.albedo.width = 256;
+  mat.albedo.height = 256;
+  scene.materials.push_back(mat);
+
+  // Enable skip_parameterization
+  std::optional<AtlasResult> atlas_result =
+      CreateAtlasGeometries(scene, 256, 2, 1.0f, true);
+
+  ASSERT_TRUE(atlas_result.has_value());
+  EXPECT_GT(atlas_result->width, 0);
+  EXPECT_GT(atlas_result->height, 0);
+
+  const auto& out_geo = atlas_result->geometries[0];
+
+  EXPECT_GE(out_geo.indices.size(), 6);
+  ASSERT_FALSE(out_geo.lightmap_uvs.empty());
+}
+
 }  // namespace sh_baker

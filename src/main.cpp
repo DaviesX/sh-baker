@@ -30,6 +30,8 @@ DEFINE_double(density_multiplier, 1.0,
 DEFINE_bool(luminance_only, false,
             "If true, compress Light map by storing only Luminance for L1/L2 "
             "coefficients (Packed into 3 textures).");
+DEFINE_bool(skip_parameterization, false,
+            "Skip xatlas parameterization step (requires existing UVs).");
 
 DEFINE_bool(debug_output, false,
             "If true, output debug information to the output folder.");
@@ -77,7 +79,8 @@ int main(int argc, char* argv[]) {
   std::optional<sh_baker::AtlasResult> atlas_result =
       sh_baker::CreateAtlasGeometries(
           scene, FLAGS_width, FLAGS_dilation,
-          static_cast<float>(FLAGS_density_multiplier));
+          static_cast<float>(FLAGS_density_multiplier),
+          FLAGS_skip_parameterization);
   if (!atlas_result) {
     LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
     return 1;
@@ -90,9 +93,8 @@ int main(int argc, char* argv[]) {
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
-  raster_config.width = FLAGS_width;  // Keep the requested resolution though
-                                      // xatlas may prefer a different one.
-  raster_config.height = FLAGS_height;
+  raster_config.width = atlas_result->width;
+  raster_config.height = atlas_result->height;
   raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"

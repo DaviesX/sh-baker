@@ -177,7 +177,11 @@ gtest_discover_tests(sh_baker_test)
 
 # --- Visualizer ---
 
-add_executable(visualizer src/visualizer_main.cpp)
+add_executable(visualizer 
+    src/visualizer_main.cpp
+    src/visualizer_camera.cpp
+    src/visualizer_control.cpp
+)
 
 
 target_link_libraries(visualizer PRIVATE
