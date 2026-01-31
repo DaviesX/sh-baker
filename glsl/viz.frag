@@ -142,7 +142,7 @@ void main() {
   // to calculate it using the Cross Product of the clean N and T.
   // (Note: You might need a 'handedness' multiplier here if your meshes use
   // mirrored UVs)
-  vec3 B = cross(N, T);
+  vec3 B = cross(N, T) * vTangent.w;
   vec3 mapNormal = texture(u_NormalTex, vTexCoord0).rgb;
   mapNormal = mapNormal * 2.0 - 1.0;
   mat3 TBN = mat3(T, B, N);
