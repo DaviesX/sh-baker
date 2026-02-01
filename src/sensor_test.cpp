@@ -85,9 +85,11 @@ TEST(SensorTest, MaxSamples) {
 TEST(SensorTest, DistributionFitting) {
   std::mt19937 rng(1234);
 
-  // 1. Define Ground Truth Covariance (stretched in X)
+  // 1. Define Ground Truth Covariance (stretched in X) and Mean
   Eigen::Matrix3f cov_gt = Eigen::Matrix3f::Identity() * 0.2f;
   cov_gt(0, 0) = 2.0f;  // Strongly expected in X
+
+  Eigen::Vector3f mean_gt(1.0f, 0.0f, 0.0f);  // Mean direction also X
 
   // 2. Generate samples and accumulate SH
   // We simulate "light" coming from directions distributed according to cov_gt.
@@ -99,7 +101,7 @@ TEST(SensorTest, DistributionFitting) {
 
   for (int i = 0; i < num_samples; ++i) {
     Eigen::Vector3f dir_local =
-        sensor_internal::SampleAngularGaussian(cov_gt, rng);
+        sensor_internal::SampleAngularGaussian(cov_gt, mean_gt, rng);
     // SampleAngularGaussian gives random directions based on cov.
     // We assume each "photon" carries unit energy.
     AccumulateRadiance(Eigen::Vector3f(1, 1, 1), dir_local, &accumulated_sh);
@@ -109,6 +111,7 @@ TEST(SensorTest, DistributionFitting) {
 
   // 3. Decode Covariance
   Eigen::Matrix3f cov_est = sensor_internal::ComputeCovariance(avg_sh);
+  Eigen::Vector3f mean_est = sensor_internal::ComputeMean(avg_sh);
 
   // 4. Verification
   // The estimated covariance should share principal axes with GT.
@@ -117,6 +120,8 @@ TEST(SensorTest, DistributionFitting) {
 
   std::cout << "Gt Cov:\n" << cov_gt << "\n";
   std::cout << "Est Cov:\n" << cov_est << "\n";
+  std::cout << "Gt Mean:\n" << mean_gt.transpose() << "\n";
+  std::cout << "Est Mean (SH L1):\n" << mean_est.transpose() << "\n";
 
   EXPECT_GT(cov_est(0, 0), cov_est(1, 1));
   EXPECT_GT(cov_est(0, 0), cov_est(2, 2));
@@ -124,6 +129,14 @@ TEST(SensorTest, DistributionFitting) {
   // Check that off-diagonals are small relative to X diagonal
   EXPECT_LT(std::abs(cov_est(0, 1)), cov_est(0, 0) * 0.1f);
   EXPECT_LT(std::abs(cov_est(0, 2)), cov_est(0, 0) * 0.1f);
+
+  // Verify Mean Direction matches X axis
+  // It should be roughly (1, 0, 0) * scale?
+  // Our ComputeMean extracts L1 moments.
+  // With X-aligned distribution, M_x should be largest.
+  EXPECT_GT(std::abs(mean_est.x()), std::abs(mean_est.y()));
+  EXPECT_GT(std::abs(mean_est.x()), std::abs(mean_est.z()));
+  EXPECT_GT(mean_est.x(), 0.0f);  // Should be positive X
 }
 
 }  // namespace sh_baker

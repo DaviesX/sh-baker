@@ -99,7 +99,43 @@ Eigen::Matrix3f ComputeCovariance(const SHCoeffs& coeffs) {
   return cov;
 }
 
+Eigen::Vector3f ComputeMean(const SHCoeffs& coeffs) {
+  // L1 bands encode the mean direction scaled by brightness.
+  // Y1,1  (index 3) ~ x
+  // Y1,-1 (index 1) ~ y
+  // Y1,0  (index 2) ~ z
+  // SH basis factor: sqrt(3/4pi)
+
+  // Actually ComputeLuminance takes SHCoeffs which has 9 bands.
+  // We want luminance of the specific band vector.
+
+  auto Lum = [](const Eigen::Vector3f& v) {
+    return v.x() * 0.2126f + v.y() * 0.7152f + v.z() * 0.0722f;
+  };
+
+  // Indices:
+  // 1: Y1,-1 (y)
+  // 2: Y1,0  (z)
+  // 3: Y1,1  (x)
+
+  float My = Lum(coeffs.coeffs[1]);
+  float Mz = Lum(coeffs.coeffs[2]);
+  float Mx = Lum(coeffs.coeffs[3]);
+
+  // Note: The SH coefficients are integral(L * Y).
+  // Y_1x = sqrt(3/4pi) * x
+  // So coeff_x = integral(L * sqrt(3/4pi) * x)
+  // Mean vector = first moment.
+  // We just return the vector composed of these luminances.
+  // The scale matters relative to Covariance (L0/L2).
+  // L0 ~ 1/sqrt(4pi).
+  // If we just use them as is, they are consistent moments.
+
+  return Eigen::Vector3f(Mx, My, Mz);
+}
+
 Eigen::Vector3f SampleAngularGaussian(const Eigen::Matrix3f& cov,
+                                      const Eigen::Vector3f& mean,
                                       std::mt19937& rng) {
   // 1. Eigen Decomposition
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigensolver(cov);
@@ -124,39 +160,170 @@ Eigen::Vector3f SampleAngularGaussian(const Eigen::Matrix3f& cov,
   // 5. Rotate to align with covariance
   Eigen::Vector3f d = eigenvectors * v;
 
-  // 6. Normalize to get direction
-  return d.normalized();
+  // 6. Add Mean and Normalize (Projected Normal)
+  Eigen::Vector3f sample_unnormalized = mean + d;
+
+  if (sample_unnormalized.squaredNorm() < 1e-8f) {
+    return sensor_internal::SampleHemisphereUniform(rng);
+  }
+
+  return sample_unnormalized.normalized();
 }
 
 float PdfAngularGaussian(const Eigen::Matrix3f& cov,
+                         const Eigen::Vector3f& mean,
                          const Eigen::Vector3f& dir) {
-  // 1. Reconstruct eigenvalues/vectors for the inverse/det calculation.
-  //    (Alternatively we could inverse `cov` directly if well-conditioned).
-  //    Let's using SelfAdjointEigenSolver again to be consistent with sampling
-  //    and safe against non-pd.
+  // Projected Normal Distribution PDF
+  // P(w) = ... integral over r ...
+  // Ref: https://en.wikipedia.org/wiki/Projected_normal_distribution (usually
+  // 2D on circle, generalized to 3D sphere)
+
+  // Let X ~ N(mean, cov).
+  // We want density of W = X / |X|.
+
+  // Inverse covariance (Precision matrix)
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigensolver(cov);
-  Eigen::Vector3f eigenvalues = eigensolver.eigenvalues();
+  Eigen::Vector3f eigenvalues = eigensolver.eigenvalues().cwiseMax(1e-4f);
   Eigen::Matrix3f eigenvectors = eigensolver.eigenvectors();
+  float det_cov = eigenvalues.prod();
+  Eigen::Matrix3f prec = eigenvectors *
+                         eigenvalues.cwiseInverse().asDiagonal() *
+                         eigenvectors.transpose();
 
-  float kEpsilon = 1e-4f;
-  eigenvalues = eigenvalues.cwiseMax(kEpsilon);
+  // Constants
+  // f(x) = (2pi)^-1.5 * det(cov)^-0.5 * exp(-0.5 * (x-mean)' prec (x-mean))
+  // x = r * dir
+  // Exponent: -0.5 * (r^2 * dir' prec dir - 2 * r * dir' prec mean + mean' prec
+  // mean) Let a = dir' prec dir Let b = dir' prec mean  (Note: factor 2 cancels
+  // with 0.5) Let c = mean' prec mean Arg = -0.5 * a * r^2 + b * r - 0.5 * c
 
-  // 2. Compute Determinant and Inverse from eigens
-  float det = eigenvalues.prod();
-  Eigen::Matrix3f inv_cov = eigenvectors *
-                            eigenvalues.cwiseInverse().asDiagonal() *
-                            eigenvectors.transpose();
+  float a = dir.dot(prec * dir);
+  float b = dir.dot(prec * mean);
+  float c = mean.dot(prec * mean);
 
-  // 3. Evaluate PDF
-  // p(w) = 1 / (4pi * sqrt(det) * (w^T * inv_cov * w)^1.5)
+  if (a <= 1e-6f) return 0.0f;  // Degenerate
 
-  float term = dir.dot(inv_cov * dir);
-  if (term <= 0.0f) return 0.0f;  // Should not happen for PD matrix
+  // Helper for integral \int_0^inf r^2 exp(-0.5*a*r^2 + b*r) dr
+  // This doesn't have a trivial closed form without Phi (CDF).
+  // Standard approximation or exact form is needed.
+  // Exact form involves Normal CDF.
 
-  float denominator = 4.0f * M_PI * std::sqrt(det) * std::pow(term, 1.5f);
-  if (denominator <= 1e-6f) return 0.0f;
+  // Alternative: Numerical integration? Too slow.
 
-  return 1.0f / denominator;
+  // Implementation of exact analytic integral:
+  // I = \int_0^\infty r^2 e^{-\frac{1}{2}a r^2 + b r} dr
+  // Let s = b / sqrt(a)
+  // I = \frac{1}{a^{1.5}} \frac{\sqrt{2\pi}}{a} e^{s^2/2} \dots wait.
+
+  // Let's rely on standard formulation for Projected Gaussian PDF using shadow
+  // boundaries approx? No, let's implement the analytic integral
+  // component-wise. Or just assume b is large positive (dir aligned with mean)
+  // -> Gaussian-ish?
+
+  // Let's use a robust approximation:
+  // If b > 0 and b^2 >> a, roughly Gaussian around b/a.
+  //
+  // Let's try to implement the exact formula carefully.
+  // integral_{0}^{\infty} r^2 e^{-0.5 a r^2 + b r} dr
+  // = d^2/db^2 integral_{0}^{\infty} e^{-0.5 a r^2 + b r} dr
+  //
+  // Let I0(b) = integral_{0}^{\infty} e^{-0.5 a r^2 + b r} dr
+  // = sqrt(2*pi/a) * exp(b^2 / (2a)) * Phi(b / sqrt(a))
+  // where Phi is standard normal CDF.
+  //
+  // We need I2(b) = d^2/db^2 I0(b).
+
+  float inv_sqrt_a = 1.0f / std::sqrt(a);
+  float s = b * inv_sqrt_a;  // "signal to noise"
+
+  // Phi(s)
+  auto Phi = [](float x) { return 0.5f * std::erfc(-x * M_SQRT1_2); };
+
+  // pdf_normal(s)
+  // auto pdf_n = [](float x) {
+  //     return M_2_SQRTPI * M_SQRT1_2 * 0.5f * std::exp(-0.5f * x * x);
+  // };
+
+  float phi_s = Phi(s);
+  // float n_s = pdf_n(s);
+
+  // Terms from derivation of I2
+  // exp term E = exp(0.5 * s^2)
+  // But wait, the full expression has exp(-0.5 * c).
+  // Combined exponent: exp(-0.5 * c + 0.5 * s^2) = exp(-0.5 * (c - b^2/a))
+
+  float exponent_factor = -0.5f * (c - b * b / a);
+  // If exponent is too small, 0.
+  float base_exp_shifted = std::exp(exponent_factor);
+
+  // The polynomial part from derivatives:
+  // I2 = ...
+  // Let's look up the result for Projected Normal (Isotropic) and generalize.
+  // Actually, standard reference:
+  // p(w) = constant * ( ... )
+  // Constant K = 1 / ( (2pi)^1.5 * sqrt(det) ) * exp(-0.5*c)
+  //
+  // Let's use the code structure from similar implementations (e.g.
+  // Mitsuba/PBRT if available? No).
+  //
+  // Let's trust the logic:
+  // I0 = sqrt(2pi/a) * exp(s^2/2) * Phi(s)
+  // I1 = d/db I0 = s/sqrt(a) * I0 + 1/a * exp(s^2/2) * n_s * sqrt(2pi/a)?
+  // Easier: I1 = (b/a) * I0 + (1/a) * exp(b^2/2a - 0.5 * a * 0) wait.
+  //
+  // Result for I2:
+  // I2 = ( (s^2 + 1)/a ) * I0 + ( s / (a * sqrt(a)) ) * exp(s^2/2) * sqrt(2*pi)
+  // * n_s ... No.
+
+  // Let's simplify.
+  // p(w) ~ 1/C^1.5 approx?
+  // User asked for Mean Direction support.
+  // If we can't do exact PDF, maybe we rely on MIS to balance it?
+  // But we need a plausible PDF.
+  // Let's implement the "Approximate" Projected Gaussian which treats it as
+  // angular gaussian aligned to mean? No, let's try the formula: p(w) =
+  // \frac{e^{-0.5 c}}{2 \pi \sqrt{det} a^{1.5}} \left( s \cdot \sqrt{2\pi}
+  // e^{s^2/2} \Phi(s) (s^2+1) + (s^2+1)? No... \right)
+
+  // Let's stick to a basic approximation if exact is hard:
+  // Treat as Gaussian in tangent plane?
+  //
+  // RE-DERIVATION:
+  // I2 = Integral r^2 exp(-0.5 a r^2 + b r) dr
+  //    = (1/a) * Integral r * (a r - b + b) * exp(...) dr
+  //    = (1/a) * [ -r exp ] + (1/a) * Integral exp(...) dr + (b/a) * Integral r
+  //    exp(...) dr = 0 + (1/a) I0 + (b/a) I1
+  //
+  // I1 = Integral r exp(-0.5 a r^2 + b r) dr
+  //    = (1/a) * Integral (ar - b + b) exp files
+  //    = (1/a) * [-exp] + (b/a) I0
+  //    = (1/a) + (b/a) I0
+  //
+  // So I2 = (1/a) I0 + (b/a) [ 1/a + (b/a) I0 ]
+  //       = (1/a + b^2/a^2) I0 + b/a^2
+  //       = ( (a + b^2)/a^2 ) I0 + b/a^2
+  //
+  // I0 = sqrt(2pi/a) * exp(b^2/2a) * Phi(b/sqrt(a))
+  //
+  // Total PDF factor = (2pi)^-1.5 * det^-0.5 * exp(-0.5 c) * I2
+  //
+  // Let's implement this!
+
+  float term1 = (a + b * b) / (a * a);
+  float term2 = b / (a * a);
+
+  float I0_factor = std::sqrt(2.0f * M_PI / a) * phi_s;
+  // Note: we grouped exp(b^2/2a) with exp(-0.5c) earlier into base_exp_shifted.
+
+  // Combined I2 with the exp(-0.5 c)
+  // Result = K * ( term1 * I0_factor * base_exp(with b^2/2a) + term2 *
+  // exp(-0.5c) )
+
+  float const_K = 1.0f / (std::pow(2.0f * M_PI, 1.5f) * std::sqrt(det_cov));
+  float exp_c = std::exp(-0.5f * c);
+
+  float val = const_K * (term1 * I0_factor * base_exp_shifted + term2 * exp_c);
+  return std::max(0.0f, val);
 }
 
 }  // namespace sensor_internal
@@ -242,26 +409,32 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng,
 
   // Need to compute Covariance if guided or for PDF evaluation
   Eigen::Matrix3f cov;
+  Eigen::Vector3f mean(0, 0, 0);
+
   if (sensor.sample_count >= kMinSamples) {
     SHCoeffs indirect_estimate =
         sensor.sh_indirect_coeffs_sum / static_cast<float>(sensor.sample_count);
     cov = sensor_internal::ComputeCovariance(indirect_estimate);
+    mean = sensor_internal::ComputeMean(indirect_estimate);
   } else {
     // Identity covariance for uniform-ish behavior if we forced it,
     // but we only use cov if we are in the guided branch or evaluating PDF.
     cov = Eigen::Matrix3f::Identity();
+    // Mean 0.
   }
 
   if (use_uniform) {
     dir_local = sensor_internal::SampleHemisphereUniform(rng);
   } else {
-    dir_local = sensor_internal::SampleAngularGaussian(cov, rng);
-    // If the sampled direction is below the horizon (z < 0), flip it or reject?
-    // Our sensor is on a surface, we care about the hemisphere.
-    // The Guided distribution is spherical.
-    // Simple fix: abs(z) ensures upper hemisphere.
+    dir_local = sensor_internal::SampleAngularGaussian(cov, mean, rng);
+    // If the sampled direction is below the horizon (z < 0), flip it?
+    // With mean shifting, it might be heavily biased down if light is below?
+    // But we are on a surface. Light should be from above?
+    // If we flip, we need to account for it in PDF.
+    // Let's assume reflection logic:
     if (dir_local.z() < 0.0f) {
-      dir_local = -dir_local;
+      dir_local.z() *= -1.0f;  // Mirror at horizon
+      dir_local.normalize();
     }
   }
 
@@ -272,21 +445,18 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng,
   float pdf_uniform = 1.0f / (2.0f * M_PI);
 
   // PDF Guided
-  // Note: PdfAngularGaussian is defined on the Sphere.
-  // The integral over sphere is 1.
-  // If we flipped the direction, the density on the hemisphere is roughly
-  // double? Or rather, p_hemi(w) = p_sphere(w) + p_sphere(-w) if we map -w to
-  // w. Let's assume symmetric covariance (which it is) -> p(w) = p(-w). So
-  // p_hemi(w) = 2 * p_sphere(w).
   float pdf_guided = 0.0f;
   if (sensor.sample_count >= kMinSamples) {
-    pdf_guided = sensor_internal::PdfAngularGaussian(cov, dir_local);
-    pdf_guided *= 2.0f;  // Correction for hemisphere folding
+    pdf_guided = sensor_internal::PdfAngularGaussian(cov, mean, dir_local);
+
+    // Correction for hemisphere folding (Mirroring)
+    // p_hemi(w) = p(w) + p(mirror(w))
+    // mirror(w) = (x, y, -z) if we flipped z.
+    // Since we forced z > 0, we sum densities.
+    Eigen::Vector3f dir_mirror = dir_local;
+    dir_mirror.z() *= -1.0f;
+    pdf_guided += sensor_internal::PdfAngularGaussian(cov, mean, dir_mirror);
   } else {
-    // If we are in warmup, guided pdf is effectively uniform or we just don't
-    // use it. But strictly speaking, if we *could* sample guided, we should
-    // evaluate its pdf for the weight. However, temperature is 1.0, so the 2nd
-    // term is 0.
     pdf_guided = 0.0f;
   }
 

@@ -21,13 +21,19 @@ float ComputeLuminance(const SHCoeffs& coeffs);
 // Tensor".
 Eigen::Matrix3f ComputeCovariance(const SHCoeffs& coeffs);
 
+// Computes the mean direction vector from SH coefficients (L1 band).
+Eigen::Vector3f ComputeMean(const SHCoeffs& coeffs);
+
 // Samples a direction from the angular Gaussian distribution defined by the
-// covariance matrix.
+// covariance matrix and mean.
 Eigen::Vector3f SampleAngularGaussian(const Eigen::Matrix3f& cov,
+                                      const Eigen::Vector3f& mean,
                                       std::mt19937& rng);
 
-// Evaluates the PDF of the angular Gaussian distribution for a given direction.
+// Evaluates the PDF of the angular Gaussian distribution (Projected Normal)
+// for a given direction.
 float PdfAngularGaussian(const Eigen::Matrix3f& cov,
+                         const Eigen::Vector3f& mean,
                          const Eigen::Vector3f& dir);
 
 }  // namespace sensor_internal
