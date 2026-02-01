@@ -16,6 +16,7 @@
 #include "tinyexr.h"
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
+#include "visualizer_sky.h"
 
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
@@ -34,7 +35,6 @@ DEFINE_string(input, "",
 // --- Globals ---
 // --- Globals (Additional) ---
 GLuint g_MeshProgram = 0;
-GLuint g_SkyProgram = 0;
 GLuint g_PostProgram = 0;
 
 // HDR Framebuffer (MSAA)
@@ -89,12 +89,8 @@ void InitBloomFramebuffers(int width, int height) {
 GLuint g_QuadVAO = 0;
 GLuint g_QuadVBO = 0;
 
-// Skybox Data (Global for access by DrawSky, setup in main)
-GLuint g_SkyboxTexture = 0;
-bool g_UsePreetham = false;
-Eigen::Vector3f g_SunDir(0, 1, 0);
-static GLuint g_CubeVAO = 0;
-static GLuint g_CubeVBO = 0;
+// Skybox Data - Moved to SkyRenderer
+sh_baker::SkyRenderer g_SkyRenderer;
 
 // ... (RenderMesh struct, vector globals unchanged) ...
 
@@ -474,33 +470,6 @@ void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
   g_InputController.ScrollCallback(window, xoffset, yoffset);
 }
 
-void InitSkyboxGeometry() {
-  if (g_CubeVAO == 0) {
-    float skyboxVertices[] = {// positions
-                              -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f,
-                              1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f,
-                              -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,
-                              1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f};
-    unsigned int skyboxIndices[] = {0, 1, 2, 2, 3, 0, 4, 1, 0, 0, 5, 4,
-                                    2, 6, 7, 7, 3, 2, 4, 5, 7, 7, 6, 4,
-                                    0, 3, 7, 7, 5, 0, 1, 4, 2, 2, 4, 6};
-    glGenVertexArrays(1, &g_CubeVAO);
-    glGenBuffers(1, &g_CubeVBO);
-    GLuint cubeEBO;
-    glGenBuffers(1, &cubeEBO);
-    glBindVertexArray(g_CubeVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, g_CubeVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices,
-                 GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(skyboxIndices), &skyboxIndices,
-                 GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-                          (void*)0);
-  }
-}
-
 void DrawMeshes(const sh_baker::Scene& scene, const Eigen::Matrix4f& vp,
                 const Eigen::Vector3f& cam_pos) {
   glUseProgram(g_MeshProgram);
@@ -546,36 +515,6 @@ void DrawMeshes(const sh_baker::Scene& scene, const Eigen::Matrix4f& vp,
 
     glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);
   }
-}
-
-void DrawSky(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj) {
-  if (g_CubeVAO == 0) InitSkyboxGeometry();
-
-  glUseProgram(g_SkyProgram);
-
-  glDepthFunc(GL_LEQUAL);
-
-  // View matrix for skybox should remove translation
-  Eigen::Matrix4f viewSky = view;
-  viewSky(0, 3) = 0;
-  viewSky(1, 3) = 0;
-  viewSky(2, 3) = 0;
-  Eigen::Matrix4f mvpSky = proj * viewSky;
-
-  glUniformMatrix4fv(glGetUniformLocation(g_SkyProgram, "u_MVP"), 1, GL_FALSE,
-                     mvpSky.data());
-
-  glUniform1i(glGetUniformLocation(g_SkyProgram, "u_UsePreetham"),
-              g_UsePreetham);
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, g_SkyboxTexture);
-  glUniform1i(glGetUniformLocation(g_SkyProgram, "u_SkyboxTex"), 0);
-  glUniform3fv(glGetUniformLocation(g_SkyProgram, "u_SunDir"), 1,
-               g_SunDir.data());
-
-  glBindVertexArray(g_CubeVAO);
-  glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
-  glDepthFunc(GL_LESS);
 }
 
 int main(int argc, char* argv[]) {
@@ -783,13 +722,14 @@ int main(int argc, char* argv[]) {
   // --- Setup Shaders ---
   // --- Setup Shaders ---
   g_MeshProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
-  g_SkyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
+  GLuint skyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
+  g_SkyRenderer.SetProgram(skyProgram);
   g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
   g_LumProgram = CreateShaderProgram("glsl/post.vert", "glsl/lum.frag");
   g_BrightProgram = CreateShaderProgram("glsl/post.vert", "glsl/bright.frag");
   g_BlurProgram = CreateShaderProgram("glsl/post.vert", "glsl/blur.frag");
 
-  if (!g_MeshProgram || !g_SkyProgram || !g_PostProgram || !g_LumProgram ||
+  if (!g_MeshProgram || !skyProgram || !g_PostProgram || !g_LumProgram ||
       !g_BrightProgram || !g_BlurProgram)
     return 1;
 
@@ -856,12 +796,12 @@ int main(int argc, char* argv[]) {
   // --- Load Skybox Data ---
   if (scene.environment) {
     if (scene.environment->type == sh_baker::Environment::Type::Texture) {
-      g_SkyboxTexture = LoadTexture(scene.environment->texture);
+      GLuint tex = LoadTexture(scene.environment->texture);
+      g_SkyRenderer.SetEnvironment(false, Eigen::Vector3f::Zero(), tex);
     } else {
-      g_UsePreetham = true;
-      g_SunDir = scene.environment->sun_direction;
       LOG(INFO) << "Using Preetham Sky (Scene). Sun Dir: "
-                << g_SunDir.transpose();
+                << scene.environment->sun_direction.transpose();
+      g_SkyRenderer.SetEnvironment(true, scene.environment->sun_direction, 0);
     }
   } else {
     LOG(WARNING) << "No environment found in scene. Using default sky.";
@@ -899,7 +839,7 @@ int main(int argc, char* argv[]) {
 
     DrawMeshes(scene, vp, g_Camera.Position());
 
-    DrawSky(view, proj);
+    g_SkyRenderer.Draw(view, proj);
 
     // 2. Render Post Process to Screen
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
