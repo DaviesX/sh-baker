@@ -48,9 +48,9 @@ struct Material {
   Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
 
   // Emission (for Area Lights).
-  std::optional<Texture> emissive_texture;
   Eigen::Vector3f emissive_factor = Eigen::Vector3f::Zero();
   float emissive_strength = 0.f;
+  std::optional<Texture> emissive_texture;
 };
 
 // --- Geometry ---

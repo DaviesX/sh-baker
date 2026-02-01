@@ -21,7 +21,7 @@
 namespace sh_baker {
 namespace {
 
-const float kLightIntensityScale = 1 / 500.f;
+const float kLightIntensityScale = 1 / 1000.f;
 
 // MikkTSpace Interface
 struct MikkTSpaceContext {

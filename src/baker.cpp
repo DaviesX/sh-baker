@@ -102,22 +102,11 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
     Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
     Eigen::Vector3f transmission = Trace(config, hit_pos, dir, depth + 1, rng);
     color += (1.0f - alpha) * transmission;
+    if (alpha < 0.1f) {
+      // If alpha is very small, we can skip the rest of the trace.
+      return color;
+    }
   }
-
-  if (alpha == 0.0f) {
-    return color;
-  }
-
-  // Check if material is emissive
-  // Eigen::Vector3f emission = GetEmission(mat, occ->uv);
-  // if (!emission.isZero()) {
-  //   // If depth == 0, we see the emissive surface directly (Le).
-  //   // If depth > 0, we are bouncing. In NEE, we sample lights explicitly,
-  //   // so we ignore implicit hits on emissive surfaces to avoid double
-  //   counting. if (depth == 0) {
-  //     color += alpha * emission;
-  //   }
-  // }
 
   Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.005f;
 
