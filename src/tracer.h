@@ -7,6 +7,7 @@
 #include <functional>
 #include <random>
 
+#include "occlusion.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -26,8 +27,6 @@ struct TraceConfig {
   const int num_light_samples;
   const std::function<void()> on_direct_hit_sky_fn;
 };
-
-Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng);
 
 // Computes a Monte Carlo path and return a radiance sample.
 // Rendering equation:
@@ -51,8 +50,8 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng);
 // to the surface.
 //
 // This is also known as a technique called next event estimation (NEE).
-Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
-                      const Eigen::Vector3f& dir, int depth, std::mt19937& rng);
+Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
+                      std::mt19937& rng);
 
 }  // namespace sh_baker
 

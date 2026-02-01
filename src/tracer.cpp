@@ -1,7 +1,6 @@
 #include "tracer.h"
 
 #include <cmath>
-#include <iostream>
 
 #include "light.h"
 #include "material.h"
@@ -9,28 +8,14 @@
 
 namespace sh_baker {
 
-Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
-  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-  float u1 = dist(rng);
-  float u2 = dist(rng);
-
-  float r = std::sqrt(1.0f - u1 * u1);
-  float phi = 2.0f * M_PI * u2;
-  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
-}
-
-Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
-                      const Eigen::Vector3f& dir, int depth,
+Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
                       std::mt19937& rng) {
   // Hard depth limit to prevent infinite recursion, but we rely on RR for
   // unbiased early termination.
   if (depth > config.max_depth) return Eigen::Vector3f::Zero();
 
-  Ray visibility_ray;
-  visibility_ray.origin = origin;
-  visibility_ray.direction = dir;
+  Ray visibility_ray = ray;
   visibility_ray.tnear = 0.001f;
-
   std::optional<Occlusion> occ =
       FindOcclusion(config.rtc_scene, visibility_ray);
 
@@ -53,8 +38,14 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
   // If alpha < 1.0, continue ray
   if (alpha < 1.0f) {
     // Transmission
-    Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
-    Eigen::Vector3f transmission = Trace(config, hit_pos, dir, depth + 1, rng);
+    Ray transmission_ray;
+    transmission_ray.tnear = 0.005f;
+    transmission_ray.tfar = 1e10f;
+    transmission_ray.origin = occ->position;
+    transmission_ray.direction = ray.direction;
+    Eigen::Vector3f transmission =
+        Trace(config, transmission_ray, depth + 1, rng);
+
     color += (1.0f - alpha) * transmission;
     if (alpha < 0.1f) {
       // If alpha is very small, we can skip the rest of the trace.
@@ -62,25 +53,30 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
     }
   }
 
-  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.005f;
-
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
-  Eigen::Vector3f L_direct =
-      EvaluateLightSamples(config.scene, config.rtc_scene, hit_pos, occ->normal,
-                           -dir, mat, occ->uv, config.num_light_samples, rng);
+  Eigen::Vector3f L_direct = EvaluateLightSamples(
+      config.scene, config.rtc_scene, occ->position, occ->normal,
+      -ray.direction, mat, occ->uv, config.num_light_samples, rng);
+
   color += alpha * L_direct;
 
   // Indirect Lighting (Recursive)
   ReflectionSample sample =
-      SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
+      SampleMaterial(mat, occ->uv, occ->normal, -ray.direction, rng);
   if (sample.pdf < 1e-3f) {
     // Internal reflection.
     return color;
   }
+  Ray next_ray;
+  next_ray.origin = occ->position;
+  next_ray.tnear = 0.005f;
+  next_ray.tfar = 1e10f;
+  next_ray.direction = sample.direction;
 
   Eigen::Vector3f brdf =
-      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
+      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -ray.direction);
+
   if (depth > 2) {
     // Russian Roulette
     // We want to terminate paths with low contribution.
@@ -96,8 +92,7 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
     // Survived, reweight
     sample.pdf *= q;
   }
-  Eigen::Vector3f incoming =
-      Trace(config, hit_pos, sample.direction, depth + 1, rng);
+  Eigen::Vector3f incoming = Trace(config, next_ray, depth + 1, rng);
   float cosine_term = occ->normal.dot(sample.direction);
   Eigen::Vector3f L_indirect =
       incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
