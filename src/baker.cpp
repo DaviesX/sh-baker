@@ -70,6 +70,8 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
 Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
                       const Eigen::Vector3f& dir, int depth,
                       std::mt19937& rng) {
+  // Hard depth limit to prevent infinite recursion, but we rely on RR for
+  // unbiased early termination.
   if (depth > config.max_depth) return Eigen::Vector3f::Zero();
 
   Ray visibility_ray;
@@ -125,10 +127,25 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
     return color;
   }
 
-  Eigen::Vector3f incoming =
-      Trace(config, hit_pos, sample.direction, depth + 1, rng);
   Eigen::Vector3f brdf =
       EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
+  if (depth > 2) {
+    // Russian Roulette
+    // We want to terminate paths with low contribution.
+    // The contribution of the next bounce is roughly proportional to the
+    // BRDF/pdf. (We use a simplified throughput estimation here).
+    float q = std::min(0.95f, brdf.maxCoeff());
+
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    if (dist(rng) > q) {
+      // Terminate
+      return color;
+    }
+    // Survived, reweight
+    sample.pdf *= q;
+  }
+  Eigen::Vector3f incoming =
+      Trace(config, hit_pos, sample.direction, depth + 1, rng);
   float cosine_term = occ->normal.dot(sample.direction);
   Eigen::Vector3f L_indirect =
       incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
