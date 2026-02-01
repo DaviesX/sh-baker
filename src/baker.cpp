@@ -15,144 +15,9 @@
 #include "material.h"
 #include "occlusion.h"
 #include "rasterizer.h"
+#include "tracer.h"
 
 namespace sh_baker {
-namespace {
-
-struct TraceConfig {
-  TraceConfig(const RTCScene rtc_scene, const Scene& scene, int max_depth,
-              int num_light_samples, std::function<void()> on_direct_hit_sky_fn)
-      : rtc_scene(rtc_scene),
-        scene(scene),
-        max_depth(max_depth),
-        num_light_samples(num_light_samples),
-        on_direct_hit_sky_fn(on_direct_hit_sky_fn) {}
-
-  const RTCScene rtc_scene;
-  const Scene& scene;
-  const int max_depth;
-  const int num_light_samples;
-  const std::function<void()> on_direct_hit_sky_fn;
-};
-
-Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
-  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-  float u1 = dist(rng);
-  float u2 = dist(rng);
-
-  float r = std::sqrt(1.0f - u1 * u1);
-  float phi = 2.0f * M_PI * u2;
-  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
-}
-
-// Computes a Monte Carlo path and return a radiance sample.
-// Rendering equation:
-// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{\Omega} f_r(x, \omega_i,
-// \omega_o) * L_i(x, \omega_i) * cos(\omega_i) d\omega_i
-//
-// where L_o is the radiance at the camera, f_r is the BRDF, L_i is the
-// radiance from the light, and \omega_i is the direction from the light to the
-// surface.
-//
-// To drastically reduce variance, we partition the paths into 2 disjoint sets:
-// 1. Primary rays: see the sky/sun directly
-// 2. Secondary rays: bounce off a surface
-//
-// Formally,
-// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{A_e} ...Le(x, x')...dA_e(x') +
-// \int_{\Omega \setminus A_e} ...L_i(x, \omega_i)...d\omega_i
-//
-// where Le(x, x') is the radiance from the light, L_i(x, \omega_i) is the
-// radiance from the environment, and \omega_i is the direction from the light
-// to the surface.
-//
-// This is also known as a technique called next event estimation (NEE).
-Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
-                      const Eigen::Vector3f& dir, int depth,
-                      std::mt19937& rng) {
-  // Hard depth limit to prevent infinite recursion, but we rely on RR for
-  // unbiased early termination.
-  if (depth > config.max_depth) return Eigen::Vector3f::Zero();
-
-  Ray visibility_ray;
-  visibility_ray.origin = origin;
-  visibility_ray.direction = dir;
-  visibility_ray.tnear = 0.001f;
-
-  std::optional<Occlusion> occ =
-      FindOcclusion(config.rtc_scene, visibility_ray);
-
-  if (!occ.has_value()) {
-    // Sky is handled by NEE (EvaluateLights() and
-    // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
-    // counting.
-    if (depth == 0) {
-      config.on_direct_hit_sky_fn();
-    }
-    return Eigen::Vector3f::Zero();
-  }
-
-  // Hit surface
-  const Material& mat = config.scene.materials[occ->material_id];
-  float alpha = GetAlpha(mat, occ->uv);
-
-  Eigen::Vector3f color = Eigen::Vector3f::Zero();
-
-  // If alpha < 1.0, continue ray
-  if (alpha < 1.0f) {
-    // Transmission
-    Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
-    Eigen::Vector3f transmission = Trace(config, hit_pos, dir, depth + 1, rng);
-    color += (1.0f - alpha) * transmission;
-    if (alpha < 0.1f) {
-      // If alpha is very small, we can skip the rest of the trace.
-      return color;
-    }
-  }
-
-  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.005f;
-
-  // Direct Lighting (NEE)
-  // EvaluateLights returns L_e(x, x')
-  Eigen::Vector3f L_direct =
-      EvaluateLightSamples(config.scene, config.rtc_scene, hit_pos, occ->normal,
-                           -dir, mat, occ->uv, config.num_light_samples, rng);
-  color += alpha * L_direct;
-
-  // Indirect Lighting (Recursive)
-  ReflectionSample sample =
-      SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
-  if (sample.pdf < 1e-3f) {
-    // Internal reflection.
-    return color;
-  }
-
-  Eigen::Vector3f brdf =
-      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
-  if (depth > 2) {
-    // Russian Roulette
-    // We want to terminate paths with low contribution.
-    // The contribution of the next bounce is roughly proportional to the
-    // BRDF/pdf. (We use a simplified throughput estimation here).
-    float q = std::min(0.95f, brdf.maxCoeff());
-
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    if (dist(rng) > q) {
-      // Terminate
-      return color;
-    }
-    // Survived, reweight
-    sample.pdf *= q;
-  }
-  Eigen::Vector3f incoming =
-      Trace(config, hit_pos, sample.direction, depth + 1, rng);
-  float cosine_term = occ->normal.dot(sample.direction);
-  Eigen::Vector3f L_indirect =
-      incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
-  color += alpha * L_indirect;
-
-  return color;
-}
 
 template <typename T, typename ValidateFn>
 std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
@@ -189,8 +54,6 @@ std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
 
   return output;
 }
-
-}  // namespace
 
 BakeResult BakeSHLightMap(const Scene& scene,
                           const std::vector<SurfacePoint>& surface_points,
