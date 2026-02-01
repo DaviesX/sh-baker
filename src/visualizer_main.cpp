@@ -16,6 +16,7 @@
 #include "tinyexr.h"
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
+#include "visualizer_radiance.h"
 #include "visualizer_sky.h"
 #include "visualizer_utils.h"
 
@@ -29,8 +30,6 @@ DEFINE_string(input, "",
               "lightmap_*.exr files.");
 
 // --- Globals ---
-// --- Globals (Additional) ---
-GLuint g_MeshProgram = 0;
 GLuint g_PostProgram = 0;
 
 // HDR Framebuffer (MSAA)
@@ -87,6 +86,7 @@ GLuint g_QuadVBO = 0;
 
 // Skybox Data - Moved to SkyRenderer
 sh_baker::SkyRenderer g_SkyRenderer;
+sh_baker::RadianceRenderer g_RadianceRenderer;
 
 // ... (RenderMesh struct, vector globals unchanged) ...
 
@@ -285,18 +285,6 @@ void DrawPostProcess(int width, int height) {
   glEnable(GL_DEPTH_TEST);
 }
 
-struct RenderMesh {
-  GLuint vao;
-  GLsizei count;
-  int material_id;
-};
-std::vector<RenderMesh> g_Meshes;
-
-std::vector<GLuint> g_AlbedoTextures;
-std::vector<GLuint> g_NormalTextures;
-std::vector<GLuint> g_MRTextures;
-std::vector<GLuint> g_SHTextures;
-
 // Camera
 sh_baker::Camera g_Camera(Eigen::Vector3f(0.0f, 0.0f, 5.0f));
 sh_baker::InputController g_InputController(g_Camera);
@@ -314,53 +302,6 @@ void CursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
 
 void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
   g_InputController.ScrollCallback(window, xoffset, yoffset);
-}
-
-void DrawMeshes(const sh_baker::Scene& scene, const Eigen::Matrix4f& vp,
-                const Eigen::Vector3f& cam_pos) {
-  glUseProgram(g_MeshProgram);
-
-  // Pass CamPos to Shader
-  glUniform3fv(glGetUniformLocation(g_MeshProgram, "u_CamPos"), 1,
-               cam_pos.data());
-
-  // Bind SH Textures (Static uniforms, but Texture Units need binding)
-  for (size_t i = 0; i < g_SHTextures.size(); ++i) {
-    glActiveTexture(GL_TEXTURE1 + i);
-    glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-  }
-
-  // Draw Meshes
-  for (size_t i = 0; i < g_Meshes.size(); ++i) {
-    glBindVertexArray(g_Meshes[i].vao);
-
-    const auto& geo = scene.geometries[i];
-    Eigen::Matrix4f model = geo.transform.matrix();
-    Eigen::Matrix4f mvp = vp * model;
-
-    glUniformMatrix4fv(glGetUniformLocation(g_MeshProgram, "u_MVP"), 1,
-                       GL_FALSE, mvp.data());
-    glUniformMatrix4fv(glGetUniformLocation(g_MeshProgram, "u_Model"), 1,
-                       GL_FALSE, model.data());
-
-    int mat_id = g_Meshes[i].material_id;
-    CHECK_GT(mat_id, -1);
-    CHECK_LT(mat_id, scene.materials.size());
-
-    // Albedo
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_AlbedoTextures[mat_id]);
-
-    // Normal
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, g_NormalTextures[mat_id]);
-
-    // MR
-    glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D, g_MRTextures[mat_id]);
-
-    glDrawElements(GL_TRIANGLES, g_Meshes[i].count, GL_UNSIGNED_INT, 0);
-  }
 }
 
 int main(int argc, char* argv[]) {
@@ -425,187 +366,29 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "  Materials: " << scene.materials.size();
   LOG(INFO) << "  Lights: " << scene.lights.size();
 
-  // --- Upload Geometry ---
-  for (const auto& geo : scene.geometries) {
-    RenderMesh mesh;
-    mesh.count = static_cast<GLsizei>(geo.indices.size());
-    mesh.material_id = geo.material_id;
-
-    glGenVertexArrays(1, &mesh.vao);
-    glBindVertexArray(mesh.vao);
-
-    GLuint vbo[5];  // Pos, Normal, UV0, UV1, Tangent
-    GLuint ebo;
-
-    glGenBuffers(5, vbo);
-    glGenBuffers(1, &ebo);
-
-    // 0: Position
-    glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
-    glBufferData(GL_ARRAY_BUFFER, geo.vertices.size() * sizeof(Eigen::Vector3f),
-                 geo.vertices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-
-    // 1: Normal
-    glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
-    glBufferData(GL_ARRAY_BUFFER, geo.normals.size() * sizeof(Eigen::Vector3f),
-                 geo.normals.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-
-    // 2: UV0
-    if (!geo.texture_uvs.empty()) {
-      glBindBuffer(GL_ARRAY_BUFFER, vbo[2]);
-      glBufferData(GL_ARRAY_BUFFER,
-                   geo.texture_uvs.size() * sizeof(Eigen::Vector2f),
-                   geo.texture_uvs.data(), GL_STATIC_DRAW);
-      glEnableVertexAttribArray(2);
-      glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    }
-
-    // 3: UV1
-    if (!geo.lightmap_uvs.empty()) {
-      glBindBuffer(GL_ARRAY_BUFFER, vbo[3]);
-      glBufferData(GL_ARRAY_BUFFER,
-                   geo.lightmap_uvs.size() * sizeof(Eigen::Vector2f),
-                   geo.lightmap_uvs.data(), GL_STATIC_DRAW);
-      glEnableVertexAttribArray(3);
-      glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    }
-
-    // 4: Tangent
-    if (!geo.tangents.empty()) {
-      glBindBuffer(GL_ARRAY_BUFFER, vbo[4]);
-      glBufferData(GL_ARRAY_BUFFER,
-                   geo.tangents.size() * sizeof(Eigen::Vector4f),
-                   geo.tangents.data(), GL_STATIC_DRAW);
-      glEnableVertexAttribArray(4);
-      glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    }
-
-    // EBO
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, geo.indices.size() * sizeof(uint32_t),
-                 geo.indices.data(), GL_STATIC_DRAW);
-
-    g_Meshes.push_back(mesh);
+  // --- Init Radiance Renderer ---
+  if (!g_RadianceRenderer.Init(scene, input_dir)) {
+    LOG(ERROR) << "Failed to init Radiance Render";
+    return 1;
   }
 
-  // --- Load Materials ---
-  for (const auto& mat : scene.materials) {
-    // Albedo
-    if (!mat.albedo.pixel_data.empty()) {
-      g_AlbedoTextures.push_back(LoadTexture(mat.albedo));
-    } else {
-      g_AlbedoTextures.push_back(0);
-    }
-    // Normal
-    if (!mat.normal_texture.pixel_data.empty()) {
-      g_NormalTextures.push_back(LoadTexture(mat.normal_texture));
-    } else {
-      g_NormalTextures.push_back(0);
-    }
-    // Metallic/Roughness
-    if (!mat.metallic_roughness_texture.pixel_data.empty()) {
-      g_MRTextures.push_back(LoadTexture(mat.metallic_roughness_texture));
-    } else {
-      g_MRTextures.push_back(0);
-    }
-  }
-
-  // --- Load SH Textures ---
-  const char* kCoeffSuffixes[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
-                                  "L2m1", "L20",  "L21", "L22"};
-
-  bool use_packed_luminance = false;
-
-  // Check if packed file exists
-  if (std::filesystem::exists(input_dir / "lightmap_packed_0.exr")) {
-    use_packed_luminance = true;
-    LOG(INFO) << "Detected Packed Luminance SH Lightmaps.";
-
-    for (int i = 0; i < 3; ++i) {
-      std::string filename = "lightmap_packed_" + std::to_string(i) + ".exr";
-      std::filesystem::path p = input_dir / filename;
-      GLuint tid = LoadEXRTexture(p.string());
-      if (tid == 0) LOG(WARNING) << "Failed to load SH texture: " << p;
-      g_SHTextures.push_back(tid);
-    }
-  } else if (std::filesystem::exists(input_dir / "lightmap_L0.exr")) {
-    LOG(INFO) << "Using Standard SH Lightmaps (9 files).";
-    for (int i = 0; i < 9; ++i) {
-      std::string filename =
-          "lightmap_" + std::string(kCoeffSuffixes[i]) + ".exr";
-      std::filesystem::path p = input_dir / filename;
-      GLuint tid = LoadEXRTexture(p.string());
-      if (tid == 0) {
-        LOG(WARNING) << "Failed to load SH texture: " << p;
-      }
-      g_SHTextures.push_back(tid);
-    }
-  } else {
-    LOG(INFO) << "No SH Lightmaps found. Using 1x1 Placeholders (Luminance "
-                 "Only).";
-    // L0 = Approx 1.0 radiance
-    // Y00 = 0.282. Coeff = Radiance / Y00
-    // Reconstruction: Color = C0 * Y00 ...
-    // If we want Color=1, C0 * 0.282 = 1 => C0 = 3.54
-    float c0 = 3.5449f;
-    g_SHTextures.push_back(CreatePlaceholderTexture(c0, c0, c0));
-    for (int i = 1; i < 9; ++i) {
-      g_SHTextures.push_back(CreatePlaceholderTexture(0.0f, 0.0f, 0.0f));
-    }
-  }
-
-  // --- Setup Shaders ---
-  // --- Setup Shaders ---
-  g_MeshProgram = CreateShaderProgram("glsl/viz.vert", "glsl/viz.frag");
+  // --- Setup Shaders (Post Process) ---
+  g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
   GLuint skyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
   g_SkyRenderer.SetProgram(skyProgram);
-  g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
   g_LumProgram = CreateShaderProgram("glsl/post.vert", "glsl/lum.frag");
   g_BrightProgram = CreateShaderProgram("glsl/post.vert", "glsl/bright.frag");
   g_BlurProgram = CreateShaderProgram("glsl/post.vert", "glsl/blur.frag");
 
-  if (!g_MeshProgram || !skyProgram || !g_PostProgram || !g_LumProgram ||
-      !g_BrightProgram || !g_BlurProgram)
+  if (!g_PostProgram || !skyProgram || !g_LumProgram || !g_BrightProgram ||
+      !g_BlurProgram)
     return 1;
 
   glEnable(GL_DEPTH_TEST);
 
-  // --- Setup Mesh Program Static Uniforms ---
-  glUseProgram(g_MeshProgram);
-
-  // Set Mode Uniform
-  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_UsePackedLuminance"),
-              use_packed_luminance ? 1 : 0);
-
-  // Set Material Sampler Units (Static)
-  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_AlbedoTex"), 0);
-  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_NormalTex"), 4);
-  glUniform1i(glGetUniformLocation(g_MeshProgram, "u_MRTex"), 5);
-
-  // Bind SH Textures (Static)
-  if (use_packed_luminance) {
-    for (int i = 0; i < 3; ++i) {
-      glActiveTexture(GL_TEXTURE1 + i);
-      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-      std::string u_name = "u_PackedTex" + std::to_string(i);
-      glUniform1i(glGetUniformLocation(g_MeshProgram, u_name.c_str()), 1 + i);
-    }
-  } else {
-    for (int i = 0; i < 9; ++i) {
-      glActiveTexture(GL_TEXTURE1 + i);
-      glBindTexture(GL_TEXTURE_2D, g_SHTextures[i]);
-      std::string u_name = "u_" + std::string(kCoeffSuffixes[i]);
-      glUniform1i(glGetUniformLocation(g_MeshProgram, u_name.c_str()), 1 + i);
-    }
-  }
-
   // --- Set Sky SH Uniforms and Skybox State ---
   g_SkyRenderer.UpdateAndBind(scene.environment ? &*scene.environment : nullptr,
-                              g_MeshProgram);
+                              g_RadianceRenderer.GetProgram());
 
   // --- Main Loop ---
   while (!glfwWindowShouldClose(window)) {
@@ -637,7 +420,7 @@ int main(int argc, char* argv[]) {
 
     Eigen::Matrix4f vp = proj * view;
 
-    DrawMeshes(scene, vp, g_Camera.Position());
+    g_RadianceRenderer.Draw(scene, vp, g_Camera.Position());
 
     g_SkyRenderer.Draw(view, proj);
 

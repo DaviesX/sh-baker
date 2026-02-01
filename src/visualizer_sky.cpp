@@ -74,10 +74,13 @@ void SkyRenderer::UpdateAndBind(const sh_baker::Environment* env,
   }
 
   // Bind to the mesh program (which renders objects lit by sky)
+  // Ensure the program is active before setting uniforms!
+  glUseProgram(mesh_program);
   GLint skySHLoc = glGetUniformLocation(mesh_program, "u_SkySH");
   if (skySHLoc != -1) {
     glUniform3fv(skySHLoc, 9, sky_sh_data.data());
   }
+  glUseProgram(0);
 
   // 2. Set Internal State for Drawing Skybox (Background)
   if (env) {

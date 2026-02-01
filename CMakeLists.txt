@@ -181,6 +181,7 @@ add_executable(visualizer
     src/visualizer_main.cpp
     src/visualizer_camera.cpp
     src/visualizer_control.cpp
+    src/visualizer_radiance.cpp
     src/visualizer_sky.cpp
     src/visualizer_utils.cpp
 )
