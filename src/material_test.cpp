@@ -90,12 +90,55 @@ TEST(MaterialTest, GetEmission) {
   mat.albedo.height = 1;
   mat.albedo.channels = 3;
   mat.albedo.pixel_data = {255, 255, 255};
-  mat.emission_intensity = 5.0f;
+  mat.emissive_factor = Eigen::Vector3f::Ones();
+  mat.emissive_strength = 5.0f;
 
   Eigen::Vector3f res = GetEmission(mat, Eigen::Vector2f(0.5f, 0.5f));
   EXPECT_NEAR(res.x(), 5.0f, 1e-5f);
   EXPECT_NEAR(res.y(), 5.0f, 1e-5f);
   EXPECT_NEAR(res.z(), 5.0f, 1e-5f);
+}
+
+TEST(MaterialTest, GetEmissionWithTexture) {
+  Material mat;
+  // Initialize emissive texture (Red)
+  mat.emissive_texture = Texture();
+  mat.emissive_texture->width = 1;
+  mat.emissive_texture->height = 1;
+  mat.emissive_texture->channels = 3;
+  mat.emissive_texture->pixel_data = {255, 0, 0};
+
+  mat.emissive_strength = 2.0f;
+  mat.emissive_factor = Eigen::Vector3f::Ones();
+
+  Eigen::Vector3f res = GetEmission(mat, Eigen::Vector2f(0.5f, 0.5f));
+  // Red channel: 1.0 * 1.0 * 2.0 = 2.0
+  EXPECT_NEAR(res.x(), 2.0f, 1e-5f);
+  // Green/Blue channels: 0.0 * 1.0 * 2.0 = 0.0
+  EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+  EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
+}
+
+TEST(MaterialTest, GetEmissionTextureWithFactor) {
+  Material mat;
+  // Initialize emissive texture (Red)
+  mat.emissive_texture = Texture();
+  mat.emissive_texture->width = 1;
+  mat.emissive_texture->height = 1;
+  mat.emissive_texture->channels = 3;
+  mat.emissive_texture->pixel_data = {255, 0, 0};
+
+  mat.emissive_strength = 2.0f;
+  // Factor suppresses Green (even if texture had it) and Red.
+  // Here texture is Red. Factor = (0.5, 1.0, 1.0).
+  mat.emissive_factor = Eigen::Vector3f(0.5f, 1.0f, 1.0f);
+
+  Eigen::Vector3f res = GetEmission(mat, Eigen::Vector2f(0.5f, 0.5f));
+  // Red: Texture(1.0) * Factor(0.5) * Strength(2.0) = 1.0
+  EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
+  // Green/Blue: 0.0
+  EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+  EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
 }
 
 TEST(MaterialTest, GetAlpha) {

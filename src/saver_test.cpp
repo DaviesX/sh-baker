@@ -348,4 +348,77 @@ TEST(SaverTest, SaveComplexScene) {
   std::filesystem::remove_all(temp_dir);
 }
 
+TEST(SaverTest, SaveSceneEmission) {
+  Scene scene;
+  Material mat;
+  mat.name = "EmissionMat";
+  mat.albedo.width = 1;
+  mat.albedo.height = 1;
+  mat.albedo.pixel_data = {255, 255, 255, 255};
+
+  // Emission Setup
+  mat.emissive_factor = Eigen::Vector3f(1.0f, 0.5f, 0.0f);
+  mat.emissive_strength = 5.0f;
+
+  std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() / "sh_baker_test_emission";
+  std::filesystem::create_directories(temp_dir);
+
+  std::filesystem::path source_dir = temp_dir / "source";
+  std::filesystem::create_directories(source_dir);
+
+  // Emissive Texture (1x1 red)
+  // We must save it to disk because SaveScene currently only supports
+  // file-backed textures
+  std::filesystem::path emissive_path = source_dir / "emissive.png";
+  {
+    unsigned char pixels[] = {255, 0, 0};
+    stbi_write_png(emissive_path.string().c_str(), 1, 1, 3, pixels, 3);
+  }
+
+  mat.emissive_texture = Texture();
+  mat.emissive_texture->width = 1;
+  mat.emissive_texture->height = 1;
+  mat.emissive_texture->channels = 3;
+  mat.emissive_texture->pixel_data = {255, 0, 0};
+  mat.emissive_texture->file_path = emissive_path;
+
+  scene.materials.push_back(mat);
+
+  std::filesystem::path output_path = temp_dir / "emission.gltf";
+
+  bool ret = SaveScene(scene, output_path);
+  ASSERT_TRUE(ret);
+
+  // Load back using tinygltf directly to verify structure
+  tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+  std::string err, warn;
+  bool load_ret =
+      loader.LoadASCIIFromFile(&model, &err, &warn, output_path.string());
+  ASSERT_TRUE(load_ret) << err;
+
+  ASSERT_EQ(model.materials.size(), 1);
+  const auto& gmat = model.materials[0];
+
+  // Verify Emissive Factor
+  EXPECT_EQ(gmat.emissiveFactor.size(), 3);
+  EXPECT_NEAR(gmat.emissiveFactor[0], 1.0, 1e-4);
+  EXPECT_NEAR(gmat.emissiveFactor[1], 0.5, 1e-4);
+  EXPECT_NEAR(gmat.emissiveFactor[2], 0.0, 1e-4);
+
+  // Verify Emissive Strength Extension
+  auto ext_it = gmat.extensions.find("KHR_materials_emissive_strength");
+  ASSERT_NE(ext_it, gmat.extensions.end())
+      << "Missing KHR_materials_emissive_strength extension";
+  ASSERT_TRUE(ext_it->second.Has("emissiveStrength"));
+  double strength = ext_it->second.Get("emissiveStrength").GetNumberAsDouble();
+  EXPECT_NEAR(strength, 5.0, 1e-4);
+
+  // Verify Emissive Texture
+  ASSERT_GE(gmat.emissiveTexture.index, 0);
+
+  std::filesystem::remove_all(temp_dir);
+}
+
 }  // namespace sh_baker

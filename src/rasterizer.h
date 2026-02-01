@@ -23,9 +23,21 @@ struct SurfacePoint {
 };
 
 // Rasterizes the scene UVs into a buffer of SurfacePoints.
-// The buffer size will be config.width * config.height.
+// The buffer size will be config.width * config.supersample_scale *
+// config.height * config.supersample_scale.
 std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                                          const RasterConfig& config);
+
+// Rasterizes the scene UVs into a buffer of SurfacePoints.
+// The buffer size will be config.width * config.supersample_scale *
+// config.height * config.supersample_scale.
+std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
+                                                 const RasterConfig& config);
+
+// Rasterizes the scene UVs into a buffer of color coded material IDs.
+// The buffer size will be config.width * config.height (supersample scale is
+// not applied).
+Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config);
 
 // Extracts a validity mask (1 for valid, 0 for invalid) from surface points.
 std::vector<uint8_t> CreateValidityMask(

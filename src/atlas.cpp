@@ -98,14 +98,12 @@ std::vector<float> CalculateGeometryScales(
 std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
                                                  unsigned target_resolution,
                                                  unsigned padding,
-                                                 float density_multiplier) {
+                                                 float density_multiplier,
+                                                 bool skip_parameterization) {
   const auto& geometries = scene.geometries;
   if (geometries.empty()) {
     return std::nullopt;
   }
-
-  std::vector<float> geometry_scales = atlas_internal::CalculateGeometryScales(
-      geometries, scene.materials, density_multiplier);
 
   // 1. Create Atlas
   xatlas::Atlas* atlas = xatlas::Create();
@@ -113,40 +111,60 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   // 2. Add Meshes
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
-    auto vertices = TransformedVertices(geo);
-    auto normals = TransformedNormals(geo);
 
-    // Apply calculated scale to vertices (Emulating meshRelativeScaling)
-    float scale = geometry_scales[i];
-    for (auto& v : vertices) {
-      v *= scale;
-    }
+    if (skip_parameterization) {
+      if (geo.texture_uvs.empty()) {
+        LOG(ERROR) << "Geometry " << i
+                   << " has no UVs, cannot skip parameterization.";
+        xatlas::Destroy(atlas);
+        return std::nullopt;
+      }
 
-    xatlas::MeshDecl mesh_decl;
-    mesh_decl.vertexCount = static_cast<uint32_t>(vertices.size());
-    mesh_decl.vertexPositionData = vertices.data();
-    mesh_decl.vertexPositionStride = sizeof(Eigen::Vector3f);
-
-    if (!normals.empty()) {
-      mesh_decl.vertexNormalData = normals.data();
-      mesh_decl.vertexNormalStride = sizeof(Eigen::Vector3f);
-    }
-
-    if (!geo.texture_uvs.empty()) {
+      xatlas::UvMeshDecl mesh_decl;
+      mesh_decl.vertexCount = static_cast<uint32_t>(geo.texture_uvs.size());
       mesh_decl.vertexUvData = geo.texture_uvs.data();
-      mesh_decl.vertexUvStride = sizeof(Eigen::Vector2f);
-    }
+      mesh_decl.vertexStride = sizeof(Eigen::Vector2f);
+      mesh_decl.indexCount = static_cast<uint32_t>(geo.indices.size());
+      mesh_decl.indexData = geo.indices.data();
+      mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
 
-    mesh_decl.indexCount = static_cast<uint32_t>(geo.indices.size());
-    mesh_decl.indexData = geo.indices.data();
-    mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
+      xatlas::AddMeshError error = xatlas::AddUvMesh(atlas, mesh_decl);
+      if (error != xatlas::AddMeshError::Success) {
+        LOG(ERROR) << "Error adding UV mesh " << i
+                   << " to xatlas: " << xatlas::StringForEnum(error);
+        xatlas::Destroy(atlas);
+        return std::nullopt;
+      }
+    } else {
+      auto vertices = TransformedVertices(geo);
+      auto normals = TransformedNormals(geo);
 
-    xatlas::AddMeshError error = xatlas::AddMesh(atlas, mesh_decl);
-    if (error != xatlas::AddMeshError::Success) {
-      LOG(ERROR) << "Error adding mesh " << i
-                 << " to xatlas: " << xatlas::StringForEnum(error);
-      xatlas::Destroy(atlas);
-      return std::nullopt;
+      xatlas::MeshDecl mesh_decl;
+      mesh_decl.vertexCount = static_cast<uint32_t>(vertices.size());
+      mesh_decl.vertexPositionData = vertices.data();
+      mesh_decl.vertexPositionStride = sizeof(Eigen::Vector3f);
+
+      if (!normals.empty()) {
+        mesh_decl.vertexNormalData = normals.data();
+        mesh_decl.vertexNormalStride = sizeof(Eigen::Vector3f);
+      }
+
+      if (!geo.texture_uvs.empty()) {
+        mesh_decl.vertexUvData = geo.texture_uvs.data();
+        mesh_decl.vertexUvStride = sizeof(Eigen::Vector2f);
+      }
+
+      mesh_decl.indexCount = static_cast<uint32_t>(geo.indices.size());
+      mesh_decl.indexData = geo.indices.data();
+      mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
+
+      xatlas::AddMeshError error = xatlas::AddMesh(atlas, mesh_decl);
+      if (error != xatlas::AddMeshError::Success) {
+        LOG(ERROR) << "Error adding mesh " << i
+                   << " to xatlas: " << xatlas::StringForEnum(error);
+        xatlas::Destroy(atlas);
+        return std::nullopt;
+      }
     }
   }
 
@@ -158,7 +176,12 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   // Use higher quality packing (brute force) if desired, but defaults are
   // usually fine. pack_options.bruteForce = true;
 
-  xatlas::Generate(atlas, xatlas::ChartOptions(), pack_options);
+  if (skip_parameterization) {
+    xatlas::ComputeCharts(atlas);
+    xatlas::PackCharts(atlas, pack_options);
+  } else {
+    xatlas::Generate(atlas, xatlas::ChartOptions(), pack_options);
+  }
 
   if (atlas->width == 0 || atlas->height == 0) {
     LOG(ERROR) << "xatlas failed to generate any content.";
@@ -180,6 +203,7 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   std::vector<Geometry> result_geometries;
   result_geometries.reserve(geometries.size());
 
+  CHECK_EQ(atlas->meshCount, geometries.size());
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& src_geo = geometries[i];
     const xatlas::Mesh& atlas_mesh = atlas->meshes[i];
@@ -189,23 +213,37 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
     new_geo.transform = src_geo.transform;
 
     uint32_t new_vertex_count = atlas_mesh.vertexCount;
-    new_geo.vertices.resize(new_vertex_count);
-    new_geo.normals.resize(new_vertex_count);
-    new_geo.texture_uvs.resize(new_vertex_count);
-    new_geo.lightmap_uvs.resize(new_vertex_count);
-    new_geo.tangents.resize(new_vertex_count);
+    new_geo.vertices.resize(new_vertex_count, Eigen::Vector3f::Zero());
+    new_geo.normals.resize(new_vertex_count, Eigen::Vector3f::Zero());
+    new_geo.texture_uvs.resize(new_vertex_count, Eigen::Vector2f::Zero());
+    new_geo.lightmap_uvs.resize(new_vertex_count, Eigen::Vector2f::Zero());
+    new_geo.tangents.resize(new_vertex_count, Eigen::Vector4f::Zero());
+
+    std::vector<bool> skipped_vertices(new_vertex_count, false);
 
     // Fill vertices
     for (uint32_t v = 0; v < new_vertex_count; ++v) {
       const auto& vertex_ref = atlas_mesh.vertexArray[v];
       uint32_t original_index = vertex_ref.xref;
 
-      if (vertex_ref.atlasIndex != 0) {
+      if (vertex_ref.atlasIndex == -1) {
         // Discard vertices that are not in the first atlas.
+        skipped_vertices[v] = true;
+        continue;
+      }
+      if (vertex_ref.atlasIndex > 0) {
+        LOG(ERROR) << "xatlas failed to fit geometries into a single "
+                   << target_resolution << "x" << target_resolution
+                   << " atlas with padding " << padding << ".";
+        skipped_vertices[v] = true;
         continue;
       }
 
-      // Set new lightmap UV
+      // Set new lightmap UV.
+      CHECK(vertex_ref.uv[0] >= 0 && vertex_ref.uv[0] <= atlas->width)
+          << "U out of bounds!";
+      CHECK(vertex_ref.uv[1] >= 0 && vertex_ref.uv[1] <= atlas->height)
+          << "V out of bounds!";
       new_geo.lightmap_uvs[v] =
           Eigen::Vector2f(vertex_ref.uv[0] / (float)atlas->width,
                           vertex_ref.uv[1] / (float)atlas->height);
@@ -232,10 +270,26 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
     }
 
     // Fill indices
-    new_geo.indices.resize(atlas_mesh.indexCount);
-    for (uint32_t idx = 0; idx < atlas_mesh.indexCount; ++idx) {
-      new_geo.indices[idx] = atlas_mesh.indexArray[idx];
+    // We must process in triangles (3 indices at a time) to ensure we don't
+    // leave partial triangles or reference skipped vertices.
+    new_geo.indices.reserve(atlas_mesh.indexCount);
+    for (uint32_t idx = 0; idx < atlas_mesh.indexCount; idx += 3) {
+      uint32_t idx0 = atlas_mesh.indexArray[idx + 0];
+      uint32_t idx1 = atlas_mesh.indexArray[idx + 1];
+      uint32_t idx2 = atlas_mesh.indexArray[idx + 2];
+
+      if (skipped_vertices[idx0] || skipped_vertices[idx1] ||
+          skipped_vertices[idx2]) {
+        DLOG(WARNING) << "Triangle starting at index " << idx
+                      << " references skipped vertices. Discarding triangle.";
+        continue;
+      }
+
+      new_geo.indices.push_back(idx0);
+      new_geo.indices.push_back(idx1);
+      new_geo.indices.push_back(idx2);
     }
+    new_geo.indices.shrink_to_fit();
 
     result_geometries.push_back(std::move(new_geo));
   }

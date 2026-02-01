@@ -8,8 +8,8 @@ layout(location = 4) in vec4 aTangent;    // Tangent
 
 out vec3 vWorldPos;
 out vec3 vNormal;
-out vec3 vTangent;
-out vec3 vBitangent;
+out vec4 vTangent;
+// out vec3 vBitangent;
 out vec2 vTexCoord0;
 out vec2 vTexCoord1;
 
@@ -29,11 +29,11 @@ void main() {
   mat3 normalMatrix = mat3(u_Model);
 
   vNormal = normalize(normalMatrix * aNormal);
-  vTangent = normalize(normalMatrix * aTangent.xyz);
+  vTangent = vec4(normalize(normalMatrix * aTangent.xyz), aTangent.w);
 
   // Compute Bitangent (re-orthogonalize just in case, or trust mikkT)
   // MikkTSpace convention: B = cross(N, T) * sigma (tangent.w)
-  vBitangent = cross(vNormal, vTangent) * aTangent.w;
+  // vBitangent = cross(vNormal, vTangent) * aTangent.w;
 
   vTexCoord0 = aTexCoord0;
   vTexCoord1 = aTexCoord1;
