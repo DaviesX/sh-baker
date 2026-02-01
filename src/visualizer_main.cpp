@@ -17,11 +17,7 @@
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
 #include "visualizer_sky.h"
-
-#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
-#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
-#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
-#endif
+#include "visualizer_utils.h"
 
 // --- Constants ---
 const int kWindowWidth = 1280;
@@ -301,162 +297,12 @@ std::vector<GLuint> g_NormalTextures;
 std::vector<GLuint> g_MRTextures;
 std::vector<GLuint> g_SHTextures;
 
-float g_MaxAnisotropy = 1.0f;
-
 // Camera
 sh_baker::Camera g_Camera(Eigen::Vector3f(0.0f, 0.0f, 5.0f));
 sh_baker::InputController g_InputController(g_Camera);
 float g_LastFrame = 0.0f;
 
 // --- Helper Functions ---
-
-std::string ReadFile(const std::string& path) {
-  std::ifstream t(path);
-  if (!t.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << path;
-    return "";
-  }
-  std::stringstream buffer;
-  buffer << t.rdbuf();
-  return buffer.str();
-}
-
-GLuint CompileShader(GLenum type, const std::string& source) {
-  GLuint shader = glCreateShader(type);
-  const char* src = source.c_str();
-  glShaderSource(shader, 1, &src, nullptr);
-  glCompileShader(shader);
-
-  GLint success;
-  glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    char infoLog[512];
-    glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-    LOG(ERROR) << "Shader compilation failed:\n" << infoLog;
-    return 0;
-  }
-  return shader;
-}
-
-GLuint CreateShaderProgram(const std::string& vertPath,
-                           const std::string& fragPath) {
-  std::string vertSrc = ReadFile(vertPath);
-  std::string fragSrc = ReadFile(fragPath);
-  if (vertSrc.empty() || fragSrc.empty()) return 0;
-
-  GLuint vertex = CompileShader(GL_VERTEX_SHADER, vertSrc);
-  GLuint fragment = CompileShader(GL_FRAGMENT_SHADER, fragSrc);
-  if (!vertex || !fragment) return 0;
-
-  GLuint program = glCreateProgram();
-  glAttachShader(program, vertex);
-  glAttachShader(program, fragment);
-  glLinkProgram(program);
-
-  GLint success;
-  glGetProgramiv(program, GL_LINK_STATUS, &success);
-  if (!success) {
-    char infoLog[512];
-    glGetProgramInfoLog(program, 512, nullptr, infoLog);
-    LOG(ERROR) << "Program linking failed:\n" << infoLog;
-    return 0;
-  }
-  glDeleteShader(vertex);
-  glDeleteShader(fragment);
-  return program;
-}
-
-GLuint LoadTexture(const sh_baker::Texture& tex) {
-  GLuint tid;
-  glGenTextures(1, &tid);
-  glBindTexture(GL_TEXTURE_2D, tid);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.width, tex.height, 0,
-               tex.channels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE,
-               tex.pixel_data.data());
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                  GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  if (g_MaxAnisotropy > 1.0f) {
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                    g_MaxAnisotropy);
-  }
-  return tid;
-}
-
-GLuint LoadTexture(const sh_baker::Texture32F& tex) {
-  GLuint tid;
-  glGenTextures(1, &tid);
-  glBindTexture(GL_TEXTURE_2D, tid);
-  // Upload as 16F
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, tex.width, tex.height, 0,
-               tex.channels == 4 ? GL_RGBA : GL_RGB, GL_FLOAT,
-               tex.pixel_data.data());
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                  GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  if (g_MaxAnisotropy > 1.0f) {
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                    g_MaxAnisotropy);
-  }
-  return tid;
-}
-
-GLuint LoadEXRTexture(const std::string& path) {
-  float* out;
-  int width;
-  int height;
-  const char* err = nullptr;
-
-  int ret = LoadEXR(&out, &width, &height, path.c_str(), &err);
-  if (ret != TINYEXR_SUCCESS) {
-    if (err) {
-      LOG(ERROR) << "LoadEXR failed: " << err;
-      FreeEXRErrorMessage(err);
-    }
-    return 0;
-  }
-
-  GLuint tid;
-  glGenTextures(1, &tid);
-  glBindTexture(GL_TEXTURE_2D, tid);
-
-  // Upload as RGB float
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA,
-               GL_FLOAT, out);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                  GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  if (g_MaxAnisotropy > 1.0f) {
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                    g_MaxAnisotropy);
-  }
-
-  free(out);
-  return tid;
-}
-
-GLuint CreatePlaceholderTexture(float r, float g, float b) {
-  GLuint tid;
-  glGenTextures(1, &tid);
-  glBindTexture(GL_TEXTURE_2D, tid);
-  // GL_RGBA16F to match EXR
-  float color[4] = {r, g, b, 1.0f};
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_FLOAT, color);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  return tid;
-}
 
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
   g_InputController.MouseButtonCallback(window, button, action, mods);
@@ -561,13 +407,6 @@ int main(int argc, char* argv[]) {
                              // single sample for now.
 
   // Check for Anisotropic Filtering support
-  if (glfwExtensionSupported("GL_EXT_texture_filter_anisotropic")) {
-    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &g_MaxAnisotropy);
-    LOG(INFO) << "Anisotropic Filtering Enabled. Max Anisotropy: "
-              << g_MaxAnisotropy;
-  } else {
-    LOG(WARNING) << "Anisotropic Filtering NOT supported.";
-  }
 
   // --- Init HDR FBO ---
   InitHdrFramebuffer(kWindowWidth, kWindowHeight);
@@ -764,48 +603,9 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // --- Set Sky SH Uniforms ---
-  std::vector<float> sky_sh_data;
-  sky_sh_data.reserve(9 * 3);
-
-  if (scene.environment) {
-    const auto& sh = scene.environment->sh_coeffs;
-    for (int i = 0; i < 9; ++i) {
-      sky_sh_data.push_back(sh.coeffs[i].x());
-      sky_sh_data.push_back(sh.coeffs[i].y());
-      sky_sh_data.push_back(sh.coeffs[i].z());
-    }
-  } else {
-    // Placeholder: L0 = 3.5449 (so convolution with Y00=0.282 yields ~1.0)
-    float c0 = 3.5449f;
-    sky_sh_data.push_back(c0);
-    sky_sh_data.push_back(c0);
-    sky_sh_data.push_back(c0);
-    for (int i = 1; i < 9; ++i) {
-      sky_sh_data.push_back(0.0f);
-      sky_sh_data.push_back(0.0f);
-      sky_sh_data.push_back(0.0f);
-    }
-  }
-
-  GLint skySHLoc = glGetUniformLocation(g_MeshProgram, "u_SkySH");
-  if (skySHLoc != -1) {
-    glUniform3fv(skySHLoc, 9, sky_sh_data.data());
-  }
-
-  // --- Load Skybox Data ---
-  if (scene.environment) {
-    if (scene.environment->type == sh_baker::Environment::Type::Texture) {
-      GLuint tex = LoadTexture(scene.environment->texture);
-      g_SkyRenderer.SetEnvironment(false, Eigen::Vector3f::Zero(), tex);
-    } else {
-      LOG(INFO) << "Using Preetham Sky (Scene). Sun Dir: "
-                << scene.environment->sun_direction.transpose();
-      g_SkyRenderer.SetEnvironment(true, scene.environment->sun_direction, 0);
-    }
-  } else {
-    LOG(WARNING) << "No environment found in scene. Using default sky.";
-  }
+  // --- Set Sky SH Uniforms and Skybox State ---
+  g_SkyRenderer.UpdateAndBind(scene.environment ? &*scene.environment : nullptr,
+                              g_MeshProgram);
 
   // --- Main Loop ---
   while (!glfwWindowShouldClose(window)) {

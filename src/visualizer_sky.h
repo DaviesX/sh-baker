@@ -6,6 +6,10 @@
 #define GL_GLEXT_PROTOTYPES
 #include <GLFW/glfw3.h>
 
+#include <vector>
+
+#include "scene.h"
+
 namespace sh_baker {
 
 class SkyRenderer {
@@ -20,15 +24,19 @@ class SkyRenderer {
   // Set the shader program to use.
   void SetProgram(GLuint program);
 
-  // Set the environment parameters.
-  void SetEnvironment(bool use_preetham, const Eigen::Vector3f& sun_dir,
-                      GLuint texture_id);
+  // Updates the sky state from the scene environment and binds SH uniforms to
+  // the target program.
+  void UpdateAndBind(const sh_baker::Environment* env, GLuint mesh_program);
 
   // Draw the skybox.
   // Note: view matrix should contain rotation but likely not translation
   // (handled internally or by caller). The original implementation removed
   // translation from view matrix inside DrawSky.
   void Draw(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj);
+
+ private:
+  void SetEnvironment(bool use_preetham, const Eigen::Vector3f& sun_dir,
+                      GLuint texture_id);
 
  private:
   GLuint program_ = 0;

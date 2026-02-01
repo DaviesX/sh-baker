@@ -2,6 +2,8 @@
 
 #include <glog/logging.h>
 
+#include "visualizer_utils.h"
+
 namespace sh_baker {
 
 SkyRenderer::~SkyRenderer() {
@@ -44,6 +46,56 @@ void SkyRenderer::Init() {
 }
 
 void SkyRenderer::SetProgram(GLuint program) { program_ = program; }
+
+void SkyRenderer::UpdateAndBind(const sh_baker::Environment* env,
+                                GLuint mesh_program) {
+  // 1. Calculate and Bind SH Uniforms for the Mesh Program
+  std::vector<float> sky_sh_data;
+  sky_sh_data.reserve(9 * 3);
+
+  if (env) {
+    const auto& sh = env->sh_coeffs;
+    for (int i = 0; i < 9; ++i) {
+      sky_sh_data.push_back(sh.coeffs[i].x());
+      sky_sh_data.push_back(sh.coeffs[i].y());
+      sky_sh_data.push_back(sh.coeffs[i].z());
+    }
+  } else {
+    // Placeholder: L0 = 3.5449 (convolution with Y00=0.282 yields ~1.0)
+    float c0 = 3.5449f;
+    sky_sh_data.push_back(c0);
+    sky_sh_data.push_back(c0);
+    sky_sh_data.push_back(c0);
+    for (int i = 1; i < 9; ++i) {
+      sky_sh_data.push_back(0.0f);
+      sky_sh_data.push_back(0.0f);
+      sky_sh_data.push_back(0.0f);
+    }
+  }
+
+  // Bind to the mesh program (which renders objects lit by sky)
+  GLint skySHLoc = glGetUniformLocation(mesh_program, "u_SkySH");
+  if (skySHLoc != -1) {
+    glUniform3fv(skySHLoc, 9, sky_sh_data.data());
+  }
+
+  // 2. Set Internal State for Drawing Skybox (Background)
+  if (env) {
+    if (env->type == sh_baker::Environment::Type::Texture) {
+      // LoadTexture is now available via visualizer_utils.h
+      GLuint tex = LoadTexture(env->texture);
+      SetEnvironment(false, Eigen::Vector3f::Zero(), tex);
+    } else {
+      LOG(INFO) << "Using Preetham Sky (Scene). Sun Dir: "
+                << env->sun_direction.transpose();
+      SetEnvironment(true, env->sun_direction, 0);
+    }
+  } else {
+    LOG(WARNING) << "No environment found in scene. Using default sky.";
+    // Keep defaults (preetham=false, tex=0) or set explicitly?
+    // Current defaults in constructor are safe.
+  }
+}
 
 void SkyRenderer::SetEnvironment(bool use_preetham,
                                  const Eigen::Vector3f& sun_dir,
