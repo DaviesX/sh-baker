@@ -46,7 +46,7 @@ struct AtlasResult {
 //   density_multiplier: Global multiplier for the target density.
 std::optional<AtlasResult> CreateAtlasGeometries(
     const Scene& scene, unsigned target_resolution, unsigned padding,
-    float density_multiplier = 1.0f);
+    float density_multiplier = 1.0f, bool skip_parameterization = false);
 
 }  // namespace sh_baker
 

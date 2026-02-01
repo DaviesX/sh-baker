@@ -9,10 +9,13 @@ add_compile_options(
   $<$<CONFIG:Release>:-O3>
   $<$<CONFIG:Release>:-flto=auto>
   $<$<CONFIG:Release>:-march=native>
+  $<$<CONFIG:Debug>:-fsanitize=address>
+  $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
 )
 add_link_options(
   $<$<CONFIG:Release>:-flto=auto>
   $<$<CONFIG:Release>:-O3>
+  $<$<CONFIG:Debug>:-fsanitize=address>
 )
 
 include(FetchContent)
@@ -174,7 +177,11 @@ gtest_discover_tests(sh_baker_test)
 
 # --- Visualizer ---
 
-add_executable(visualizer src/visualizer_main.cpp)
+add_executable(visualizer 
+    src/visualizer_main.cpp
+    src/visualizer_camera.cpp
+    src/visualizer_control.cpp
+)
 
 
 target_link_libraries(visualizer PRIVATE

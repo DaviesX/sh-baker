@@ -37,12 +37,12 @@ inline DirectionalLightIncoming DirectionalLightIncomingRadiance(
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
   visibility_ray->direction = -light.direction;
-  visibility_ray->tnear = 0.001f;
+  visibility_ray->tnear = 0.005f;
   visibility_ray->tfar = 1.0e10f;
 
   // Incoming radiance without visibility term.
   float cos_n = N.dot(-light.direction);
-  if (cos_n < 0.f) {
+  if (cos_n <= 0.f) {
     return DirectionalLightIncoming{Eigen::Vector3f::Zero(), cos_n};
   }
   return DirectionalLightIncoming{light.intensity * light.color, cos_n};
@@ -55,7 +55,7 @@ Eigen::Vector3f DirectionalLightRadiance(const Light& light,
                                          Ray* visibility_ray) {
   DirectionalLightIncoming incoming =
       DirectionalLightIncomingRadiance(light, P, N, visibility_ray);
-  if (incoming.cos_n < 0.f) {
+  if (incoming.cos_n <= 0.f) {
     return Eigen::Vector3f::Zero();
   }
 
@@ -80,8 +80,8 @@ inline PointLightIncoming PointLightIncomingRadiance(const Light& light,
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
   visibility_ray->direction = light.position - P;
-  visibility_ray->tnear = 0.001f;
-  visibility_ray->tfar = dist - 0.001f;
+  visibility_ray->tnear = 0.005f;
+  visibility_ray->tfar = dist - 0.005f;
 
   // Incoming radiance without visibility term.
   L /= dist;
@@ -100,7 +100,7 @@ Eigen::Vector3f PointLightRadiance(const Light& light, const Eigen::Vector3f& P,
                                    Ray* visibility_ray) {
   PointLightIncoming incoming =
       PointLightIncomingRadiance(light, P, N, visibility_ray);
-  if (incoming.cos_n < 0.f) {
+  if (incoming.cos_n <= 0.f) {
     return Eigen::Vector3f::Zero();
   }
 
@@ -125,8 +125,8 @@ inline SpotLightIncoming SpotLightIncomingRadiance(const Light& light,
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
   visibility_ray->direction = light.position - P;
-  visibility_ray->tnear = 0.001f;
-  visibility_ray->tfar = dist - 0.001f;
+  visibility_ray->tnear = 0.005f;
+  visibility_ray->tfar = dist - 0.005f;
 
   // Incoming radiance without visibility term.
   L /= dist;
@@ -149,7 +149,7 @@ Eigen::Vector3f SpotLightRadiance(const Light& light, const Eigen::Vector3f& P,
                                   Ray* visibility_ray) {
   SpotLightIncoming incoming =
       SpotLightIncomingRadiance(light, P, N, visibility_ray);
-  if (incoming.cos_n < 0.f) {
+  if (incoming.cos_n <= 0.f) {
     return Eigen::Vector3f::Zero();
   }
 
@@ -174,8 +174,8 @@ inline AreaLightIncoming AreaLightIncomingRadiance(const AreaSample& sample,
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
   visibility_ray->direction = sample.point - P;
-  visibility_ray->tnear = 0.001f;
-  visibility_ray->tfar = dist - 0.001f;
+  visibility_ray->tnear = 0.005f;
+  visibility_ray->tfar = dist - 0.005f;
 
   // Incoming radiance without visibility term.
   L /= dist;
@@ -194,7 +194,7 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
                                   Ray* visibility_ray) {
   AreaLightIncoming incoming =
       AreaLightIncomingRadiance(sample, P, N, visibility_ray);
-  if (incoming.cos_n < 0.f) {
+  if (incoming.cos_n <= 0.f) {
     return Eigen::Vector3f::Zero();
   }
 

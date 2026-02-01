@@ -125,4 +125,81 @@ TEST(RasterizerTest, DownsampleValidityMask) {
   EXPECT_EQ(mask[3], 1);  // (1,1)
 }
 
+TEST(RasterizerTest, RasterizeSceneMaterial) {
+  Scene scene;
+  Geometry quad;
+  // Full 0-1 UV quad
+  quad.material_id = 123;
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+  quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
+  quad.indices = {0, 1, 2, 0, 2, 3};
+  scene.geometries.push_back(quad);
+
+  RasterConfig config;
+  config.width = 4;
+  config.height = 4;
+
+  Texture result = RasterizeSceneMaterial(scene, config);
+
+  EXPECT_EQ(result.width, 4);
+  EXPECT_EQ(result.height, 4);
+  EXPECT_EQ(result.channels, 3);
+  EXPECT_EQ(result.pixel_data.size(), 4 * 4 * 3);
+
+  // All pixels should be colored with the material color
+  for (int i = 0; i < 16; ++i) {
+    uint8_t r = result.pixel_data[i * 3 + 0];
+    uint8_t g = result.pixel_data[i * 3 + 1];
+    uint8_t b = result.pixel_data[i * 3 + 2];
+    // Color should NOT be black
+    EXPECT_TRUE(r != 0 || g != 0 || b != 0)
+        << "Pixel " << i << " should be colored";
+  }
+}
+
+TEST(RasterizerTest, RasterizeQuadScanline) {
+  Scene scene;
+  Geometry quad;
+  // Full 0-1 UV quad
+  quad.material_id = 0;
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+  quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  quad.texture_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  quad.tangents = {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}};
+  quad.indices = {0, 1, 2, 0, 2, 3};
+  scene.geometries.push_back(quad);
+
+  RasterConfig config;
+  config.width = 4;
+  config.height = 4;
+
+  std::vector<SurfacePoint> result = RasterizeSceneScanline(scene, config);
+
+  EXPECT_EQ(result.size(), 16);
+
+  // All should be valid
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_GE(result[i].material_id, 0)
+        << "Pixel " << i << " should be covered.";
+  }
+
+  // Check center (approx)
+  // Pixel 5 (1,1) -> UV (0.375, 0.375)
+  // (-1) + (1 - (-1)) * 0.375 = -1 + 2 * 0.375 = -1 + 0.75 = -0.25
+  EXPECT_NEAR(result[5].position.x(), -0.25f, 0.001f);
+  EXPECT_NEAR(result[5].position.y(), -0.25f, 0.001f);
+  EXPECT_NEAR(result[5].normal.z(), 1.0f, 0.001f);
+
+  // Check Pixel 6 (2,1) -> UV (0.625, 0.375)
+  // (-1) + (1 - (-1)) * 0.625 = -1 + 2 * 0.625 = 0.25
+  // (-1) + (1 - (-1)) * 0.375 = -1 + 2 * 0.375 = -0.25
+  EXPECT_NEAR(result[6].position.x(), 0.25f, 0.001f);
+  EXPECT_NEAR(result[6].position.y(), -0.25f, 0.001f);
+  EXPECT_NEAR(result[6].normal.z(), 1.0f, 0.001f);
+}
+
 }  // namespace sh_baker

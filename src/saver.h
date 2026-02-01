@@ -49,6 +49,8 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
 // Saves the Scene to a glTF file.
 // Serializes geometry with both texture_uvs (TEXCOORD_0) and lightmap_uvs
 // (TEXCOORD_1).
+// Also saves materials (including PBR and optional emission) and lights
+// (using KHR_lights_punctual).
 bool SaveScene(const Scene& scene, const std::filesystem::path& path);
 
 // Saves a standard Texture to a PNG file.

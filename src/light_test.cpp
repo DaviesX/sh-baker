@@ -47,7 +47,7 @@ class LightTest : public ::testing::Test {
 
     Light area;
     area.type = Light::Type::Area;
-    area.geometry_index = 0;  // First geometry
+
     area.intensity = 10.0f;
     area.area = 2.0f;
     // Pointers must be set manually as Loader does it
@@ -116,7 +116,8 @@ TEST_F(LightTest, EvaluateAreaLight) {
 
   Material mat;
   mat.name = "emit";
-  mat.emission_intensity = 10.0f;  // Important
+  mat.emissive_strength = 10.0f;  // Important
+  mat.emissive_factor = Eigen::Vector3f::Ones();
   scene_.materials.push_back(mat);
 
   // Area Light Geometry (Y=10)
@@ -143,7 +144,7 @@ TEST_F(LightTest, EvaluateAreaLight) {
 
   Light area;
   area.type = Light::Type::Area;
-  area.geometry_index = 0;
+
   area.geometry = &scene_.geometries[0];
   area.material = &scene_.materials[0];
   area.intensity = 10.0f;
@@ -283,7 +284,11 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   ASSERT_NE(area.material, nullptr);
 
   // Set Emission
-  scene_.materials[0].emission_intensity = 10.0f;
+  scene_.materials[0].emissive_strength = 10.0f;
+  // Previously emission might have used albedo (0.8), but now uses
+  // emissive_factor. We need to set emissive_factor if we want non-zero
+  // emission without texture.
+  scene_.materials[0].emissive_factor = Eigen::Vector3f::Ones();
 
   // Sample
   light_internal::AreaSample sample =
@@ -300,9 +305,9 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   EXPECT_NEAR(sample.pdf, 0.5f, 1e-4f);
 
   // Verify Emission
-  // Mat intensity = 10. Albedo default grey (0.8).
-  // Radiance = 10 * 0.8 = 8.
-  EXPECT_NEAR(sample.radiance.x(), 8.0f, 1e-4f);
+  // Mat intensity = 10. Factor = 1.
+  // Radiance = 10 * 1 = 10.
+  EXPECT_NEAR(sample.radiance.x(), 10.0f, 1e-4f);
 }
 
 }  // namespace

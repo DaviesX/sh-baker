@@ -8,6 +8,13 @@ namespace sh_baker {
 // Stores 3rd-order Spherical Harmonics coefficients (9 bands).
 // The coefficients represent the projection of the incident radiance field L_i.
 struct SHCoeffs {
+  SHCoeffs() = default;
+  SHCoeffs(float val) {
+    for (int i = 0; i < 9; i++) {
+      coeffs[i] = Eigen::Vector3f(val, val, val);
+    }
+  }
+
   // 9 coefficients. Each coefficient is an RGB vector (3 floats).
   Eigen::Vector3f coeffs[9] = {Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero(),
                                Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero(),

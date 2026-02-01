@@ -16,6 +16,8 @@ namespace sh_baker {
 
 namespace {
 
+const float kLightIntensityScale = 1e+3f;
+
 // Helpers for buffer management
 void AddBufferView(const void* data, size_t size, size_t stride, int target,
                    int& view_index, tinygltf::Model* model) {
@@ -489,6 +491,39 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       gmat.pbrMetallicRoughness.metallicFactor = b / 255.0;
     }
 
+    // Emissive Factor
+    {
+      std::vector<double> emissive_factor = {double(mat.emissive_factor.x()),
+                                             double(mat.emissive_factor.y()),
+                                             double(mat.emissive_factor.z())};
+      gmat.emissiveFactor = emissive_factor;
+    }
+
+    // Emissive Texture
+    if (mat.emissive_texture && mat.emissive_texture->file_path) {
+      auto texture_index =
+          AddOrReuseTexture(*mat.emissive_texture->file_path,
+                            path.parent_path(), &model, &texture_allocations);
+      if (texture_index.has_value()) {
+        gmat.emissiveTexture.index = *texture_index;
+      }
+    }
+
+    // Emissive Strength (Extension)
+    if (mat.emissive_strength != 1.0f) {
+      if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
+                    "KHR_materials_emissive_strength") ==
+          model.extensionsUsed.end()) {
+        model.extensionsUsed.push_back("KHR_materials_emissive_strength");
+      }
+
+      tinygltf::Value::Object ext_obj;
+      ext_obj["emissiveStrength"] =
+          tinygltf::Value(double(mat.emissive_strength));
+      gmat.extensions["KHR_materials_emissive_strength"] =
+          tinygltf::Value(ext_obj);
+    }
+
     model.materials.push_back(gmat);
   }
 
@@ -683,7 +718,8 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       color_vec.push_back(tinygltf::Value(double(light.color.z())));
       light_obj["color"] = tinygltf::Value(color_vec);
 
-      light_obj["intensity"] = tinygltf::Value(double(light.intensity));
+      light_obj["intensity"] =
+          tinygltf::Value(double(light.intensity * kLightIntensityScale));
 
       std::string type_str;
       if (light.type == Light::Type::Directional) {

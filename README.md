@@ -85,8 +85,10 @@ To use the standalone OpenGL visualizer:
 - `--input`: Path to the input folder containing `scene.gltf` and `lightmap_*.exr` files.
 
 Controls:
-- **Left Mouse Drag**: Orbit camera.
-- **Scroll**: Zoom.
+- **W, A, S, D**: Move Forward, Left, Backward, Right
+- **Q, E**: Move Down, Up
+- **Left Mouse Drag**: Rotate Camera
+- **Scroll**: Adjust Movement Speed
 
 ### EXR to PNG Converter
 

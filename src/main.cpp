@@ -30,6 +30,8 @@ DEFINE_double(density_multiplier, 1.0,
 DEFINE_bool(luminance_only, false,
             "If true, compress Light map by storing only Luminance for L1/L2 "
             "coefficients (Packed into 3 textures).");
+DEFINE_bool(skip_parameterization, false,
+            "Skip xatlas parameterization step (requires existing UVs).");
 
 DEFINE_bool(debug_output, false,
             "If true, output debug information to the output folder.");
@@ -77,7 +79,8 @@ int main(int argc, char* argv[]) {
   std::optional<sh_baker::AtlasResult> atlas_result =
       sh_baker::CreateAtlasGeometries(
           scene, FLAGS_width, FLAGS_dilation,
-          static_cast<float>(FLAGS_density_multiplier));
+          static_cast<float>(FLAGS_density_multiplier),
+          FLAGS_skip_parameterization);
   if (!atlas_result) {
     LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
     return 1;
@@ -90,15 +93,14 @@ int main(int argc, char* argv[]) {
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
-  raster_config.width = FLAGS_width;  // Keep the requested resolution though
-                                      // xatlas may prefer a different one.
-  raster_config.height = FLAGS_height;
+  raster_config.width = atlas_result->width;
+  raster_config.height = atlas_result->height;
   raster_config.supersample_scale = FLAGS_supersample_scale;
 
   LOG(INFO) << "Rasterizing scene (" << raster_config.width << "x"
             << raster_config.height
             << ") scale: " << raster_config.supersample_scale << "...";
-  auto surface_points = sh_baker::RasterizeScene(scene, raster_config);
+  auto surface_points = sh_baker::RasterizeSceneScanline(scene, raster_config);
 
   // Debug Output
   if (FLAGS_debug_output) {
@@ -106,18 +108,24 @@ int main(int argc, char* argv[]) {
     int scaled_h = raster_config.height * raster_config.supersample_scale;
     LOG(INFO) << "Generating Material Map (" << scaled_w << "x" << scaled_h
               << ")...";
-    sh_baker::Texture mat_map =
+    sh_baker::Texture mat_map1 =
+        sh_baker::RasterizeSceneMaterial(scene, raster_config);
+    sh_baker::Texture mat_map2 =
         sh_baker::CreateMaterialMap(surface_points, scaled_w, scaled_h);
 
     std::filesystem::path out_dir = FLAGS_output.empty()
                                         ? std::filesystem::current_path()
                                         : std::filesystem::path(FLAGS_output);
     std::filesystem::create_directories(out_dir);
-    std::filesystem::path map_path = out_dir / "material_map.png";
-    if (sh_baker::SaveTexture(mat_map, map_path)) {
-      LOG(INFO) << "Material map saved to: " << map_path;
+    std::filesystem::path map_path1 = out_dir / "material_map1.png";
+    std::filesystem::path map_path2 = out_dir / "material_map2.png";
+    if (sh_baker::SaveTexture(mat_map1, map_path1) &&
+        sh_baker::SaveTexture(mat_map2, map_path2)) {
+      LOG(INFO) << "Material map saved to: " << map_path1 << " and "
+                << map_path2;
     } else {
-      LOG(ERROR) << "Failed to save material map to: " << map_path;
+      LOG(ERROR) << "Failed to save material map to: " << map_path1 << " and "
+                 << map_path2;
     }
   }
 

@@ -1,17 +1,75 @@
 #include "rasterizer.h"
 
+#include <Eigen/src/Core/Matrix.h>
 #include <glog/logging.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include "scene.h"
 
 namespace sh_baker {
-
 namespace {
+
+struct MaterialIdVertex {
+  MaterialIdVertex() : r(0), g(0), b(0) {}
+
+  MaterialIdVertex(uint32_t id) {
+    // Gold Noise / Hash
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = ((id >> 16) ^ id) * 0x45d9f3b;
+    id = (id >> 16) ^ id;
+
+    r = (id & 0xFF);
+    g = ((id >> 8) & 0xFF);
+    b = ((id >> 16) & 0xFF);
+
+    if (r < 50 && g < 50 && b < 50) {
+      r += 50;
+      g += 50;
+      b += 50;
+    }
+  }
+
+  // Does not support interpolation.
+  MaterialIdVertex operator+(const MaterialIdVertex& b) { return *this; }
+  MaterialIdVertex operator-(const MaterialIdVertex& b) { return *this; }
+  MaterialIdVertex operator*(float s) const { return *this; }
+  MaterialIdVertex operator/(float s) const { return *this; }
+
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
+
+struct SurfaceVertex {
+  SurfaceVertex() = default;
+  SurfaceVertex(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
+                const Eigen::Vector4f& t)
+      : position(p), normal(n), tangent(t) {}
+
+  SurfaceVertex operator+(const SurfaceVertex& other) const {
+    return SurfaceVertex(position + other.position, normal + other.normal,
+                         tangent + other.tangent);
+  }
+  SurfaceVertex operator-(const SurfaceVertex& other) const {
+    return SurfaceVertex(position - other.position, normal - other.normal,
+                         tangent - other.tangent);
+  }
+  SurfaceVertex operator*(float s) const {
+    return SurfaceVertex(position * s, normal * s, tangent * s);
+  }
+  SurfaceVertex operator/(float s) const {
+    return SurfaceVertex(position / s, normal / s, tangent / s);
+  }
+
+  Eigen::Vector3f position;
+  Eigen::Vector3f normal;
+  Eigen::Vector4f tangent;
+};
 
 // Helper to compute Barycentric coordinates
 // Returns true if inside triangle.
@@ -61,6 +119,116 @@ bool AnyValidSubSamples(int x, int y, int stride, int scale,
     }
   }
   return false;
+}
+
+template <typename VertexType, typename DrawFn>
+void RasterizeTriangle(Eigen::Vector2i t0, Eigen::Vector2i t1,
+                       Eigen::Vector2i t2, VertexType v0, VertexType v1,
+                       VertexType v2, const DrawFn& draw_fn) {
+  // Sort vertices by y-coordinate.
+  if (t0.y() > t1.y()) {
+    std::swap(t0, t1);
+    std::swap(v0, v1);
+  }
+  if (t0.y() > t2.y()) {
+    std::swap(t0, t2);
+    std::swap(v0, v2);
+  }
+  if (t1.y() > t2.y()) {
+    std::swap(t1, t2);
+    std::swap(v1, v2);
+  }
+
+  // Align to pixel centers: start at first half-integer >= t0.y()
+  int total_height = t2.y() - t0.y();
+  if (total_height == 0) {
+    // Let's sort by x.
+    if (t0.x() > t1.x()) {
+      std::swap(t0, t1);
+      std::swap(v0, v1);
+    }
+    if (t0.x() > t2.x()) {
+      std::swap(t0, t2);
+      std::swap(v0, v2);
+    }
+    if (t1.x() > t2.x()) {
+      std::swap(t1, t2);
+      std::swap(v1, v2);
+    }
+
+    // Draw a line.
+    int total_width = t2.x() - t0.x();
+    if (total_width == 0) {
+      // Draw a point.
+      draw_fn(t0, v0);
+      return;
+    }
+
+    CHECK_GE(t0.x(), 0);
+
+    for (int w = 0; w < total_width; ++w) {
+      float alpha = float(w + 0.5f) / total_width;
+      VertexType vc = v0 + (v2 - v0) * alpha;
+      draw_fn(Eigen::Vector2i(t0.x() + w, t0.y()), vc);
+    }
+    return;
+  }
+
+  for (int h = 0; h < total_height; ++h) {
+    bool second_half = (h + 0.5f) > (t1.y() - t0.y()) || t1.y() == t0.y();
+
+    int segment_height;
+    if (second_half) {
+      segment_height = t2.y() - t1.y();
+    } else {
+      segment_height = t1.y() - t0.y();
+    }
+
+    CHECK_GT(segment_height, 0);
+
+    float alpha = float(h + 0.5f) / total_height;
+    float beta;
+    if (second_half) {
+      beta = float(h + 0.5f - (t1.y() - t0.y())) / segment_height;
+    } else {
+      beta = float(h + 0.5f) / segment_height;
+    }
+
+    Eigen::Vector2f ta_f = t0.cast<float>() + (t2 - t0).cast<float>() * alpha;
+    Eigen::Vector2f tb_f;
+    VertexType va = v0 + (v2 - v0) * alpha;
+    VertexType vb;
+
+    if (second_half) {
+      tb_f = t1.cast<float>() + (t2 - t1).cast<float>() * beta;
+      vb = v1 + (v2 - v1) * beta;
+    } else {
+      tb_f = t0.cast<float>() + (t1 - t0).cast<float>() * beta;
+      vb = v0 + (v1 - v0) * beta;
+    }
+
+    if (ta_f.x() > tb_f.x()) {
+      std::swap(ta_f, tb_f);
+      std::swap(va, vb);
+    }
+
+    // Pixel coverage: center (x+0.5) must be within [ta_f.x, tb_f.x]
+    int x_start = std::ceil(ta_f.x() - 0.5f);
+    int x_end = std::floor(tb_f.x() - 0.5f);
+
+    if (x_start >= x_end) {
+      // Draw a point.
+      draw_fn(Eigen::Vector2i(x_start, t0.y() + h), va);
+      continue;
+    }
+
+    VertexType grad = (vb - va) / (tb_f.x() - ta_f.x());
+    for (int x = x_start; x <= x_end; ++x) {
+      float dist = (x + 0.5f) - ta_f.x();
+      VertexType vc = va + grad * dist;
+      draw_fn(Eigen::Vector2i(x, t0.y() + h), vc);
+    }
+  }
 }
 
 }  // namespace
@@ -210,6 +378,123 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
   return surface_map;
 }
 
+std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
+                                                 const RasterConfig& config) {
+  int scaled_width = config.width * config.supersample_scale;
+  int scaled_height = config.height * config.supersample_scale;
+  std::vector<SurfacePoint> surface_map(scaled_width * scaled_height);
+
+  // Serial execution as requested for correctness priority
+  for (const auto& geo : scene.geometries) {
+    auto vertices = TransformedVertices(geo);
+    auto normals = TransformedNormals(geo);
+    auto tangents = TransformedTangents(geo);
+
+    size_t tri_count = geo.indices.size() / 3;
+    for (size_t i = 0; i < tri_count; ++i) {
+      uint32_t idx0 = geo.indices[i * 3 + 0];
+      uint32_t idx1 = geo.indices[i * 3 + 1];
+      uint32_t idx2 = geo.indices[i * 3 + 2];
+
+      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+
+      // Convert UV to raster coordinates
+      Eigen::Vector2i t0(int(uv0.x() * scaled_width),
+                         int(uv0.y() * scaled_height));
+      Eigen::Vector2i t1(int(uv1.x() * scaled_width),
+                         int(uv1.y() * scaled_height));
+      Eigen::Vector2i t2(int(uv2.x() * scaled_width),
+                         int(uv2.y() * scaled_height));
+
+      SurfaceVertex v0(vertices[idx0], normals[idx0], tangents[idx0]);
+      SurfaceVertex v1(vertices[idx1], normals[idx1], tangents[idx1]);
+      SurfaceVertex v2(vertices[idx2], normals[idx2], tangents[idx2]);
+
+      RasterizeTriangle(
+          t0, t1, t2, v0, v1, v2,
+          [&](const Eigen::Vector2i& p, const SurfaceVertex& v) {
+            int x = p.x();
+            int y = p.y();
+
+            // Boundary check
+            CHECK_GE(x, 0);
+            CHECK_GE(y, 0);
+            CHECK_LT(x, scaled_width);
+            CHECK_LT(y, scaled_height);
+
+            int pixel_idx = y * scaled_width + x;
+
+            SurfacePoint sp;
+            sp.material_id = geo.material_id;
+            sp.position = v.position;
+            sp.normal = v.normal.normalized();
+
+            Eigen::Vector3f tangent3 = v.tangent.head<3>();
+            tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
+                           .normalized();  // Gram-Schmidt orthogonalization
+            sp.tangent =
+                Eigen::Vector4f(tangent3.x(), tangent3.y(), tangent3.z(),
+                                v.tangent.w() > 0 ? 1.0f : -1.0f);
+
+            surface_map[pixel_idx] = sp;
+          });
+    }
+  }
+
+  return surface_map;
+}
+
+Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
+  Texture texture;
+  texture.width = config.width;
+  texture.height = config.height;
+  texture.channels = 3;
+  texture.pixel_data.resize(config.width * config.height * 3, 0);
+
+  for (const auto& geo : scene.geometries) {
+    uint32_t id = geo.material_id;
+    MaterialIdVertex vertex(id);
+
+    size_t tri_count = geo.indices.size() / 3;
+    for (size_t i = 0; i < tri_count; ++i) {
+      uint32_t idx0 = geo.indices[i * 3 + 0];
+      uint32_t idx1 = geo.indices[i * 3 + 1];
+      uint32_t idx2 = geo.indices[i * 3 + 2];
+
+      Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
+      Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
+      Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
+
+      Eigen::Vector2i t0(int(uv0.x() * config.width),
+                         int(uv0.y() * config.height));
+      Eigen::Vector2i t1(int(uv1.x() * config.width),
+                         int(uv1.y() * config.height));
+      Eigen::Vector2i t2(int(uv2.x() * config.width),
+                         int(uv2.y() * config.height));
+
+      RasterizeTriangle(
+          t0, t1, t2, vertex, vertex, vertex,
+          [&texture, width = config.width, height = config.height](
+              const Eigen::Vector2i& t, const MaterialIdVertex& v) {
+            int x = t.x();
+            int y = t.y();
+            CHECK_GE(x, 0);
+            CHECK_GE(y, 0);
+            CHECK_LT(x, width);
+            CHECK_LT(y, height);
+            int index = (y * width + x) * sizeof(MaterialIdVertex);
+            texture.pixel_data[index + 0] = v.r;
+            texture.pixel_data[index + 1] = v.g;
+            texture.pixel_data[index + 2] = v.b;
+          });
+    }
+  }
+
+  return texture;
+}
+
 std::vector<uint8_t> CreateValidityMask(
     const std::vector<SurfacePoint>& points) {
   std::vector<uint8_t> mask(points.size());
@@ -261,26 +546,12 @@ Texture CreateMaterialMap(const std::vector<SurfacePoint>& surface_points,
                             // Generate arbitrary color from material_id
                             // Use a simple hash to get deterministic colors
                             uint32_t id = sp.material_id;
-                            // Gold Noise / Hash
-                            id = ((id >> 16) ^ id) * 0x45d9f3b;
-                            id = ((id >> 16) ^ id) * 0x45d9f3b;
-                            id = (id >> 16) ^ id;
+                            MaterialIdVertex v(id);
 
-                            r = (id & 0xFF);
-                            g = ((id >> 8) & 0xFF);
-                            b = ((id >> 16) & 0xFF);
-
-                            // Ensure it's not too dark if valid
-                            if (r < 50 && g < 50 && b < 50) {
-                              r += 50;
-                              g += 50;
-                              b += 50;
-                            }
+                            texture.pixel_data[idx * 3 + 0] = v.r;
+                            texture.pixel_data[idx * 3 + 1] = v.g;
+                            texture.pixel_data[idx * 3 + 2] = v.b;
                           }
-
-                          texture.pixel_data[idx * 3 + 0] = r;
-                          texture.pixel_data[idx * 3 + 1] = g;
-                          texture.pixel_data[idx * 3 + 2] = b;
                         }
                       }
                     });

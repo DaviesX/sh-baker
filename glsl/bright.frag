@@ -12,7 +12,7 @@ void main() {
   float logLumAvg = textureLod(u_LumTexture, vec2(0.5), 10.0).r;
   float lumAvg = exp(logLumAvg);
   float key = 0.18;
-  float exposure = key / max(lumAvg, 0.1);
+  float exposure = key / clamp(lumAvg, 0.1, 2 * key);
 
   // Apply exposure temporarily for thresholding
   // We want bloom for parts that will be "white" or brighter

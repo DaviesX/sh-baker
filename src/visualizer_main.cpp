@@ -14,6 +14,8 @@
 #include "loader.h"
 #include "scene.h"
 #include "tinyexr.h"
+#include "visualizer_camera.h"
+#include "visualizer_control.h"
 
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
@@ -306,13 +308,9 @@ std::vector<GLuint> g_SHTextures;
 float g_MaxAnisotropy = 1.0f;
 
 // Camera
-Eigen::Vector3f g_CamPos(0, 0, 5);
-Eigen::Vector3f g_CamTarget(0, 0, 0);
-float g_CamYaw = 0.0f;
-float g_CamPitch = 0.0f;
-float g_CamDist = 5.0f;
-bool g_MousePressed = false;
-double g_LastMouseX, g_LastMouseY;
+sh_baker::Camera g_Camera(Eigen::Vector3f(0.0f, 0.0f, 5.0f));
+sh_baker::InputController g_InputController(g_Camera);
+float g_LastFrame = 0.0f;
 
 // --- Helper Functions ---
 
@@ -464,41 +462,16 @@ GLuint CreatePlaceholderTexture(float r, float g, float b) {
   return tid;
 }
 
-void ProcessInput(GLFWwindow* window) {
-  if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-    glfwSetWindowShouldClose(window, true);
-}
-
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-  if (button == GLFW_MOUSE_BUTTON_LEFT) {
-    if (action == GLFW_PRESS) {
-      g_MousePressed = true;
-      glfwGetCursorPos(window, &g_LastMouseX, &g_LastMouseY);
-    } else {
-      g_MousePressed = false;
-    }
-  }
+  g_InputController.MouseButtonCallback(window, button, action, mods);
 }
 
 void CursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
-  if (g_MousePressed) {
-    float dx = static_cast<float>(xpos - g_LastMouseX);
-    float dy = static_cast<float>(ypos - g_LastMouseY);
-
-    g_CamYaw -= dx * 0.01f;
-    g_CamPitch -= dy * 0.01f;
-
-    // Clamp pitch
-    g_CamPitch = std::max(-1.5f, std::min(1.5f, g_CamPitch));
-
-    g_LastMouseX = xpos;
-    g_LastMouseY = ypos;
-  }
+  g_InputController.CursorPosCallback(window, xpos, ypos);
 }
 
 void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-  g_CamDist -= static_cast<float>(yoffset) * 0.5f;
-  if (g_CamDist < 0.1f) g_CamDist = 0.1f;
+  g_InputController.ScrollCallback(window, xoffset, yoffset);
 }
 
 void InitSkyboxGeometry() {
@@ -896,7 +869,11 @@ int main(int argc, char* argv[]) {
 
   // --- Main Loop ---
   while (!glfwWindowShouldClose(window)) {
-    ProcessInput(window);
+    float currentFrame = static_cast<float>(glfwGetTime());
+    float deltaTime = currentFrame - g_LastFrame;
+    g_LastFrame = currentFrame;
+
+    g_InputController.ProcessInput(window, deltaTime);
 
     // 1. Render to HDR FBO (MSAA)
     glBindFramebuffer(GL_FRAMEBUFFER, g_HdrFBO_MS);
@@ -904,36 +881,7 @@ int main(int argc, char* argv[]) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // Camera Matrix
-    Eigen::Vector3f cam_pos_cartesian;
-    cam_pos_cartesian.x() =
-        g_CamDist * std::sin(g_CamYaw) * std::cos(g_CamPitch);
-    cam_pos_cartesian.z() =
-        g_CamDist * std::cos(g_CamYaw) * std::cos(g_CamPitch);
-    cam_pos_cartesian.y() = g_CamDist * std::sin(g_CamPitch);
-
-    // Update global camera position for shader uniform
-    g_CamPos = cam_pos_cartesian;
-
-    // LookAt
-    Eigen::Vector3f f = (g_CamTarget - cam_pos_cartesian).normalized();
-    Eigen::Vector3f up(0, 1, 0);  // World Up
-    Eigen::Vector3f s = f.cross(up).normalized();
-    Eigen::Vector3f u = s.cross(f);
-
-    Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
-    view(0, 0) = s.x();
-    view(0, 1) = s.y();
-    view(0, 2) = s.z();
-    view(1, 0) = u.x();
-    view(1, 1) = u.y();
-    view(1, 2) = u.z();
-    view(2, 0) = -f.x();
-    view(2, 1) = -f.y();
-    view(2, 2) = -f.z();
-    view(0, 3) = -s.dot(cam_pos_cartesian);
-    view(1, 3) = -u.dot(cam_pos_cartesian);
-    view(2, 3) = f.dot(cam_pos_cartesian);
+    Eigen::Matrix4f view = g_Camera.GetViewMatrix();
 
     float aspect = (float)kWindowWidth / (float)kWindowHeight;
     float fov = 45.0f * M_PI / 180.0f;
@@ -949,7 +897,7 @@ int main(int argc, char* argv[]) {
 
     Eigen::Matrix4f vp = proj * view;
 
-    DrawMeshes(scene, vp, g_CamPos);
+    DrawMeshes(scene, vp, g_Camera.Position());
 
     DrawSky(view, proj);
 
