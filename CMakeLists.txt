@@ -110,7 +110,10 @@ set(LIB_SOURCES
     src/tinyexr_impl.cpp
     src/miniz.c
     src/light.cpp
+    src/sensor.cpp
+    src/tracer.cpp
 )
+
 
 set(LIB_HEADERS
     src/colorspace.h
@@ -124,7 +127,10 @@ set(LIB_HEADERS
     src/dilation.h
     src/material.h
     src/atlas.h
+    src/sensor.h
+    src/tracer.h
 )
+
 
 add_library(sh_baker SHARED ${LIB_SOURCES} ${LIB_HEADERS})
 
@@ -165,7 +171,10 @@ add_executable(sh_baker_test
     src/material_test.cpp
     src/atlas_test.cpp
     src/light_test.cpp
+    src/sensor_test.cpp
+    src/tracer_test.cpp
 )
+
 
 target_link_libraries(sh_baker_test PRIVATE
     sh_baker
