@@ -12,147 +12,13 @@
 #include <random>
 
 #include "light.h"
-#include "material.h"
-#include "occlusion.h"
 #include "rasterizer.h"
+#include "sensor.h"
+#include "tracer.h"
 
 namespace sh_baker {
 namespace {
-
-struct TraceConfig {
-  TraceConfig(const RTCScene rtc_scene, const Scene& scene, int max_depth,
-              int num_light_samples, std::function<void()> on_direct_hit_sky_fn)
-      : rtc_scene(rtc_scene),
-        scene(scene),
-        max_depth(max_depth),
-        num_light_samples(num_light_samples),
-        on_direct_hit_sky_fn(on_direct_hit_sky_fn) {}
-
-  const RTCScene rtc_scene;
-  const Scene& scene;
-  const int max_depth;
-  const int num_light_samples;
-  const std::function<void()> on_direct_hit_sky_fn;
-};
-
-Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
-  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-  float u1 = dist(rng);
-  float u2 = dist(rng);
-
-  float r = std::sqrt(1.0f - u1 * u1);
-  float phi = 2.0f * M_PI * u2;
-  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
-}
-
-// Computes a Monte Carlo path and return a radiance sample.
-// Rendering equation:
-// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{\Omega} f_r(x, \omega_i,
-// \omega_o) * L_i(x, \omega_i) * cos(\omega_i) d\omega_i
-//
-// where L_o is the radiance at the camera, f_r is the BRDF, L_i is the
-// radiance from the light, and \omega_i is the direction from the light to the
-// surface.
-//
-// To drastically reduce variance, we partition the paths into 2 disjoint sets:
-// 1. Primary rays: see the sky/sun directly
-// 2. Secondary rays: bounce off a surface
-//
-// Formally,
-// L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{A_e} ...Le(x, x')...dA_e(x') +
-// \int_{\Omega \setminus A_e} ...L_i(x, \omega_i)...d\omega_i
-//
-// where Le(x, x') is the radiance from the light, L_i(x, \omega_i) is the
-// radiance from the environment, and \omega_i is the direction from the light
-// to the surface.
-//
-// This is also known as a technique called next event estimation (NEE).
-Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
-                      const Eigen::Vector3f& dir, int depth,
-                      std::mt19937& rng) {
-  // Hard depth limit to prevent infinite recursion, but we rely on RR for
-  // unbiased early termination.
-  if (depth > config.max_depth) return Eigen::Vector3f::Zero();
-
-  Ray visibility_ray;
-  visibility_ray.origin = origin;
-  visibility_ray.direction = dir;
-  visibility_ray.tnear = 0.001f;
-
-  std::optional<Occlusion> occ =
-      FindOcclusion(config.rtc_scene, visibility_ray);
-
-  if (!occ.has_value()) {
-    // Sky is handled by NEE (EvaluateLights() and
-    // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
-    // counting.
-    if (depth == 0) {
-      config.on_direct_hit_sky_fn();
-    }
-    return Eigen::Vector3f::Zero();
-  }
-
-  // Hit surface
-  const Material& mat = config.scene.materials[occ->material_id];
-  float alpha = GetAlpha(mat, occ->uv);
-
-  Eigen::Vector3f color = Eigen::Vector3f::Zero();
-
-  // If alpha < 1.0, continue ray
-  if (alpha < 1.0f) {
-    // Transmission
-    Eigen::Vector3f hit_pos = occ->position + dir * 0.001f;
-    Eigen::Vector3f transmission = Trace(config, hit_pos, dir, depth + 1, rng);
-    color += (1.0f - alpha) * transmission;
-    if (alpha < 0.1f) {
-      // If alpha is very small, we can skip the rest of the trace.
-      return color;
-    }
-  }
-
-  Eigen::Vector3f hit_pos = occ->position + occ->normal * 0.005f;
-
-  // Direct Lighting (NEE)
-  // EvaluateLights returns L_e(x, x')
-  Eigen::Vector3f L_direct =
-      EvaluateLightSamples(config.scene, config.rtc_scene, hit_pos, occ->normal,
-                           -dir, mat, occ->uv, config.num_light_samples, rng);
-  color += alpha * L_direct;
-
-  // Indirect Lighting (Recursive)
-  ReflectionSample sample =
-      SampleMaterial(mat, occ->uv, occ->normal, -dir, rng);
-  if (sample.pdf < 1e-3f) {
-    // Internal reflection.
-    return color;
-  }
-
-  Eigen::Vector3f brdf =
-      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
-  if (depth > 2) {
-    // Russian Roulette
-    // We want to terminate paths with low contribution.
-    // The contribution of the next bounce is roughly proportional to the
-    // BRDF/pdf. (We use a simplified throughput estimation here).
-    float q = std::min(0.95f, brdf.maxCoeff());
-
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    if (dist(rng) > q) {
-      // Terminate
-      return color;
-    }
-    // Survived, reweight
-    sample.pdf *= q;
-  }
-  Eigen::Vector3f incoming =
-      Trace(config, hit_pos, sample.direction, depth + 1, rng);
-  float cosine_term = occ->normal.dot(sample.direction);
-  Eigen::Vector3f L_indirect =
-      incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
-  color += alpha * L_indirect;
-
-  return color;
-}
+constexpr float kCVThreshold = 0.01f;
 
 template <typename T, typename ValidateFn>
 std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
@@ -257,50 +123,19 @@ BakeResult BakeSHLightMap(const Scene& scene,
             continue;
           }
 
-          // Accumulate SH coefficients and environment visibility factor for
-          // the specified number of samples.
-          SHCoeffs sh_accum;
-          float visibility_accum = 0.0f;
-
           std::mt19937 rng(12345 +
                            idx);  // Seeding RNG with index to make it
                                   // deterministic but different per pixel
-          Eigen::Vector3f origin =
-              sp.position +
-              sp.normal * 0.005f;  // Offset position to avoid self-intersection
 
-          int actual_samples = 0;
+          Sensor sensor(sp, config.samples, kCVThreshold);
 
-          // Online variance tracking (Welford's algorithm)
-          // We track the L0 luminance (DC component brightness).
-          float mean_lum = 0.0f;
-          float m2_lum = 0.0f;
+          float visibility_accum = 0.0f;
 
-          // Hardcoded adaptive sampling parameters
-          constexpr int kMinSamples = 16;
-          // Coefficient of Variation of the Mean (Standard Error / Mean)
-          // threshold
-          constexpr float kCVThreshold = 0.01f;
-
-          for (int s = 0; s < config.samples; ++s) {
-            actual_samples++;
-            Eigen::Vector3f dir_local =
-                SampleHemisphereUniform(rng);  // Z is up
-
-            // Transform to World
-            // Calculate bitangent (using w for handedness)
-            Eigen::Vector3f bitangent =
-                (sp.normal.cross(sp.tangent.head<3>()) * sp.tangent.w())
-                    .normalized();
-            if (sp.tangent.w() > 0) {
-              CHECK_NEAR(sp.tangent.w(), 1.0f, 1e-2f);
-            } else {
-              CHECK_NEAR(sp.tangent.w(), -1.0f, 1e-2f);
+          while (true) {
+            std::optional<Ray> ray = SampleRay(sensor, rng);
+            if (!ray.has_value()) {
+              break;
             }
-
-            Eigen::Vector3f dir_world = sp.tangent.head<3>() * dir_local.x() +
-                                        bitangent * dir_local.y() +
-                                        sp.normal * dir_local.z();
 
             // Direct lighting (NEE).
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
@@ -315,44 +150,15 @@ BakeResult BakeSHLightMap(const Scene& scene,
                   visibility_accum += 1.0f;
                 });
             Eigen::Vector3f Li_indirect =
-                Trace(trace_config, origin, dir_world, /*depth=*/0, rng) *
-                inv_pdf_uniform;
+                Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
+            AccumulateRadiance(Li_indirect, ray->direction, &sample_sh_accum);
 
-            AccumulateRadiance(Li_indirect, dir_world, &sample_sh_accum);
-
-            // Add to total
-            sh_accum += sample_sh_accum;
-
-            // Adaptive Sampling Update
-            // Estimate luminance of L0 from this sample
-            float lum = sample_sh_accum.coeffs[0].norm();
-
-            float delta = lum - mean_lum;
-            mean_lum += delta / actual_samples;
-            float delta2 = lum - mean_lum;
-            m2_lum += delta * delta2;
-
-            if (actual_samples >= kMinSamples) {
-              // Calculate Standard Error of the Mean
-              if (m2_lum > 0.0f && mean_lum > 1e-3f) {
-                float variance = m2_lum / (actual_samples - 1);
-                float std_dev = std::sqrt(variance);
-                float sem = std_dev / std::sqrt((float)actual_samples);
-
-                // Coefficient of Variation of the Mean = SEM / Mean
-                if (sem < kCVThreshold * mean_lum) {
-                  break;
-                }
-              } else if (mean_lum <= 1e-3f) {
-                // If it's pitch black, we can stop early too.
-                break;
-              }
-            }
+            AddSample(sample_sh_accum, &sensor);
           }
 
-          // Average
-          float inv_samples = 1.0f / actual_samples;
-          result.sh_texture.pixels[idx] = sh_accum * inv_samples;
+          result.sh_texture.pixels[idx] = GetEstimation(sensor);
+          float inv_samples =
+              sensor.sample_count > 0 ? (1.0f / sensor.sample_count) : 0.0f;
           result.environment_visibility_texture.pixel_data[idx] =
               visibility_accum * inv_samples;
         }
