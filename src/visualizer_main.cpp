@@ -16,6 +16,7 @@
 #include "tinyexr.h"
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
+#include "visualizer_exposure.h"
 #include "visualizer_radiance.h"
 #include "visualizer_sky.h"
 #include "visualizer_utils.h"
@@ -41,11 +42,8 @@ GLuint g_HdrDepthRBO_MS = 0;
 GLuint g_HdrFBO_Resolve = 0;
 GLuint g_HdrColorTexture_Resolve = 0;
 
-// Luminance Framebuffer (Auto Exposure)
-GLuint g_LumProgram = 0;
-GLuint g_LumFBO = 0;
-GLuint g_LumTexture = 0;
-const int kLumSize = 256;
+// Luminance Framebuffer (Auto Exposure) - Moved to ExposureComputer
+sh_baker::ExposureComputer g_ExposureComputer;
 
 // Bloom Framebuffers (Ping Pong)
 GLuint g_BrightProgram = 0;
@@ -113,35 +111,6 @@ void InitScreenQuad() {
   }
 }
 
-void InitLuminanceFramebuffer() {
-  if (g_LumFBO) {
-    glDeleteFramebuffers(1, &g_LumFBO);
-    glDeleteTextures(1, &g_LumTexture);
-  }
-  glGenFramebuffers(1, &g_LumFBO);
-  glBindFramebuffer(GL_FRAMEBUFFER, g_LumFBO);
-
-  glGenTextures(1, &g_LumTexture);
-  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
-  // R16F is sufficient for log luminance
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, kLumSize, kLumSize, 0, GL_RED,
-               GL_FLOAT, NULL);
-  // Mipmaps needed for average
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                  GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         g_LumTexture, 0);
-
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-    LOG(ERROR) << "Luminance Framebuffer not complete!";
-
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
 void InitHdrFramebuffer(int width, int height) {
   // 1. MSAA Framebuffer
   if (g_HdrFBO_MS) {
@@ -192,7 +161,9 @@ void InitHdrFramebuffer(int width, int height) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   // Init Luminance
-  InitLuminanceFramebuffer();
+  if (!g_ExposureComputer.Init()) {
+    LOG(ERROR) << "Failed to init Exposure Computer";
+  }
 
   // Init Bloom
   InitBloomFramebuffers(width, height);
@@ -208,21 +179,7 @@ void DrawPostProcess(int width, int height) {
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
   // 2. Compute Average Log Luminance
-  glBindFramebuffer(GL_FRAMEBUFFER, g_LumFBO);
-  glViewport(0, 0, kLumSize, kLumSize);
-  glUseProgram(g_LumProgram);
-  glDisable(GL_DEPTH_TEST);
-
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
-  glUniform1i(glGetUniformLocation(g_LumProgram, "u_HdrTex"), 0);
-
-  glBindVertexArray(g_QuadVAO);
-  glDrawArrays(GL_TRIANGLES, 0, 6);
-
-  // Generate Mipmaps to average
-  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
-  glGenerateMipmap(GL_TEXTURE_2D);
+  g_ExposureComputer.Compute(g_QuadVAO, g_HdrColorTexture_Resolve);
 
   // 3. Bloom Extraction (Bright Pass)
   glViewport(0, 0, kBloomWidth, kBloomHeight);
@@ -234,9 +191,8 @@ void DrawPostProcess(int width, int height) {
   glUniform1i(glGetUniformLocation(g_BrightProgram, "u_HdrTex"), 0);
 
   glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
-  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_LumTexture"),
-              1);  // Uses mipmapped lum
+  glBindTexture(GL_TEXTURE_2D, g_ExposureComputer.GetLuminanceTexture());
+  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_LumTexture"), 1);
 
   glDrawArrays(GL_TRIANGLES, 0, 6);
 
@@ -272,7 +228,7 @@ void DrawPostProcess(int width, int height) {
   glUniform1i(glGetUniformLocation(g_PostProgram, "u_ScreenTexture"), 0);
 
   glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, g_LumTexture);
+  glBindTexture(GL_TEXTURE_2D, g_ExposureComputer.GetLuminanceTexture());
   glUniform1i(glGetUniformLocation(g_PostProgram, "u_LumTexture"), 1);
 
   glActiveTexture(GL_TEXTURE2);
@@ -376,12 +332,11 @@ int main(int argc, char* argv[]) {
   g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
   GLuint skyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
   g_SkyRenderer.SetProgram(skyProgram);
-  g_LumProgram = CreateShaderProgram("glsl/post.vert", "glsl/lum.frag");
+  // g_LumProgram removed, handled by ExposureComputer
   g_BrightProgram = CreateShaderProgram("glsl/post.vert", "glsl/bright.frag");
   g_BlurProgram = CreateShaderProgram("glsl/post.vert", "glsl/blur.frag");
 
-  if (!g_PostProgram || !skyProgram || !g_LumProgram || !g_BrightProgram ||
-      !g_BlurProgram)
+  if (!g_PostProgram || !skyProgram || !g_BrightProgram || !g_BlurProgram)
     return 1;
 
   glEnable(GL_DEPTH_TEST);
