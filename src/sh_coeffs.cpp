@@ -40,11 +40,27 @@ SHCoeffs SHCoeffs::operator*(float scalar) const {
   return result;
 }
 
+SHCoeffs SHCoeffs::operator/(float scalar) const {
+  SHCoeffs result;
+  for (int i = 0; i < 9; ++i) {
+    result.coeffs[i] = coeffs[i] / scalar;
+  }
+  return result;
+}
+
 SHCoeffs& SHCoeffs::operator+=(const SHCoeffs& other) {
   for (int i = 0; i < 9; ++i) {
     coeffs[i] += other.coeffs[i];
   }
   return *this;
+}
+
+SHCoeffs SHCoeffs::operator+(const SHCoeffs& other) const {
+  SHCoeffs result;
+  for (int i = 0; i < 9; ++i) {
+    result.coeffs[i] = coeffs[i] + other.coeffs[i];
+  }
+  return result;
 }
 
 void AccumulateRadiance(const Eigen::Vector3f& radiance,

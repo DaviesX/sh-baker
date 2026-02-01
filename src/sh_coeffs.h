@@ -25,8 +25,14 @@ struct SHCoeffs {
   // Scalar multiplication (scaling brightness).
   SHCoeffs operator*(float scalar) const;
 
+  // Scalar division (averaging).
+  SHCoeffs operator/(float scalar) const;
+
   // Addition (accumulation).
   SHCoeffs& operator+=(const SHCoeffs& other);
+
+  // Addition (accumulation).
+  SHCoeffs operator+(const SHCoeffs& other) const;
 };
 
 // Accumulates the contribution of incident radiance from a specific direction

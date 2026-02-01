@@ -18,7 +18,7 @@
 
 namespace sh_baker {
 namespace {
-constexpr float kCVThreshold = 0.01f;
+constexpr float kCVThreshold = 0.005f;
 
 template <typename T, typename ValidateFn>
 std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
@@ -93,8 +93,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
-  float inv_pdf_uniform = 2.0f * M_PI;
-
   size_t total_pixels = surface_points.size();
   std::atomic<size_t> processed_count{0};
   std::atomic<int> last_progress{-1};
@@ -132,16 +130,17 @@ BakeResult BakeSHLightMap(const Scene& scene,
           float visibility_accum = 0.0f;
 
           while (true) {
-            std::optional<Ray> ray = SampleRay(sensor, rng);
+            float pdf = 0.0f;
+            std::optional<Ray> ray = SampleRay(sensor, rng, &pdf);
             if (!ray.has_value()) {
               break;
             }
 
             // Direct lighting (NEE).
-            SHCoeffs sample_sh_accum;  // Accumulate for this sample only
+            SHCoeffs direct_sh;  // Accumulate for this sample only
             AccumulateIncomingLightSamples(scene, rtc_scene, sp.position,
                                            sp.normal, config.num_light_samples,
-                                           rng, &sample_sh_accum);
+                                           rng, &direct_sh);
 
             // Indirect lighting.
             TraceConfig trace_config(
@@ -149,11 +148,16 @@ BakeResult BakeSHLightMap(const Scene& scene,
                 /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
                   visibility_accum += 1.0f;
                 });
-            Eigen::Vector3f Li_indirect =
-                Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
-            AccumulateRadiance(Li_indirect, ray->direction, &sample_sh_accum);
 
-            AddSample(sample_sh_accum, &sensor);
+            // Weight by inverse PDF
+            float inv_pdf = (pdf > 1e-6f) ? (1.0f / pdf) : 0.0f;
+
+            SHCoeffs indirect_sh;
+            Eigen::Vector3f Li_indirect =
+                Trace(trace_config, *ray, /*depth=*/0, rng);
+            AccumulateRadiance(Li_indirect, ray->direction, &indirect_sh);
+
+            AddSample(direct_sh, indirect_sh, &sensor);
           }
 
           result.sh_texture.pixels[idx] = GetEstimation(sensor);
