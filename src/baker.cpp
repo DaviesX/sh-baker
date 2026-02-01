@@ -127,34 +127,25 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Eigen::Vector3f& origin,
     return color;
   }
 
-  // Russian Roulette
-  // We want to terminate paths with low contribution.
-  // The contribution of the next bounce is roughly proportional to the
-  // BRDF/pdf. (We use a simplified throughput estimation here).
-  //
-  // Start RR after a few bounces to ensure we get some base quality.
+  Eigen::Vector3f brdf =
+      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
   if (depth > 2) {
-    Eigen::Vector3f brdf_dummy =
-        EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
-    // Approximate throughput
-    // Ideally we would carry the full path throughput in the Trace arguments,
-    // but for now we estimate local attenuation.
-    float max_component = brdf_dummy.maxCoeff();
-    float q = std::min(0.95f, max_component);
+    // Russian Roulette
+    // We want to terminate paths with low contribution.
+    // The contribution of the next bounce is roughly proportional to the
+    // BRDF/pdf. (We use a simplified throughput estimation here).
+    float q = std::min(0.95f, brdf.maxCoeff());
 
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
     if (dist(rng) > q) {
       // Terminate
       return color;
     }
-    // Reweight
+    // Survived, reweight
     sample.pdf *= q;
   }
-
   Eigen::Vector3f incoming =
       Trace(config, hit_pos, sample.direction, depth + 1, rng);
-  Eigen::Vector3f brdf =
-      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -dir);
   float cosine_term = occ->normal.dot(sample.direction);
   Eigen::Vector3f L_indirect =
       incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
