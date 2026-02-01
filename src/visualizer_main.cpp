@@ -14,11 +14,13 @@
 #include "loader.h"
 #include "scene.h"
 #include "tinyexr.h"
+#include "visualizer_bloom.h"
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
 #include "visualizer_exposure.h"
 #include "visualizer_radiance.h"
 #include "visualizer_sky.h"
+#include "visualizer_tonemap.h"
 #include "visualizer_utils.h"
 
 // --- Constants ---
@@ -31,7 +33,6 @@ DEFINE_string(input, "",
               "lightmap_*.exr files.");
 
 // --- Globals ---
-GLuint g_PostProgram = 0;
 
 // HDR Framebuffer (MSAA)
 GLuint g_HdrFBO_MS = 0;
@@ -45,38 +46,9 @@ GLuint g_HdrColorTexture_Resolve = 0;
 // Luminance Framebuffer (Auto Exposure) - Moved to ExposureComputer
 sh_baker::ExposureComputer g_ExposureComputer;
 
-// Bloom Framebuffers (Ping Pong)
-GLuint g_BrightProgram = 0;
-GLuint g_BlurProgram = 0;
-GLuint g_BloomFBO[2] = {0, 0};
-GLuint g_BloomTextures[2] = {0, 0};
-int kBloomWidth = 0;
-int kBloomHeight = 0;
-
-void InitBloomFramebuffers(int width, int height) {
-  kBloomWidth = width / 2;
-  kBloomHeight = height / 2;
-
-  glGenFramebuffers(2, g_BloomFBO);
-  glGenTextures(2, g_BloomTextures);
-
-  for (int i = 0; i < 2; i++) {
-    glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[i]);
-    glBindTexture(GL_TEXTURE_2D, g_BloomTextures[i]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, kBloomWidth, kBloomHeight, 0,
-                 GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           g_BloomTextures[i], 0);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-      LOG(ERROR) << "Bloom Framebuffer " << i << " not complete!";
-  }
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
+// Bloom & Tonemap
+sh_baker::BloomRenderer g_BloomRenderer;
+sh_baker::ToneMapper g_ToneMapper;
 
 // Screen Quad
 GLuint g_QuadVAO = 0;
@@ -166,7 +138,9 @@ void InitHdrFramebuffer(int width, int height) {
   }
 
   // Init Bloom
-  InitBloomFramebuffers(width, height);
+  if (!g_BloomRenderer.Init(width, height)) {
+    LOG(ERROR) << "Failed to init Bloom";
+  }
 }
 
 void DrawPostProcess(int width, int height) {
@@ -181,62 +155,18 @@ void DrawPostProcess(int width, int height) {
   // 2. Compute Average Log Luminance
   g_ExposureComputer.Compute(g_QuadVAO, g_HdrColorTexture_Resolve);
 
-  // 3. Bloom Extraction (Bright Pass)
-  glViewport(0, 0, kBloomWidth, kBloomHeight);
-  glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[0]);
-  glUseProgram(g_BrightProgram);
-
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
-  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_HdrTex"), 0);
-
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, g_ExposureComputer.GetLuminanceTexture());
-  glUniform1i(glGetUniformLocation(g_BrightProgram, "u_LumTexture"), 1);
-
-  glDrawArrays(GL_TRIANGLES, 0, 6);
-
-  // 4. Bloom Blur (Ping Pong)
-  glUseProgram(g_BlurProgram);
-  bool horizontal = true;
-  int amount = 2;
-
-  for (int i = 0; i < amount; i++) {
-    glBindFramebuffer(GL_FRAMEBUFFER, g_BloomFBO[horizontal ? 1 : 0]);
-    glUniform1i(glGetUniformLocation(g_BlurProgram, "u_Horizontal"),
-                horizontal);
-    glUniform1i(glGetUniformLocation(g_BlurProgram, "u_Image"), 0);
-
-    glActiveTexture(GL_TEXTURE0);
-    // Bind texture from OPPOSITE FBO (previous pass result)
-    glBindTexture(GL_TEXTURE_2D, g_BloomTextures[horizontal ? 0 : 1]);
-
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    horizontal = !horizontal;
-  }
+  // 3. Bloom Extraction & Blur
+  g_BloomRenderer.Compute(g_QuadVAO, g_HdrColorTexture_Resolve,
+                          g_ExposureComputer.GetLuminanceTexture());
 
   // 5. Render Final Post Process to Screen
   glEnable(GL_FRAMEBUFFER_SRGB);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);  // Back to default for drawing quad
   glViewport(0, 0, width, height);       // Restore viewport
 
-  glUseProgram(g_PostProgram);
-  glDisable(GL_DEPTH_TEST);  // Already disabled, but good to be explicit
-
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, g_HdrColorTexture_Resolve);
-  glUniform1i(glGetUniformLocation(g_PostProgram, "u_ScreenTexture"), 0);
-
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, g_ExposureComputer.GetLuminanceTexture());
-  glUniform1i(glGetUniformLocation(g_PostProgram, "u_LumTexture"), 1);
-
-  glActiveTexture(GL_TEXTURE2);
-  glBindTexture(GL_TEXTURE_2D, g_BloomTextures[0]);  // Final blur result
-  glUniform1i(glGetUniformLocation(g_PostProgram, "u_BloomTexture"), 2);
-
-  glBindVertexArray(g_QuadVAO);
-  glDrawArrays(GL_TRIANGLES, 0, 6);
+  g_ToneMapper.Draw(g_QuadVAO, g_HdrColorTexture_Resolve,
+                    g_ExposureComputer.GetLuminanceTexture(),
+                    g_BloomRenderer.GetBloomTexture());
 
   glEnable(GL_DEPTH_TEST);
 }
@@ -329,15 +259,16 @@ int main(int argc, char* argv[]) {
   }
 
   // --- Setup Shaders (Post Process) ---
-  g_PostProgram = CreateShaderProgram("glsl/post.vert", "glsl/post.frag");
+  if (!g_ToneMapper.Init()) {
+    LOG(ERROR) << "Failed to init Tone Mapper";
+    return 1;
+  }
   GLuint skyProgram = CreateShaderProgram("glsl/sky.vert", "glsl/sky.frag");
   g_SkyRenderer.SetProgram(skyProgram);
-  // g_LumProgram removed, handled by ExposureComputer
-  g_BrightProgram = CreateShaderProgram("glsl/post.vert", "glsl/bright.frag");
-  g_BlurProgram = CreateShaderProgram("glsl/post.vert", "glsl/blur.frag");
 
-  if (!g_PostProgram || !skyProgram || !g_BrightProgram || !g_BlurProgram)
-    return 1;
+  // Programs moved to respective classes
+
+  if (!skyProgram) return 1;
 
   glEnable(GL_DEPTH_TEST);
 

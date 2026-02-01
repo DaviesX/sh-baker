@@ -180,10 +180,12 @@ gtest_discover_tests(sh_baker_test)
 add_executable(visualizer 
     src/visualizer_main.cpp
     src/visualizer_camera.cpp
+    src/visualizer_bloom.cpp
     src/visualizer_control.cpp
     src/visualizer_exposure.cpp
     src/visualizer_radiance.cpp
     src/visualizer_sky.cpp
+    src/visualizer_tonemap.cpp
     src/visualizer_utils.cpp
 )
 
