@@ -1,28 +1,28 @@
-Project Goal: Offline Path-Tracer for Baking Spherical Harmonic (SH) Lightmaps. Tech Stack: C++20, Intel Embree (Ray-tracing), xatlas (UV Unwrapping), tinygltf (I/O). Input: glTF file (level geometry with lightmap UVs from xatlas). Output: glTF file with a custom extension (e.g., EXT_sh_lightmap) or a secondary binary file containing 9 SH coefficients per lightmap texel. Key Logic: Monte Carlo sampling on the hemisphere of each lightmap texel; project result into 3rd-order SH basis functions.
+# Project Goal: Offline Path-Tracer for Baking Spherical Harmonic (SH) Lightmaps. Tech Stack: C++20, Intel Embree (Ray-tracing), xatlas (UV Unwrapping), tinygltf (I/O). Input: glTF file (level geometry with lightmap UVs from xatlas). Output: glTF file with a custom extension (e.g., EXT_sh_lightmap) or a secondary binary file containing 9 SH coefficients per lightmap texel. Key Logic: Monte Carlo sampling on the hemisphere of each lightmap texel; project result into 3rd-order SH basis functions.
 
-Tips
-Build and test the project using the following commands:
+## Tips
+- Build and test the project using the following commands:
 ```bash
 cmake -DCMAKE_BUILD_TYPE=Release -B build -S . && cmake --build build --parallel 12 && ./build/sh_baker_test
 ```
 
-Phase 1: The SkeletonLoader
+# Phase 1: The SkeletonLoader
 1. Implement a loader using tinygltf to read the input mesh.
 2. BVH Setup: Use Embree to build a Bounding Volume Hierarchy of the triangles.
 3. Test Ray: Write a simple "Ambient Occlusion" pass. If the corners of a box are dark, the BVH and ray-casting are working.
 
-Phase 2: The SH Baker
+# Phase 2: The SH Baker
 1. UV Mapping: For each texel in the $1024 \times 1024$ lightmap, calculate the corresponding 3D world position and normal.
 2. Sampling: Fire 128–512 rays from that point.
 3. Projection: Convert the color of those hits into SH coefficients.
 4. Dilation: Use a simple push-pull or flood-fill to prevent black edges at UV seams.
 
-Phase 3: The Blender Visualizer
+# Phase 3: The Blender Visualizer
 1. You need a way to "see" if the coefficients are right without running the game.
 2. The Plugin: Ask Gemini to write a Python script for Blender that adds a Custom Shader Node.
 3. The Logic: The shader should take the 9 SH coefficients (stored in an Image Texture or Vertex Colors) and perform the reconstruction: $Color = \sum (coeff_i \cdot basis_i(normal))$.
 
-Phase 4: Optimization - low-hanging fruit
+# Phase 4: Optimization - low-hanging fruit
 1. Implement the next-event estimation (NEE) algorithm to reduce the number of samples needed to bake the lightmap.
     a. Exclude the back-facing directional lights and spot lights that are out of cone.
     b. Sample the sunlight if it is front-facing.
@@ -36,7 +36,7 @@ Phase 4: Optimization - low-hanging fruit
 3. Parallelization
     We know that Embree depends on TBB for task scheduling. We can use TBB to parallelize the lightmap baking process.
 
-Phase 5: Accurate PBR Material Handling
+# Phase 5: Accurate PBR Material Handling
 1. Load the normal map and tangent space from the glTF file. If the tangent vertex attribute is not present, we will compute it through MikkTSpace https://github.com/mmikk/MikkTSpace.
 2. Load the metalic roughness map from the glTF file.
 3. Update the SH Baker's material module to implement the glTF PBR BRDF (Reference: BRDF Implementation: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#appendix-b-brdf-implementation).
@@ -47,7 +47,7 @@ Phase 5: Accurate PBR Material Handling
     - Update the visualizer to support this mode (additional fragment shader?).
 
 
-Phase 6 Better Visualizer
+# Phase 6 Better Visualizer
 1. Implement normal mapping with SH coefficients.
 2. Implement metalic roughness mapping with SH coefficients.
 hint:
@@ -67,7 +67,7 @@ kd *= 1.0 - u_Metallic;
 vec3 finalColor = (kd * diffuse * albedo) + (ks * specular);
 ```
 
-Phase 7: Atlas Allocation Optimization (Resolution-Aware Scaling)
+# Phase 7: Atlas Allocation Optimization (Resolution-Aware Scaling)
 Context: We need to move from a uniform lightmap density to a Resolution-Aware Allocation system in sh-baker. The goal is to ensure the SH lightmap density matches the visual frequency of the original albedo textures.
 Task: Please implement a scaling heuristic for xatlas mesh declarations based on the following logic:
 
@@ -94,7 +94,7 @@ Task: Please implement a scaling heuristic for xatlas mesh declarations based on
 
 Goal: Provide the C++ logic to calculate these scales during the mesh processing loop and apply them to the xatlas setup.
 
-Phase 8: Decoupled Environment & Occlusion Masking
+# Phase 8: Decoupled Environment & Occlusion Masking
 Context: We are moving to a decoupled environment model for `sh-baker`. The sky will not be "baked" into the SH coefficients. Instead, we will store a **Sky Visibility** mask and resolve the sky contribution at runtime using global SH uniforms.
 
 Task: Please implement the following architecture:
@@ -116,7 +116,27 @@ Task: Please implement the following architecture:
     * **The Shader Bridge:** Update the fragment shader to incorporate the ambient:
         - **Sky Ambient:** Evaluate the 9 Global SH Uniforms () and multiply the result by the **Sky Visibility** fetched from the lightmap's Alpha channel.
 
-Phase 9: Visibility-Aware Importance Sampling
+# Phase 9: Path Guiding in Challenging Lighting Scenarios
+General idea: We will optimize the sensor module. We should adaptively adjust the ray direction based on the SH coefficients. As the estimator converges, we should focus on the direction with high incoming radiance. This will help to reduce noise in the lightmaps.
+* Luminance Extraction: The input sh_coeffs are RGB. Convert them to scalar luminance using Rec. 709 weights (0.2126, 0.7152, 0.0722) before processing.
+* Covariance Construction: Construct a 3x3 symmetric Covariance Matrix (Intensity Tensor) using the L0 and L2 bands.
+    - Use L0 for the isotropic scale.
+    - Use L2 terms (x2−y2,z2,xy,yz,zx) to determine the stretch/anisotropy.
+    - Note to AI: Use standard real SH indexing (Band 0=Index 0; Band 1=Indices 1-3; Band 2=Indices 4-8).
+* Eigen Decomposition: Perform an Eigen::SelfAdjointEigenSolver on the covariance matrix to find the principal axes (eigenvectors) and their magnitudes (eigenvalues).
+* Sampling:
+    - Clamp small eigenvalues to a minimum epsilon (to prevent zero-volume collapse).
+    - Sample a random 3D vector from a standard Normal Distribution.
+    - Scale the vector by the square root of the eigenvalues (standard deviation).
+    - Rotate the vector using the eigenvectors to align it with the light's shape.
+* MIS PDF Calculation (balanced heuristics):
+$$PDF_{final} = (1 - temperature) \cdot PDF_{SH}(dir) + temperature \cdot PDF_{Uniform}(dir)$$
+    - The initial temperature is 1.0, meaning we only conduct uniform sampling.
+    - After 16 samples, we will start to use the SH-based sampling strategy.
+    - The temperature will decay exponentially with the number of samples with the schedule set by max_samples.
+* Make sure that the code is testable. If we have complex internal helpers, make sure that they go to sensor_internal namespace so that we can test them independently.
+
+# Phase 10: Visibility-Aware Importance Sampling
 Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
     a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
     b. Pre-pass: Stochastic Visibility Casting.
