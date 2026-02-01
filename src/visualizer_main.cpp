@@ -17,6 +17,7 @@
 #include "visualizer_bloom.h"
 #include "visualizer_camera.h"
 #include "visualizer_control.h"
+#include "visualizer_depth_prepass.h"
 #include "visualizer_exposure.h"
 #include "visualizer_radiance.h"
 #include "visualizer_sky.h"
@@ -49,6 +50,7 @@ sh_baker::ExposureComputer g_ExposureComputer;
 // Bloom & Tonemap
 sh_baker::BloomRenderer g_BloomRenderer;
 sh_baker::ToneMapper g_ToneMapper;
+sh_baker::DepthPrepass g_DepthPrepass;
 
 // Screen Quad
 GLuint g_QuadVAO = 0;
@@ -258,6 +260,11 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  if (!g_DepthPrepass.Init()) {
+    LOG(ERROR) << "Failed to init Depth Prepass";
+    return 1;
+  }
+
   // --- Setup Shaders (Post Process) ---
   if (!g_ToneMapper.Init()) {
     LOG(ERROR) << "Failed to init Tone Mapper";
@@ -306,7 +313,21 @@ int main(int argc, char* argv[]) {
 
     Eigen::Matrix4f vp = proj * view;
 
+    // 0. Depth Pre-Pass
+    // Using default FBO (or MSAA FBO?) - We render to g_HdrFBO_MS.
+    // Important: g_HdrFBO_MS has a depth attachment.
+    g_DepthPrepass.Draw(scene, g_RadianceRenderer, vp);
+
+    // 1. Radiance Pass (Equal Depth)
+    glDepthFunc(GL_LEQUAL);  // or GL_EQUAL
+    glDepthMask(GL_FALSE);   // Don't write depth, it's already there
+
     g_RadianceRenderer.Draw(scene, vp, g_Camera.Position());
+
+    // Restore Depth State for Skybox (which writes depth? No usually skybox is
+    // LEQUAL at z=1.0)
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LEQUAL);  // Sky uses LEQUAL usually
 
     g_SkyRenderer.Draw(view, proj);
 

@@ -31,16 +31,15 @@ class RadianceRenderer {
 
   GLuint GetProgram() const { return program_; }
 
- private:
   struct RenderMesh {
     GLuint vao;
     GLsizei count;
     int material_id;
-    // We could store transform here to avoid passing Scene to Draw,
-    // but the Scene object might be updated? For now, we follow existing
-    // pattern.
   };
 
+  const std::vector<RenderMesh>& GetMeshes() const { return meshes_; }
+
+ private:
   GLuint program_ = 0;
   std::vector<RenderMesh> meshes_;
 
