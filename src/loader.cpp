@@ -671,6 +671,7 @@ void ProcessAreaLights(const std::vector<Material>& materials,
       area_light.color = mat.emissive_factor;
       area_light.material = &materials[mat_idx];
       area_light.geometry = geo;
+      area_light.area = SurfaceArea(*geo);
       result->emplace_back(std::move(area_light));
     }
   }

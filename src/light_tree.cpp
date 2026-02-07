@@ -205,10 +205,10 @@ LightBounds ComputeLightBounds(const Light& light) {
         } else {
           lb.axis = Eigen::Vector3f::UnitY();
         }
-        lb.cos_theta_o = 0.0f;  // Hemisphere.
-        lb.cos_theta_e = 0.0f;  // Hemisphere emission.
+        lb.cos_theta_o = 0.0f;   // Hemisphere.
+        lb.cos_theta_e = -1.0f;  // Full sphere emission (two-sided).
         lb.phi = light.intensity * light.color.maxCoeff() * light.area;
-        lb.two_sided = false;
+        lb.two_sided = true;
       }
       break;
     }
@@ -265,7 +265,11 @@ void LightTree::Build(const std::vector<Light>& lights) {
   for (size_t i = 0; i < lights.size(); ++i) {
     light_tree_internal::LightBounds lb =
         light_tree_internal::ComputeLightBounds(lights[i]);
-    if (lb.phi > 0.0f && !lb.bounds.isEmpty()) {
+    // Note: We check if bounds are valid (min <= max) rather than !isEmpty()
+    // because point/spot lights have degenerate bounds (single point), which
+    // isEmpty() considers empty (zero volume).
+    if (lb.phi > 0.0f &&
+        (lb.bounds.min().array() <= lb.bounds.max().array()).all()) {
       bvh_lights.push_back({static_cast<int>(i), lb});
       all_light_bounds_.extend(lb.bounds);
     }

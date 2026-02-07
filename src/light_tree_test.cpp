@@ -331,4 +331,234 @@ TEST(LightTreeTest, DirectionalLightsExcluded) {
 }
 
 }  // namespace
+
+// Tests for Area Lights
+namespace {
+
+TEST(LightTreeInternalTest, ComputeLightBoundsAreaLight) {
+  // Create a simple triangle geometry for the area light.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(2, 0, 0),
+                  Eigen::Vector3f(1, 0, 2)};
+  geo.normals = {Eigen::Vector3f(0, 1, 0), Eigen::Vector3f(0, 1, 0),
+                 Eigen::Vector3f(0, 1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 10.0f;
+  area_light.area = 2.0f;  // Triangle area.
+
+  auto lb = light_tree_internal::ComputeLightBounds(area_light);
+
+  // Bounds should contain all vertices.
+  EXPECT_LE(lb.bounds.min().x(), 0.0f);
+  EXPECT_LE(lb.bounds.min().z(), 0.0f);
+  EXPECT_GE(lb.bounds.max().x(), 2.0f);
+  EXPECT_GE(lb.bounds.max().z(), 2.0f);
+
+  // Phi should be intensity * maxCoeff * area.
+  EXPECT_FLOAT_EQ(lb.phi, 10.0f * 1.0f * 2.0f);
+
+  // Axis should be approximately the average normal (0, 1, 0).
+  EXPECT_NEAR(lb.axis.y(), 1.0f, 1e-5f);
+
+  // Area lights are two-sided.
+  EXPECT_TRUE(lb.two_sided);
+
+  // Emission cone should be full sphere for two-sided.
+  EXPECT_FLOAT_EQ(lb.cos_theta_e, -1.0f);
+}
+
+TEST(LightTreeInternalTest, ComputeLightBoundsAreaLightNoGeometry) {
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = nullptr;  // No geometry!
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 10.0f;
+  area_light.area = 2.0f;
+
+  auto lb = light_tree_internal::ComputeLightBounds(area_light);
+
+  // Without geometry, phi should be 0 (light won't be in tree).
+  EXPECT_FLOAT_EQ(lb.phi, 0.0f);
+}
+
+TEST(LightTreeTest, BuildAreaLight) {
+  // Create geometry for area light.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(5, 5, 0), Eigen::Vector3f(7, 5, 0),
+                  Eigen::Vector3f(6, 5, 2)};
+  geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
+                 Eigen::Vector3f(0, -1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 50.0f;
+  area_light.area = 2.0f;
+
+  LightTree tree;
+  tree.Build({area_light});
+
+  EXPECT_FALSE(tree.Empty());
+  EXPECT_EQ(tree.NumLights(), 1);
+  EXPECT_EQ(tree.Nodes().size(), 1);
+  EXPECT_TRUE(tree.Nodes()[0].is_leaf);
+  EXPECT_EQ(tree.Nodes()[0].child_or_light_index, 0);
+}
+
+TEST(LightTreeTest, SampleAreaLight) {
+  // Create geometry for area light at Y=10.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(-1, 10, -1), Eigen::Vector3f(1, 10, -1),
+                  Eigen::Vector3f(0, 10, 1)};
+  geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
+                 Eigen::Vector3f(0, -1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 100.0f;
+  area_light.area = 2.0f;
+
+  LightTree tree;
+  tree.Build({area_light});
+
+  // Point below the area light, looking up.
+  Eigen::Vector3f p(0, 0, 0);
+  Eigen::Vector3f n(0, 1, 0);
+
+  // Sample should return the area light.
+  auto result = tree.Sample(p, n, 0.5f);
+
+  EXPECT_EQ(result.light_index, 0);
+  EXPECT_FLOAT_EQ(result.pdf, 1.0f);
+}
+
+TEST(LightTreeTest, SampleAreaLightFromBehind) {
+  // Area light at Y=10, normal pointing DOWN (-Y).
+  // This tests two-sided behavior.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(-1, 10, -1), Eigen::Vector3f(1, 10, -1),
+                  Eigen::Vector3f(0, 10, 1)};
+  geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
+                 Eigen::Vector3f(0, -1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 100.0f;
+  area_light.area = 2.0f;
+
+  LightTree tree;
+  tree.Build({area_light});
+
+  // Point ABOVE the area light (behind it relative to its normal).
+  // Since area lights are two-sided, this should still sample the light.
+  Eigen::Vector3f p(0, 20, 0);
+  Eigen::Vector3f n(0, -1, 0);  // Looking down at the light.
+
+  auto result = tree.Sample(p, n, 0.5f);
+
+  // Two-sided area light should still be sampled from behind.
+  EXPECT_EQ(result.light_index, 0);
+  EXPECT_GT(result.pdf, 0.0f);
+}
+
+TEST(LightTreeTest, AreaLightImportanceIsNonZeroFromBothSides) {
+  // Create geometry for area light.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(-1, 0, -1), Eigen::Vector3f(1, 0, -1),
+                  Eigen::Vector3f(0, 0, 1)};
+  geo.normals = {Eigen::Vector3f(0, 1, 0), Eigen::Vector3f(0, 1, 0),
+                 Eigen::Vector3f(0, 1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 100.0f;
+  area_light.area = 2.0f;
+
+  auto lb = light_tree_internal::ComputeLightBounds(area_light);
+
+  // Point above (front side).
+  Eigen::Vector3f p_above(0, 5, 0);
+  Eigen::Vector3f n_above(0, -1, 0);
+  float importance_above =
+      light_tree_internal::Importance(lb, p_above, n_above);
+
+  // Point below (back side).
+  Eigen::Vector3f p_below(0, -5, 0);
+  Eigen::Vector3f n_below(0, 1, 0);
+  float importance_below =
+      light_tree_internal::Importance(lb, p_below, n_below);
+
+  // Both should have non-zero importance (two-sided).
+  EXPECT_GT(importance_above, 0.0f);
+  EXPECT_GT(importance_below, 0.0f);
+}
+
+TEST(LightTreeTest, MixedPointAndAreaLights) {
+  // Create geometry for area light.
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(9, 10, -1), Eigen::Vector3f(11, 10, -1),
+                  Eigen::Vector3f(10, 10, 1)};
+  geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
+                 Eigen::Vector3f(0, -1, 0)};
+  geo.indices = {0, 1, 2};
+
+  Light point_light;
+  point_light.type = Light::Type::Point;
+  point_light.position = Eigen::Vector3f(0, 10, 0);
+  point_light.color = Eigen::Vector3f::Ones();
+  point_light.intensity = 100.0f;
+
+  Light area_light;
+  area_light.type = Light::Type::Area;
+  area_light.geometry = &geo;
+  area_light.color = Eigen::Vector3f::Ones();
+  area_light.intensity = 100.0f;
+  area_light.area = 2.0f;
+
+  LightTree tree;
+  tree.Build({point_light, area_light});
+
+  EXPECT_FALSE(tree.Empty());
+  EXPECT_EQ(tree.NumLights(), 2);
+  // Should have 3 nodes: 1 interior + 2 leaves.
+  EXPECT_EQ(tree.Nodes().size(), 3);
+
+  // Sample from a point between them.
+  Eigen::Vector3f p(5, 0, 0);
+  Eigen::Vector3f n(0, 1, 0);
+
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+  int count_point = 0, count_area = 0;
+  for (int i = 0; i < 1000; ++i) {
+    auto result = tree.Sample(p, n, dist(rng));
+    if (result.light_index == 0)
+      ++count_point;
+    else if (result.light_index == 1)
+      ++count_area;
+  }
+
+  // Both lights should be sampled.
+  EXPECT_GT(count_point, 0);
+  EXPECT_GT(count_area, 0);
+}
+
+}  // namespace
 }  // namespace sh_baker
