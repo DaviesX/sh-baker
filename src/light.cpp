@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <random>
 
 #include "material.h"
@@ -79,44 +78,33 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 
 }  // namespace light_internal
 
-Eigen::Vector3f EvaluateLightSamples(const Scene& scene, RTCScene rtc_scene,
-                                     const Eigen::Vector3f& hit_point,
-                                     const Eigen::Vector3f& hit_point_normal,
-                                     const Eigen::Vector3f& reflected,
-                                     const Material& mat,
-                                     const Eigen::Vector2f& uv,
-                                     unsigned num_samples, std::mt19937& rng) {
-  // Build sampling distribution using the cheap heuristic:
-  // score = L(sample) * brdf * \cos \theta / dist^2.
-  // By omitting the visibility term, we can sample the distribution extremely
-  // efficiently. Given the lights set we have here is potentially visible, our
-  // probability distribution is very close to the actual radiance function,
-  // yielding low variance.
+Eigen::Vector3f EvaluateLightSamples(
+    const LightTree* light_tree, RTCScene rtc_scene,
+    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
+    const Eigen::Vector3f& reflected, const Material& mat,
+    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng) {
+  Eigen::Vector3f result = Eigen::Vector3f::Zero();
 
-  const std::vector<Light>& lights = scene.lights;
-  size_t total_candidates = lights.size() + (scene.environment ? 1 : 0);
+  if (!light_tree || light_tree->Empty()) return result;
 
-  std::vector<Eigen::Vector3f> radiances_without_visibility;
-  std::vector<Ray> visibility_rays;
-  std::vector<float> area_sample_pdfs;
-  std::vector<float> weights;
-  radiances_without_visibility.reserve(total_candidates);
-  visibility_rays.reserve(total_candidates);
-  area_sample_pdfs.reserve(total_candidates);
-  weights.reserve(total_candidates);
+  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
 
   auto brdf_fn = [&](const Eigen::Vector3f& light_dir) {
-    // EvalMaterial expects (..., incident, reflected).
-    // incident = Surface->Light = light_dir.
-    // reflected = Surface->Eye = reflected (This variable passed to
-    // EvaluateLightSamples is wo).
     return EvalMaterial(mat, uv, hit_point_normal, light_dir, reflected);
   };
 
-  for (const auto& light : lights) {
+  for (unsigned i = 0; i < num_samples; ++i) {
+    float u = u_dist(rng);
+    std::optional<SampledLight> sampled_light =
+        light_tree->Sample(hit_point, hit_point_normal, u);
+
+    if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
+
+    const Light& light = *sampled_light->light;
     Eigen::Vector3f radiance;
     Ray visibility_ray;
     float area_sample_pdf = 1.0f;
+
     switch (light.type) {
       case Light::Type::Directional: {
         radiance = light_internal::DirectionalLightRadiance(
@@ -141,86 +129,53 @@ Eigen::Vector3f EvaluateLightSamples(const Scene& scene, RTCScene rtc_scene,
         area_sample_pdf = sample.pdf;
         break;
       }
-      default: {
-        radiance = Eigen::Vector3f::Zero();
-        break;
-      }
+      default:
+        continue;
     }
 
-    radiances_without_visibility.push_back(radiance);
-    visibility_rays.push_back(visibility_ray);
-    area_sample_pdfs.push_back(area_sample_pdf);
-    weights.push_back(radiance.maxCoeff());
-  }
-
-  // Create Distribution
-  float sum_weights = std::accumulate(weights.begin(), weights.end(), 0.0f);
-  if (sum_weights < 1e-6f) {
-    // All lights are almost invisible.
-    return Eigen::Vector3f::Zero();
-  }
-
-  // Sample from the distribution and accumulate the result.
-  Eigen::Vector3f result = Eigen::Vector3f::Zero();
-  std::discrete_distribution<int> dist(weights.begin(), weights.end());
-  for (unsigned i = 0; i < num_samples; ++i) {
-    int idx = dist(rng);
-
-    const Eigen::Vector3f& radiance_without_visibility =
-        radiances_without_visibility[idx];
-    const Ray& visibility_ray = visibility_rays[idx];
+    if (radiance.isZero()) continue;
 
     if (FindOcclusion(rtc_scene, visibility_ray)) {
-      // Visibility term is 0.
       continue;
     }
 
-    float pdf = weights[idx] / sum_weights;
-    float area_sample_pdf = area_sample_pdfs[idx];
-    float joint_pdf = pdf * area_sample_pdf;
-    if (joint_pdf < 1e-3f) {
-      continue;
+    float joint_pdf = sampled_light->pdf * area_sample_pdf;
+    if (joint_pdf > 1e-8f) {
+      result += radiance / joint_pdf;
     }
-
-    result += radiance_without_visibility / joint_pdf;
   }
 
-  return result / num_samples;
+  return result / float(num_samples);
 }
 
-void AccumulateIncomingLightSamples(const Scene& scene, RTCScene rtc_scene,
+void AccumulateIncomingLightSamples(const LightTree* light_tree,
+                                    RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,
                                     SHCoeffs* accumulator) {
-  // Build sampling distribution using the cheap heuristic:
-  // score = L(sample)* G(hit_point_normal, sample) / dist^2.
-  // By omitting the visibility term, we can sample the distribution extremely
-  // efficiently. Given the lights set we have here is potentially visible, our
-  // probability distribution is very close to the actual incoming radiance
-  // function, yielding low variance.
+  if (!light_tree || light_tree->Empty()) return;
 
-  const std::vector<Light>& lights = scene.lights;
-  size_t total_candidates = lights.size() + (scene.environment ? 1 : 0);
+  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
 
-  std::vector<Eigen::Vector3f> radiances_without_visibility;
-  std::vector<Ray> visibility_rays;
-  std::vector<float> area_sample_pdfs;
-  std::vector<float> weights;
-  radiances_without_visibility.reserve(total_candidates);
-  visibility_rays.reserve(total_candidates);
-  area_sample_pdfs.reserve(total_candidates);
-  weights.reserve(total_candidates);
+  for (unsigned i = 0; i < num_samples; ++i) {
+    float u = u_dist(rng);
+    std::optional<SampledLight> sampled_light =
+        light_tree->Sample(hit_point, hit_point_normal, u);
 
-  for (const auto& light : lights) {
+    if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
+
+    const Light& light = *sampled_light->light;
     Eigen::Vector3f radiance;
     Ray visibility_ray;
     float area_sample_pdf = 1.0f;
+
     switch (light.type) {
       case Light::Type::Directional: {
-        radiance = light_internal::DirectionalLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
-                       .radiance;
+        light_internal::DirectionalLightIncoming incoming =
+            light_internal::DirectionalLightIncomingRadiance(
+                light, hit_point, hit_point_normal, &visibility_ray);
+        radiance = incoming.radiance;
         break;
       }
       case Light::Type::Point: {
@@ -244,51 +199,21 @@ void AccumulateIncomingLightSamples(const Scene& scene, RTCScene rtc_scene,
         area_sample_pdf = sample.pdf;
         break;
       }
-      default: {
-        radiance = Eigen::Vector3f::Zero();
-        break;
-      }
+      default:
+        continue;
     }
 
-    radiances_without_visibility.push_back(radiance);
-    visibility_rays.push_back(visibility_ray);
-    area_sample_pdfs.push_back(area_sample_pdf);
-    weights.push_back(radiance.maxCoeff());
-  }
-
-  // Create Distribution
-  float sum_weights = std::accumulate(weights.begin(), weights.end(), 0.0f);
-  if (sum_weights < 1e-6f) {
-    // All lights are almost invisible.
-    return;
-  }
-
-  // Sample from the distribution and accumulate the result.
-  std::discrete_distribution<int> dist(weights.begin(), weights.end());
-  for (unsigned i = 0; i < num_samples; ++i) {
-    int idx = dist(rng);
-
-    const Eigen::Vector3f& radiance_without_visibility =
-        radiances_without_visibility[idx];
-    const Ray& visibility_ray = visibility_rays[idx];
+    if (radiance.isZero()) continue;
 
     if (FindOcclusion(rtc_scene, visibility_ray)) {
-      // Visibility term is 0.
       continue;
     }
 
-    float pdf = weights[idx] / sum_weights;
-    float area_sample_pdf = area_sample_pdfs[idx];
-    float joint_pdf = pdf * area_sample_pdf;
-    if (joint_pdf < 1e-3f) {
-      continue;
+    float joint_pdf = sampled_light->pdf * area_sample_pdf;
+    if (joint_pdf > 1e-8f) {
+      Eigen::Vector3f Li = radiance / (joint_pdf * float(num_samples));
+      AccumulateRadiance(Li, visibility_ray.direction, accumulator);
     }
-
-    Eigen::Vector3f Li =
-        radiance_without_visibility / (joint_pdf * num_samples);
-
-    // Accumulate into SH (using direction TO the light).
-    AccumulateRadiance(Li, visibility_ray.direction, accumulator);
   }
 }
 

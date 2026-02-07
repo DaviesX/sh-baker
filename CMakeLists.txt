@@ -112,6 +112,7 @@ set(LIB_SOURCES
     src/light.cpp
     src/sensor.cpp
     src/tracer.cpp
+    src/light_tree.cpp
 )
 
 
@@ -173,6 +174,7 @@ add_executable(sh_baker_test
     src/light_test.cpp
     src/sensor_test.cpp
     src/tracer_test.cpp
+    src/light_tree_test.cpp
 )
 
 

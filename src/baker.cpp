@@ -12,6 +12,7 @@
 #include <random>
 
 #include "light.h"
+#include "light_tree.h"
 #include "rasterizer.h"
 #include "sensor.h"
 #include "tracer.h"
@@ -93,6 +94,9 @@ BakeResult BakeSHLightMap(const Scene& scene,
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
+  LightTree light_tree;
+  light_tree.Build(scene.lights);
+
   float inv_pdf_uniform = 2.0f * M_PI;
 
   size_t total_pixels = surface_points.size();
@@ -139,13 +143,14 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
             // Direct lighting (NEE).
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
-            AccumulateIncomingLightSamples(scene, rtc_scene, sp.position,
+            AccumulateIncomingLightSamples(&light_tree, rtc_scene, sp.position,
                                            sp.normal, config.num_light_samples,
                                            rng, &sample_sh_accum);
 
             // Indirect lighting.
             TraceConfig trace_config(
-                rtc_scene, scene, config.bounces, config.num_light_samples,
+                rtc_scene, scene, &light_tree, config.bounces,
+                config.num_light_samples,
                 /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
                   visibility_accum += 1.0f;
                 });

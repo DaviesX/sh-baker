@@ -12,17 +12,22 @@
 
 namespace sh_baker {
 
+class LightTree;
+
 struct TraceConfig {
-  TraceConfig(const RTCScene rtc_scene, const Scene& scene, int max_depth,
-              int num_light_samples, std::function<void()> on_direct_hit_sky_fn)
+  TraceConfig(const RTCScene rtc_scene, const Scene& scene,
+              const LightTree* light_tree, int max_depth, int num_light_samples,
+              std::function<void()> on_direct_hit_sky_fn)
       : rtc_scene(rtc_scene),
         scene(scene),
+        light_tree(light_tree),
         max_depth(max_depth),
         num_light_samples(num_light_samples),
         on_direct_hit_sky_fn(on_direct_hit_sky_fn) {}
 
   const RTCScene rtc_scene;
   const Scene& scene;
+  const LightTree* light_tree;
   const int max_depth;
   const int num_light_samples;
   const std::function<void()> on_direct_hit_sky_fn;

@@ -24,17 +24,17 @@ cmake -DCMAKE_BUILD_TYPE=Release -B build -S . && cmake --build build --parallel
 
 # Phase 4: Optimization - low-hanging fruit
 1. Implement the next-event estimation (NEE) algorithm to reduce the number of samples needed to bake the lightmap.
-    a. Exclude the back-facing directional lights and spot lights that are out of cone.
-    b. Sample the sunlight if it is front-facing.
-    c. Sample the punctual light sources based on a heuristic derived from their radiance and inverse-square law. The score can be used to form a PDF for sampling.
-    d. Add a new light type: Area Light. Add corresponding parameters that describes the area light (i.e. center, normal, area, flux, geometry index) to the Light struct. Change the loader to add emissive geometry to the scene and add corresponding light parameters to the Light struct.
-    e. Sample the area light based on a heuristic derived from their radiance and inverse-square law. Merge the score with those in c.
-    f. Add a light module (light.h, light.cpp and light_test.cpp) to the project. It should contain the light sampling and transport functions needed for the next-event estimation.
-    g. Change the SH Baker to use the next-event estimation algorithm.
+    - Exclude the back-facing directional lights and spot lights that are out of cone.
+    - Sample the sunlight if it is front-facing.
+    - Sample the punctual light sources based on a heuristic derived from their radiance and inverse-square law. The score can be used to form a PDF for sampling.
+    - Add a new light type: Area Light. Add corresponding parameters that describes the area light (i.e. center, normal, area, flux, geometry index) to the Light struct. Change the loader to add emissive geometry to the scene and add corresponding light parameters to the Light struct.
+    - Sample the area light based on a heuristic derived from their radiance and inverse-square law. Merge the score with those in c.
+    - Add a light module (light.h, light.cpp and light_test.cpp) to the project. It should contain the light sampling and transport functions needed for the next-event estimation.
+    - Change the SH Baker to use the next-event estimation algorithm.
 2. Jittered Sampling
-    We can use a jittered sampling pattern on each lightmap texel to avoid aliasing (a type of supersampling).
+    - We can use a jittered sampling pattern on each lightmap texel to avoid aliasing (a type of supersampling).
 3. Parallelization
-    We know that Embree depends on TBB for task scheduling. We can use TBB to parallelize the lightmap baking process.
+    - We know that Embree depends on TBB for task scheduling. We can use TBB to parallelize the lightmap baking process.
 
 # Phase 5: Accurate PBR Material Handling
 1. Load the normal map and tangent space from the glTF file. If the tangent vertex attribute is not present, we will compute it through MikkTSpace https://github.com/mmikk/MikkTSpace.
@@ -116,42 +116,20 @@ Task: Please implement the following architecture:
     * **The Shader Bridge:** Update the fragment shader to incorporate the ambient:
         - **Sky Ambient:** Evaluate the 9 Global SH Uniforms () and multiply the result by the **Sky Visibility** fetched from the lightmap's Alpha channel.
 
-# Phase 9: Path Guiding in Challenging Lighting Scenarios
-General idea: We will optimize the sensor module. We should adaptively adjust the ray direction based on the SH coefficients. As the estimator converges, we should focus on the direction with high incoming radiance. This will help to reduce noise in the lightmaps.
-* Luminance Extraction: The input sh_coeffs are RGB. Convert them to scalar luminance using Rec. 709 weights (0.2126, 0.7152, 0.0722) before processing.
-* Covariance Construction: Construct a 3x3 symmetric Covariance Matrix (Intensity Tensor) using the L0 and L2 bands.
-    - Use L0 for the isotropic scale.
-    - Use L2 terms (x2−y2,z2,xy,yz,zx) to determine the stretch/anisotropy.
-    - Note to AI: Use standard real SH indexing (Band 0=Index 0; Band 1=Indices 1-3; Band 2=Indices 4-8).
-* Eigen Decomposition: Perform an Eigen::SelfAdjointEigenSolver on the covariance matrix to find the principal axes (eigenvectors) and their magnitudes (eigenvalues).
-* Sampling:
-    - Clamp small eigenvalues to a minimum epsilon (to prevent zero-volume collapse).
-    - Sample a random 3D vector from a standard Normal Distribution.
-    - Scale the vector by the square root of the eigenvalues (standard deviation).
-    - Rotate the vector using the eigenvectors to align it with the light's shape.
-* MIS PDF Calculation (balanced heuristics):
-$$PDF_{final} = (1 - temperature) \cdot PDF_{SH}(dir) + temperature \cdot PDF_{Uniform}(dir)$$
-    - The initial temperature is 1.0, meaning we only conduct uniform sampling.
-    - After 16 samples, we will start to use the SH-based sampling strategy.
-    - The temperature will decay exponentially with the number of samples with the schedule set by max_samples.
-* Make sure that the code is testable. If we have complex internal helpers, make sure that they go to sensor_internal namespace so that we can test them independently.
+# Phase 9: Many-light Optimization
+Context: Current light sampling strategy is O(N) where N is the number of lights. We need to optimize this to O(log N) by implementing the light tree (a.k.a. BVH light sampling). We will take the implementation from pbrt v4 as a reference 
+* https://pbr-book.org/4ed/Light_Sources/Light_Sampling#x3-LightBoundingVolumeHierarchies
+* https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/lightsamplers.h#L259 (BVHLightSampler)
+* https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/lightsamplers.cpp#L103 (BVHLightSampler)
+* Implement in `light_tree.h` / `light_tree.cpp`
+* Test with the `light_tree_test.cpp`
 
-# Phase 10: Visibility-Aware Importance Sampling
-Implement a visibility-aware importance sampling system using a 3D Voxel Grid. Follow these technical requirements:
-    a. Data Structure: The Light Grid.Create a LightGrid struct that partitions the world-space bounding box into a 3D grid (e.g., $16 \times 16 \times 16$ or $32 \times 32 \times 32$ cells). Each cell should store a std::vector<const Light*> (or std::bitset, which may be more efficient because we are possibly managing at most 512 lights in total) pointing to "potentially visible" lights.
-    b. Pre-pass: Stochastic Visibility Casting.
-        - Before the main bake, iterate through every cell in the grid.
-        - From the center of each cell, fire a fixed number of rays (e.g., 64) toward random lights in the scene.
-        - If a ray hits a light without occlusion (use rtcOccluded1), mark that light index as Visible for that cell.
-    c. Visibility-Weighted PDF.
-        During the main path tracing loop, for every hit point $P$ with normal $N$:
-        - Identify the grid cell containing $P$.
-        - For every light $i$ in the scene, calculate its geometric importance weight $W_i$ (using intensity, distance, and $cos \theta$ factors).
-        - Apply a Visibility Multiplier $V_i$:If the light is in the cell's "Visible" list: $V_i = 1.0$.If not: $V_i = 0.05$ (this is the Russian Roulette factor to maintain unbiased results).
-        - Build a Cumulative Distribution Function (CDF) from $W_{final} = W_i \times V_i$.
-        - Sample one light index $i$ from this CDF and trace a shadow ray.
-        - Crucial: Divide the contribution by the correct probability $P_i$ to ensure the estimator remains unbiased.
-    Note: 
-    * Ensure the grid lookup is an $O(1)$ operation using a simple index calculation: (x - min.x) / cell_size.
-    * Combine with 1. to further cull and importance sample the potentially visible lights.
-    
+Task:
+1. Light Tree Construction 
+    * **Node Structure:** Define a `LightNode` struct to store the bounding box with orientation spread.
+    * **Tree Construction:** Implement a recursive function `BuildLightTree` that takes a list of lights and builds a binary tree of `LightNode`s. Pay extra attention to the cost function used to split the nodes.
+
+2. Light Tree Sampling
+    * **Sampling Strategy:** Implement a function `SampleLightTree` that takes a position and a `LightNode` and returns the index of the light.
+
+3. Refactor helper functions to the namespace `light_tree_internal` and properly test them in `light_tree_test.cpp`.

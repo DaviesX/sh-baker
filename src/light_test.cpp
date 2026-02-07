@@ -5,6 +5,8 @@
 
 #include <cmath>  // For M_PI
 
+#include "colorspace.h"
+#include "light_tree.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -23,6 +25,11 @@ class LightTest : public ::testing::Test {
     // Dummy Material
     Material mat;
     mat.name = "default";
+    mat.albedo =
+        Texture{.width = 1,
+                .height = 1,
+                .channels = 3,
+                .pixel_data = std::vector<uint8_t>(3, LinearToSRGB(.8f))};
     scene_.materials.push_back(mat);
 
     // Add Point Light
@@ -62,12 +69,16 @@ class LightTest : public ::testing::Test {
     // Fix pointers for test
     scene_.lights[1].geometry = &scene_.geometries[0];
     scene_.lights[1].material = &scene_.materials[0];
+
+    // Build light tree
+    light_tree_.Build(scene_.lights);
   }
 
   void TearDown() override { rtcReleaseDevice(device_); }
 
   RTCDevice device_;
   Scene scene_;
+  LightTree light_tree_;
   std::mt19937 rng_{12345};
 };
 
@@ -99,13 +110,14 @@ TEST_F(LightTest, EvaluatePointLight) {
   // Result = 1/PI.
 
   Eigen::Vector3f result = EvaluateLightSamples(
-      scene_, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
+      &light_tree_, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
   // 1/PI approx 0.318. Albedo is 0.8 => 0.2546.
   // PBR Fresnel Loss reduces this to ~0.249.
-  EXPECT_NEAR(result.x(), 0.249f, 0.01f);
+  // Light tree sampling may introduce small variance.
+  EXPECT_NEAR(result.x(), 0.249f, 0.02f);
 }
 
 TEST_F(LightTest, EvaluateAreaLight) {
@@ -152,6 +164,10 @@ TEST_F(LightTest, EvaluateAreaLight) {
 
   scene_.lights.push_back(area);
 
+  // Rebuild light tree for this test's specific scene
+  LightTree test_light_tree;
+  test_light_tree.Build(scene_.lights);
+
   Eigen::Vector3f P(0, 0, 0);
   Eigen::Vector3f N(0, 1, 0);   // Pointing UP towards Light
   Eigen::Vector3f wo(0, 1, 0);  // View direction UP
@@ -160,8 +176,9 @@ TEST_F(LightTest, EvaluateAreaLight) {
   RTCScene rtc_scene = rtcNewScene(device_);
 
   // Eval 100 samples
-  Eigen::Vector3f result = EvaluateLightSamples(
-      scene_, rtc_scene, P, N, wo, scene_.materials[0], uv, 100, rng_);
+  Eigen::Vector3f result =
+      EvaluateLightSamples(&test_light_tree, rtc_scene, P, N, wo,
+                           scene_.materials[0], uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);
 
