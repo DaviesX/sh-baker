@@ -253,6 +253,7 @@ float EvaluateCost(const LightBounds& lb, const Eigen::AlignedBox3f& bounds,
 void LightTree::Build(const std::vector<Light>& lights) {
   nodes_.clear();
   lights_.clear();
+  directional_lights_.clear();
   light_to_bit_trail_.clear();
   all_light_bounds_ = Eigen::AlignedBox3f();
 
@@ -261,17 +262,26 @@ void LightTree::Build(const std::vector<Light>& lights) {
   }
 
   // Collect bounded lights and compute their LightBounds.
-  std::vector<std::pair<int, light_tree_internal::LightBounds>> bvh_lights;
+  // Directional lights are stored separately since they cannot be bounded.
+  std::vector<std::pair<const Light*, light_tree_internal::LightBounds>>
+      bvh_lights;
   for (size_t i = 0; i < lights.size(); ++i) {
+    const Light& light = lights[i];
+    if (light.type == Light::Type::Directional) {
+      directional_lights_.push_back(&light);
+      continue;
+    }
+
     light_tree_internal::LightBounds lb =
-        light_tree_internal::ComputeLightBounds(lights[i]);
+        light_tree_internal::ComputeLightBounds(light);
     // Note: We check if bounds are valid (min <= max) rather than !isEmpty()
     // because point/spot lights have degenerate bounds (single point), which
     // isEmpty() considers empty (zero volume).
     if (lb.phi > 0.0f &&
         (lb.bounds.min().array() <= lb.bounds.max().array()).all()) {
-      bvh_lights.push_back({static_cast<int>(i), lb});
+      bvh_lights.push_back({&light, lb});
       all_light_bounds_.extend(lb.bounds);
+      lights_.push_back(&light);
     }
   }
 
@@ -279,28 +289,20 @@ void LightTree::Build(const std::vector<Light>& lights) {
     return;
   }
 
-  // Store pointers to lights.
-  lights_.resize(lights.size());
-  for (size_t i = 0; i < lights.size(); ++i) {
-    lights_[i] = &lights[i];
-  }
-
-  // Initialize bit trail map.
-  light_to_bit_trail_.resize(lights.size(), 0);
-
   // Build BVH.
   BuildBVH(bvh_lights, 0, static_cast<int>(bvh_lights.size()), 0, 0);
 }
 
 std::pair<int, light_tree_internal::LightBounds> LightTree::BuildBVH(
-    std::vector<std::pair<int, light_tree_internal::LightBounds>>& bvh_lights,
+    std::vector<std::pair<const Light*, light_tree_internal::LightBounds>>&
+        bvh_lights,
     int start, int end, uint32_t bit_trail, int depth) {
   // Base case: single light -> leaf node.
   if (end - start == 1) {
     int node_index = static_cast<int>(nodes_.size());
     LightBVHNode leaf;
     leaf.light_bounds = bvh_lights[start].second;
-    leaf.child_or_light_index = bvh_lights[start].first;
+    leaf.light = bvh_lights[start].first;
     leaf.is_leaf = true;
     nodes_.push_back(leaf);
     light_to_bit_trail_[bvh_lights[start].first] = bit_trail;
@@ -367,7 +369,8 @@ std::pair<int, light_tree_internal::LightBounds> LightTree::BuildBVH(
   } else {
     auto* pmid = std::partition(
         bvh_lights.data() + start, bvh_lights.data() + end,
-        [&](const std::pair<int, light_tree_internal::LightBounds>& l) {
+        [&](const std::pair<const Light*, light_tree_internal::LightBounds>&
+                l) {
           Eigen::Vector3f pc = l.second.Centroid();
           float offset = (pc[min_cost_split_dim] -
                           centroid_bounds.min()[min_cost_split_dim]) /
@@ -396,64 +399,116 @@ std::pair<int, light_tree_internal::LightBounds> LightTree::BuildBVH(
   light_tree_internal::LightBounds lb =
       light_tree_internal::Union(child0_bounds, child1_bounds);
   nodes_[node_index].light_bounds = lb;
-  nodes_[node_index].child_or_light_index = child1_idx;
+  nodes_[node_index].right_child_index = child1_idx;
   nodes_[node_index].is_leaf = false;
 
   return {node_index, lb};
 }
 
-SampledLight LightTree::Sample(const Eigen::Vector3f& p,
-                               const Eigen::Vector3f& n, float u) const {
-  if (nodes_.empty()) {
-    return {-1, 0.0f};
+std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
+                                              const Eigen::Vector3f& n,
+                                              float u) const {
+  // Following pbrt-v4's approach: first decide between directional lights
+  // and the BVH lights, then sample within the chosen category.
+  // pInfinite = |directional_lights| / (|directional_lights| + (bvh ? 1 : 0))
+  size_t num_directional = directional_lights_.size();
+  bool has_bvh = !nodes_.empty();
+
+  if (num_directional == 0 && !has_bvh) {
+    return std::nullopt;
   }
 
-  int node_index = 0;
-  float pmf = 1.0f;
+  float p_directional = static_cast<float>(num_directional) /
+                        static_cast<float>(num_directional + (has_bvh ? 1 : 0));
 
-  while (true) {
-    const LightBVHNode& node = nodes_[node_index];
-    if (node.is_leaf) {
-      return {node.child_or_light_index, pmf};
-    }
+  if (u < p_directional) {
+    // Sample a directional light uniformly.
+    if (num_directional == 0) return std::nullopt;
 
-    // Compute importances of children.
-    const LightBVHNode& child0 = nodes_[node_index + 1];
-    const LightBVHNode& child1 = nodes_[node.child_or_light_index];
+    // Rescale u to [0, 1) for selecting among directional lights.
+    float rescaled_u = u / p_directional;
+    size_t dir_index = std::min(
+        static_cast<size_t>(rescaled_u * num_directional), num_directional - 1);
 
-    float ci0 = light_tree_internal::Importance(child0.light_bounds, p, n);
-    float ci1 = light_tree_internal::Importance(child1.light_bounds, p, n);
+    // PDF = p_directional * (1 / num_directional)
+    float pdf = p_directional / static_cast<float>(num_directional);
+    return SampledLight{directional_lights_[dir_index], pdf};
+  } else {
+    // Sample from BVH.
+    if (!has_bvh) return std::nullopt;
 
-    if (ci0 == 0.0f && ci1 == 0.0f) {
-      return {-1, 0.0f};
-    }
+    // Rescale u to [0, 1) for BVH sampling.
+    float rescaled_u = (u - p_directional) / (1.0f - p_directional);
 
-    // Sample child based on importance.
-    float p0 = ci0 / (ci0 + ci1);
-    if (u < p0) {
-      // Go to child 0.
-      pmf *= p0;
-      u = u / p0;
-      node_index = node_index + 1;
-    } else {
-      // Go to child 1.
-      pmf *= (1.0f - p0);
-      u = (u - p0) / (1.0f - p0);
-      node_index = node.child_or_light_index;
+    int node_index = 0;
+    float pmf =
+        1.0f - p_directional;  // Start with probability of choosing BVH.
+
+    while (true) {
+      const LightBVHNode& node = nodes_[node_index];
+      if (node.is_leaf) {
+        return SampledLight{node.light, pmf};
+      }
+
+      // Compute importances of children.
+      const LightBVHNode& child0 = nodes_[node_index + 1];
+      const LightBVHNode& child1 = nodes_[node.right_child_index];
+
+      float ci0 = light_tree_internal::Importance(child0.light_bounds, p, n);
+      float ci1 = light_tree_internal::Importance(child1.light_bounds, p, n);
+
+      if (ci0 == 0.0f && ci1 == 0.0f) {
+        return std::nullopt;
+      }
+
+      // Sample child based on importance.
+      float p0 = ci0 / (ci0 + ci1);
+      if (rescaled_u < p0) {
+        // Go to child 0.
+        pmf *= p0;
+        rescaled_u = rescaled_u / p0;
+        node_index = node_index + 1;
+      } else {
+        // Go to child 1.
+        pmf *= (1.0f - p0);
+        rescaled_u = (rescaled_u - p0) / (1.0f - p0);
+        node_index = node.right_child_index;
+      }
     }
   }
 }
 
 float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
-                     int light_index) const {
-  if (nodes_.empty() || light_index < 0 ||
-      light_index >= static_cast<int>(light_to_bit_trail_.size())) {
+                     const Light* light) const {
+  if (!light) return 0.0f;
+
+  size_t num_directional = directional_lights_.size();
+  bool has_bvh = !nodes_.empty();
+
+  if (num_directional == 0 && !has_bvh) {
     return 0.0f;
   }
 
-  uint32_t bit_trail = light_to_bit_trail_[light_index];
+  float p_directional = static_cast<float>(num_directional) /
+                        static_cast<float>(num_directional + (has_bvh ? 1 : 0));
+
+  // Check if this is a directional light.
+  for (const Light* dir_light : directional_lights_) {
+    if (dir_light == light) {
+      // PDF = p_directional * (1 / num_directional)
+      return p_directional / static_cast<float>(num_directional);
+    }
+  }
+
+  // Must be a BVH light. Look up in the bit trail map.
+  auto it = light_to_bit_trail_.find(light);
+  if (it == light_to_bit_trail_.end()) {
+    return 0.0f;
+  }
+
+  uint32_t bit_trail = it->second;
   int node_index = 0;
-  float pmf = 1.0f;
+  float pmf = 1.0f - p_directional;  // Start with probability of choosing BVH.
 
   while (true) {
     const LightBVHNode& node = nodes_[node_index];
@@ -463,7 +518,7 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
 
     // Compute importances of children.
     const LightBVHNode& child0 = nodes_[node_index + 1];
-    const LightBVHNode& child1 = nodes_[node.child_or_light_index];
+    const LightBVHNode& child1 = nodes_[node.right_child_index];
 
     float ci0 = light_tree_internal::Importance(child0.light_bounds, p, n);
     float ci1 = light_tree_internal::Importance(child1.light_bounds, p, n);
@@ -476,7 +531,7 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
     if (bit_trail & 1) {
       // Go to child 1.
       pmf *= ci1 / (ci0 + ci1);
-      node_index = node.child_or_light_index;
+      node_index = node.right_child_index;
     } else {
       // Go to child 0.
       pmf *= ci0 / (ci0 + ci1);
@@ -484,6 +539,27 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
     }
     bit_trail >>= 1;
   }
+}
+
+float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
+                     int light_index) const {
+  // Deprecated: convert index to pointer if possible.
+  // This is provided for backwards compatibility but indices are no longer
+  // the primary way to identify lights.
+  if (light_index < 0) return 0.0f;
+
+  // Check in directional lights first.
+  if (static_cast<size_t>(light_index) < directional_lights_.size()) {
+    return Pdf(p, n, directional_lights_[light_index]);
+  }
+
+  // Check in BVH lights.
+  size_t bvh_index = light_index - directional_lights_.size();
+  if (bvh_index < lights_.size()) {
+    return Pdf(p, n, lights_[bvh_index]);
+  }
+
+  return 0.0f;
 }
 
 }  // namespace sh_baker

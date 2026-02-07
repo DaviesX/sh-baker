@@ -146,13 +146,14 @@ TEST(LightTreeTest, BuildSingleLight) {
   light.intensity = 100.0f;
 
   LightTree tree;
-  tree.Build({light});
+  std::vector<Light> lights = {light};
+  tree.Build(lights);
 
   EXPECT_FALSE(tree.Empty());
   EXPECT_EQ(tree.NumLights(), 1);
   EXPECT_EQ(tree.Nodes().size(), 1);
   EXPECT_TRUE(tree.Nodes()[0].is_leaf);
-  EXPECT_EQ(tree.Nodes()[0].child_or_light_index, 0);
+  EXPECT_EQ(tree.Nodes()[0].light, &lights[0]);
 }
 
 TEST(LightTreeTest, BuildTwoLights) {
@@ -185,16 +186,18 @@ TEST(LightTreeTest, SampleSingleLight) {
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
 
+  std::vector<Light> lights = {light};
   LightTree tree;
-  tree.Build({light});
+  tree.Build(lights);
 
   Eigen::Vector3f p(5, 0, 0);
   Eigen::Vector3f n = Eigen::Vector3f::UnitX();
 
   auto result = tree.Sample(p, n, 0.5f);
 
-  EXPECT_EQ(result.light_index, 0);
-  EXPECT_FLOAT_EQ(result.pdf, 1.0f);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->light, &lights[0]);
+  EXPECT_FLOAT_EQ(result->pdf, 1.0f);
 }
 
 TEST(LightTreeTest, SampleTwoLightsCloserHasHigherProbability) {
@@ -210,8 +213,9 @@ TEST(LightTreeTest, SampleTwoLightsCloserHasHigherProbability) {
   light2.color = Eigen::Vector3f::Ones();
   light2.intensity = 100.0f;
 
+  std::vector<Light> lights = {light1, light2};
   LightTree tree;
-  tree.Build({light1, light2});
+  tree.Build(lights);
 
   Eigen::Vector3f p(1, 0, 0);  // Closer to light1.
   Eigen::Vector3f n = -Eigen::Vector3f::UnitX();
@@ -223,9 +227,10 @@ TEST(LightTreeTest, SampleTwoLightsCloserHasHigherProbability) {
   int count0 = 0, count1 = 0;
   for (int i = 0; i < 1000; ++i) {
     auto result = tree.Sample(p, n, dist(rng));
-    if (result.light_index == 0)
+    if (!result.has_value()) continue;
+    if (result->light == &lights[0])
       ++count0;
-    else if (result.light_index == 1)
+    else if (result->light == &lights[1])
       ++count1;
   }
 
@@ -240,13 +245,14 @@ TEST(LightTreeTest, PdfSingleLight) {
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
 
+  std::vector<Light> lights = {light};
   LightTree tree;
-  tree.Build({light});
+  tree.Build(lights);
 
   Eigen::Vector3f p(5, 0, 0);
   Eigen::Vector3f n = Eigen::Vector3f::UnitX();
 
-  float pdf = tree.Pdf(p, n, 0);
+  float pdf = tree.Pdf(p, n, &lights[0]);
   EXPECT_FLOAT_EQ(pdf, 1.0f);
 }
 
@@ -263,14 +269,15 @@ TEST(LightTreeTest, PdfSumToOne) {
   light2.color = Eigen::Vector3f::Ones();
   light2.intensity = 100.0f;
 
+  std::vector<Light> lights = {light1, light2};
   LightTree tree;
-  tree.Build({light1, light2});
+  tree.Build(lights);
 
   Eigen::Vector3f p(5, 5, 0);
   Eigen::Vector3f n = Eigen::Vector3f::UnitY();
 
-  float pdf0 = tree.Pdf(p, n, 0);
-  float pdf1 = tree.Pdf(p, n, 1);
+  float pdf0 = tree.Pdf(p, n, &lights[0]);
+  float pdf1 = tree.Pdf(p, n, &lights[1]);
 
   EXPECT_NEAR(pdf0 + pdf1, 1.0f, 1e-5f);
 }
@@ -300,14 +307,14 @@ TEST(LightTreeTest, SamplePdfConsistency) {
   for (int i = 0; i < 100; ++i) {
     float u = dist(rng);
     auto result = tree.Sample(p, n, u);
-    if (result.light_index >= 0) {
-      float pdf = tree.Pdf(p, n, result.light_index);
-      EXPECT_NEAR(result.pdf, pdf, 1e-5f);
+    if (result.has_value() && result->light != nullptr) {
+      float pdf = tree.Pdf(p, n, result->light);
+      EXPECT_NEAR(result->pdf, pdf, 1e-5f);
     }
   }
 }
 
-TEST(LightTreeTest, DirectionalLightsExcluded) {
+TEST(LightTreeTest, DirectionalLightsIncluded) {
   Light point_light;
   point_light.type = Light::Type::Point;
   point_light.position = Eigen::Vector3f(0, 0, 0);
@@ -320,14 +327,17 @@ TEST(LightTreeTest, DirectionalLightsExcluded) {
   dir_light.color = Eigen::Vector3f::Ones();
   dir_light.intensity = 1000.0f;
 
+  std::vector<Light> lights = {point_light, dir_light};
   LightTree tree;
-  tree.Build({point_light, dir_light});
+  tree.Build(lights);
 
-  // Only the point light should be in the tree.
+  // Both lights should be in the tree (1 in BVH, 1 directional).
   EXPECT_FALSE(tree.Empty());
-  EXPECT_EQ(tree.Nodes().size(), 1);  // Single leaf for point light.
+  EXPECT_EQ(tree.NumLights(), 2);
+  EXPECT_EQ(tree.NumDirectionalLights(), 1);
+  EXPECT_EQ(tree.Nodes().size(), 1);  // Single leaf for point light in BVH.
   EXPECT_TRUE(tree.Nodes()[0].is_leaf);
-  EXPECT_EQ(tree.Nodes()[0].child_or_light_index, 0);  // Index of point_light.
+  EXPECT_EQ(tree.Nodes()[0].light, &lights[0]);  // Pointer to point_light.
 }
 
 }  // namespace
@@ -402,14 +412,15 @@ TEST(LightTreeTest, BuildAreaLight) {
   area_light.intensity = 50.0f;
   area_light.area = 2.0f;
 
+  std::vector<Light> lights = {area_light};
   LightTree tree;
-  tree.Build({area_light});
+  tree.Build(lights);
 
   EXPECT_FALSE(tree.Empty());
   EXPECT_EQ(tree.NumLights(), 1);
   EXPECT_EQ(tree.Nodes().size(), 1);
   EXPECT_TRUE(tree.Nodes()[0].is_leaf);
-  EXPECT_EQ(tree.Nodes()[0].child_or_light_index, 0);
+  EXPECT_EQ(tree.Nodes()[0].light, &lights[0]);
 }
 
 TEST(LightTreeTest, SampleAreaLight) {
@@ -428,8 +439,9 @@ TEST(LightTreeTest, SampleAreaLight) {
   area_light.intensity = 100.0f;
   area_light.area = 2.0f;
 
+  std::vector<Light> lights = {area_light};
   LightTree tree;
-  tree.Build({area_light});
+  tree.Build(lights);
 
   // Point below the area light, looking up.
   Eigen::Vector3f p(0, 0, 0);
@@ -438,8 +450,9 @@ TEST(LightTreeTest, SampleAreaLight) {
   // Sample should return the area light.
   auto result = tree.Sample(p, n, 0.5f);
 
-  EXPECT_EQ(result.light_index, 0);
-  EXPECT_FLOAT_EQ(result.pdf, 1.0f);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->light, &lights[0]);
+  EXPECT_FLOAT_EQ(result->pdf, 1.0f);
 }
 
 TEST(LightTreeTest, SampleAreaLightFromBehind) {
@@ -459,8 +472,9 @@ TEST(LightTreeTest, SampleAreaLightFromBehind) {
   area_light.intensity = 100.0f;
   area_light.area = 2.0f;
 
+  std::vector<Light> lights = {area_light};
   LightTree tree;
-  tree.Build({area_light});
+  tree.Build(lights);
 
   // Point ABOVE the area light (behind it relative to its normal).
   // Since area lights are two-sided, this should still sample the light.
@@ -470,8 +484,9 @@ TEST(LightTreeTest, SampleAreaLightFromBehind) {
   auto result = tree.Sample(p, n, 0.5f);
 
   // Two-sided area light should still be sampled from behind.
-  EXPECT_EQ(result.light_index, 0);
-  EXPECT_GT(result.pdf, 0.0f);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->light, &lights[0]);
+  EXPECT_GT(result->pdf, 0.0f);
 }
 
 TEST(LightTreeTest, AreaLightImportanceIsNonZeroFromBothSides) {
@@ -531,8 +546,9 @@ TEST(LightTreeTest, MixedPointAndAreaLights) {
   area_light.intensity = 100.0f;
   area_light.area = 2.0f;
 
+  std::vector<Light> lights = {point_light, area_light};
   LightTree tree;
-  tree.Build({point_light, area_light});
+  tree.Build(lights);
 
   EXPECT_FALSE(tree.Empty());
   EXPECT_EQ(tree.NumLights(), 2);
@@ -549,9 +565,10 @@ TEST(LightTreeTest, MixedPointAndAreaLights) {
   int count_point = 0, count_area = 0;
   for (int i = 0; i < 1000; ++i) {
     auto result = tree.Sample(p, n, dist(rng));
-    if (result.light_index == 0)
+    if (!result.has_value()) continue;
+    if (result->light == &lights[0])
       ++count_point;
-    else if (result.light_index == 1)
+    else if (result->light == &lights[1])
       ++count_area;
   }
 

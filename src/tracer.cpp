@@ -56,8 +56,8 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
   Eigen::Vector3f L_direct = EvaluateLightSamples(
-      config.scene, config.light_tree, config.rtc_scene, occ->position,
-      occ->normal, -ray.direction, mat, occ->uv, config.num_light_samples, rng);
+      config.light_tree, config.rtc_scene, occ->position, occ->normal,
+      -ray.direction, mat, occ->uv, config.num_light_samples, rng);
 
   color += alpha * L_direct;
 

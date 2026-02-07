@@ -109,9 +109,8 @@ TEST_F(LightTest, EvaluatePointLight) {
   // BRDF = 1/PI.
   // Result = 1/PI.
 
-  Eigen::Vector3f result =
-      EvaluateLightSamples(scene_, &light_tree_, rtc_scene, P, N, wo,
-                           scene_.materials[0], uv, 1, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(
+      &light_tree_, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -178,7 +177,7 @@ TEST_F(LightTest, EvaluateAreaLight) {
 
   // Eval 100 samples
   Eigen::Vector3f result =
-      EvaluateLightSamples(scene_, &test_light_tree, rtc_scene, P, N, wo,
+      EvaluateLightSamples(&test_light_tree, rtc_scene, P, N, wo,
                            scene_.materials[0], uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);

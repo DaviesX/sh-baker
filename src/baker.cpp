@@ -143,9 +143,9 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
             // Direct lighting (NEE).
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
-            AccumulateIncomingLightSamples(
-                scene, &light_tree, rtc_scene, sp.position, sp.normal,
-                config.num_light_samples, rng, &sample_sh_accum);
+            AccumulateIncomingLightSamples(&light_tree, rtc_scene, sp.position,
+                                           sp.normal, config.num_light_samples,
+                                           rng, &sample_sh_accum);
 
             // Indirect lighting.
             TraceConfig trace_config(

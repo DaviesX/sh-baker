@@ -205,15 +205,15 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
 
 }  // namespace light_internal
 
-// Evaluates the sun and samples `num_samples` lights based on the distribution
-// formed from the heuristic:
-//  score = L(sample) * brdf * \cos \theta / dist^2.
+// Samples lights from the light tree and evaluates the radiance contribution.
+// The light tree now handles all lights (including directional) so no separate
+// scene iteration is needed.
 //
-// Then, it computes the radiance L_e(x) combined with the geometric visibility
-// term. The estimated radiance is of lower variance if the lights set is
-// potentially visible.
+// Evaluates `num_samples` lights based on the importance-weighted distribution
+// in the light tree. Returns the estimated radiance combined with the geometric
+// visibility term.
 Eigen::Vector3f EvaluateLightSamples(
-    const Scene& scene, const LightTree* light_tree, RTCScene rtc_scene,
+    const LightTree* light_tree, RTCScene rtc_scene,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
     const Eigen::Vector3f& reflected, const Material& mat,
     const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
@@ -225,10 +225,12 @@ Eigen::Vector3f EvaluateLightSamples(
 // cannot simply return a summed radiance covering multiple light sources.
 // Instead, we must project each light sample into the SH basis using its
 // specific incoming direction.
-void AccumulateIncomingLightSamples(
-    const Scene& scene, const LightTree* light_tree, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    unsigned num_samples, std::mt19937& rng, SHCoeffs* accumulator);
+void AccumulateIncomingLightSamples(const LightTree* light_tree,
+                                    RTCScene rtc_scene,
+                                    const Eigen::Vector3f& hit_point,
+                                    const Eigen::Vector3f& hit_point_normal,
+                                    unsigned num_samples, std::mt19937& rng,
+                                    SHCoeffs* accumulator);
 
 }  // namespace sh_baker
 

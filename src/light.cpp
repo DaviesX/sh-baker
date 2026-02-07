@@ -79,52 +79,38 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 }  // namespace light_internal
 
 Eigen::Vector3f EvaluateLightSamples(
-    const Scene& scene, const LightTree* light_tree, RTCScene rtc_scene,
+    const LightTree* light_tree, RTCScene rtc_scene,
     const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
     const Eigen::Vector3f& reflected, const Material& mat,
     const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng) {
   Eigen::Vector3f result = Eigen::Vector3f::Zero();
+
+  if (!light_tree || light_tree->Empty()) return result;
+
   std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
 
   auto brdf_fn = [&](const Eigen::Vector3f& light_dir) {
     return EvalMaterial(mat, uv, hit_point_normal, light_dir, reflected);
   };
 
-  // 1. Always evaluate directional lights directly (they cannot be bounded in
-  // the light tree).
-  for (const auto& light : scene.lights) {
-    if (light.type != Light::Type::Directional) continue;
-
-    Ray visibility_ray;
-    Eigen::Vector3f radiance = light_internal::DirectionalLightRadiance(
-        light, hit_point, hit_point_normal, brdf_fn, &visibility_ray);
-
-    if (radiance.isZero()) continue;
-
-    if (!FindOcclusion(rtc_scene, visibility_ray)) {
-      result += radiance;
-    }
-  }
-
-  // 2. Sample other lights from the light tree.
-  if (!light_tree || light_tree->Empty()) return result;
-
   for (unsigned i = 0; i < num_samples; ++i) {
     float u = u_dist(rng);
-    SampledLight sampled_light =
+    std::optional<SampledLight> sampled_light =
         light_tree->Sample(hit_point, hit_point_normal, u);
 
-    if (sampled_light.light_index == -1 || sampled_light.pdf <= 0.0f) continue;
+    if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
 
-    const Light& light = scene.lights[sampled_light.light_index];
+    const Light& light = *sampled_light->light;
     Eigen::Vector3f radiance;
     Ray visibility_ray;
     float area_sample_pdf = 1.0f;
 
     switch (light.type) {
-      case Light::Type::Directional:
-        // Already handled above.
-        continue;
+      case Light::Type::Directional: {
+        radiance = light_internal::DirectionalLightRadiance(
+            light, hit_point, hit_point_normal, brdf_fn, &visibility_ray);
+        break;
+      }
       case Light::Type::Point: {
         radiance = light_internal::PointLightRadiance(
             light, hit_point, hit_point_normal, brdf_fn, &visibility_ray);
@@ -153,7 +139,7 @@ Eigen::Vector3f EvaluateLightSamples(
       continue;
     }
 
-    float joint_pdf = sampled_light.pdf * area_sample_pdf;
+    float joint_pdf = sampled_light->pdf * area_sample_pdf;
     if (joint_pdf > 1e-8f) {
       result += radiance / joint_pdf;
     }
@@ -162,49 +148,36 @@ Eigen::Vector3f EvaluateLightSamples(
   return result / float(num_samples);
 }
 
-void AccumulateIncomingLightSamples(
-    const Scene& scene, const LightTree* light_tree, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    unsigned num_samples, std::mt19937& rng, SHCoeffs* accumulator) {
-  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
-
-  // 1. Always evaluate directional lights directly (they cannot be bounded in
-  // the light tree).
-  for (const auto& light : scene.lights) {
-    if (light.type != Light::Type::Directional) continue;
-
-    Ray visibility_ray;
-    light_internal::DirectionalLightIncoming incoming =
-        light_internal::DirectionalLightIncomingRadiance(
-            light, hit_point, hit_point_normal, &visibility_ray);
-
-    if (incoming.radiance.isZero()) continue;
-
-    if (!FindOcclusion(rtc_scene, visibility_ray)) {
-      AccumulateRadiance(incoming.radiance, visibility_ray.direction,
-                         accumulator);
-    }
-  }
-
-  // 2. Sample other lights from the light tree.
+void AccumulateIncomingLightSamples(const LightTree* light_tree,
+                                    RTCScene rtc_scene,
+                                    const Eigen::Vector3f& hit_point,
+                                    const Eigen::Vector3f& hit_point_normal,
+                                    unsigned num_samples, std::mt19937& rng,
+                                    SHCoeffs* accumulator) {
   if (!light_tree || light_tree->Empty()) return;
+
+  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
 
   for (unsigned i = 0; i < num_samples; ++i) {
     float u = u_dist(rng);
-    SampledLight sampled_light =
+    std::optional<SampledLight> sampled_light =
         light_tree->Sample(hit_point, hit_point_normal, u);
 
-    if (sampled_light.light_index == -1 || sampled_light.pdf <= 0.0f) continue;
+    if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
 
-    const Light& light = scene.lights[sampled_light.light_index];
+    const Light& light = *sampled_light->light;
     Eigen::Vector3f radiance;
     Ray visibility_ray;
     float area_sample_pdf = 1.0f;
 
     switch (light.type) {
-      case Light::Type::Directional:
-        // Already handled above.
-        continue;
+      case Light::Type::Directional: {
+        light_internal::DirectionalLightIncoming incoming =
+            light_internal::DirectionalLightIncomingRadiance(
+                light, hit_point, hit_point_normal, &visibility_ray);
+        radiance = incoming.radiance;
+        break;
+      }
       case Light::Type::Point: {
         radiance = light_internal::PointLightIncomingRadiance(
                        light, hit_point, hit_point_normal, &visibility_ray)
@@ -236,7 +209,7 @@ void AccumulateIncomingLightSamples(
       continue;
     }
 
-    float joint_pdf = sampled_light.pdf * area_sample_pdf;
+    float joint_pdf = sampled_light->pdf * area_sample_pdf;
     if (joint_pdf > 1e-8f) {
       Eigen::Vector3f Li = radiance / (joint_pdf * float(num_samples));
       AccumulateRadiance(Li, visibility_ray.direction, accumulator);
