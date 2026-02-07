@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "glog/logging.h"
 #include "rasterizer.h"
 
 namespace sh_baker {
@@ -28,7 +29,7 @@ TEST(SensorTest, EstimationConvergence) {
   SHCoeffs const_val(1.0f);  // Bright constant value
 
   // Feed constant values -> Variance = 0
-  for (int i = 0; i < 20; ++i) {
+  for (int i = 0; i < 33; ++i) {
     AddSample(const_val, &sensor);
   }
 
@@ -46,20 +47,20 @@ TEST(SensorTest, EstimationConvergence) {
 TEST(SensorTest, MaxSamples) {
   SurfacePoint sp;
   sp.position = Eigen::Vector3f(0, 0, 0);
-  Sensor sensor(sp, 5, 0.0001f);
+  Sensor sensor(sp, 100, 0.01f);
 
   // Force high variance so it doesn't stop early
   SHCoeffs v1(0.0f);
   SHCoeffs v2(10.0f);
 
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < 100; ++i) {
     AddSample(i % 2 == 0 ? v1 : v2, &sensor);
   }
 
   std::mt19937 rng(42);
   auto ray = SampleRay(sensor, rng);
   EXPECT_FALSE(ray.has_value());
-  EXPECT_EQ(sensor.sample_count, 5);
+  EXPECT_EQ(sensor.sample_count, 100);
 }
 
 }  // namespace sh_baker

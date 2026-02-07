@@ -5,6 +5,7 @@
 
 #include <cmath>  // For M_PI
 
+#include "colorspace.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -23,6 +24,11 @@ class LightTest : public ::testing::Test {
     // Dummy Material
     Material mat;
     mat.name = "default";
+    mat.albedo =
+        Texture{.width = 1,
+                .height = 1,
+                .channels = 3,
+                .pixel_data = std::vector<uint8_t>(3, LinearToSRGB(.8f))};
     scene_.materials.push_back(mat);
 
     // Add Point Light
