@@ -53,13 +53,13 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
   }
 
   // 2. Check convergence (Adaptive Sampling)
-  constexpr int kMinSamples = 16;
+  constexpr int kMinSamples = 32;
   if (sensor.sample_count >= kMinSamples) {
     // Calculate Standard Error of the Mean
     if (sensor.mean_luminance > 1e-3f) {
       float variance = sensor.m2_luminance / (sensor.sample_count - 1);
       float std_dev = std::sqrt(variance);
-      float sem = std_dev / std::sqrt((float)sensor.sample_count);
+      float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
 
       // Coefficient of Variation of the Mean = SEM / Mean
       // If error is small enough relative to the signal, we stop.
@@ -75,7 +75,7 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
   // 3. Generate Ray
   Ray ray;
   ray.tnear = 0.005f;
-  ray.tfar = 1e10f;
+  ray.tfar = 1e4f;
   ray.origin = sensor.sp.position;
 
   Eigen::Vector3f dir_local = sensor_internal::SampleHemisphereUniform(rng);

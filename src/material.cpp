@@ -67,7 +67,7 @@ float GetAlpha(const Material& mat, const Eigen::Vector2f& uv) {
 }
 
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv) {
-  Eigen::Vector3f albedo(0.8f, 0.8f, 0.8f);  // Default gray
+  Eigen::Vector3f albedo(1.0f, 0.0f, 1.0f);  // Default pink
   if (!mat.albedo.pixel_data.empty()) {
     int tx = std::clamp((int)(uv.x() * mat.albedo.width), 0,
                         (int)mat.albedo.width - 1);
