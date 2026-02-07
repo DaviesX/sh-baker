@@ -24,7 +24,7 @@ TEST_F(TracerTest, TraceSky) {
   bool sky_hit = false;
   auto on_sky = [&]() { sky_hit = true; };
 
-  TraceConfig config(rtc_scene, scene, 1, 1, on_sky);
+  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, on_sky);
 
   std::mt19937 rng(42);
   Ray ray;
@@ -57,7 +57,7 @@ TEST_F(TracerTest, TraceObjectNoLight) {
   bool sky_hit = false;
   auto on_sky = [&]() { sky_hit = true; };
 
-  TraceConfig config(rtc_scene, scene, 1, 1, on_sky);
+  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, on_sky);
 
   std::mt19937 rng(42);
   Ray ray;
