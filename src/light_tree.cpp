@@ -478,6 +478,24 @@ std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
   }
 }
 
+std::optional<SampledLight> LightTree::SampleUniform(float u) const {
+  size_t total = NumLights();
+  if (total == 0) {
+    return std::nullopt;
+  }
+
+  float pdf = 1.0f / static_cast<float>(total);
+  size_t index =
+      std::min(static_cast<size_t>(u * static_cast<float>(total)), total - 1);
+
+  // Directional lights come first, then BVH lights.
+  if (index < directional_lights_.size()) {
+    return SampledLight{directional_lights_[index], pdf};
+  }
+  size_t bvh_index = index - directional_lights_.size();
+  return SampledLight{lights_[bvh_index], pdf};
+}
+
 float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
                      const Light* light) const {
   if (!light) return 0.0f;

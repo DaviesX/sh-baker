@@ -15,8 +15,9 @@ TEST(SHCoeffsTest, BasisFunctionCheck) {
   SHCoeffs result;
   Eigen::Vector3f radiance(1.0f, 1.0f, 1.0f);
   Eigen::Vector3f direction(0.0f, 0.0f, 1.0f);
+  Eigen::Vector3f normal(0.0f, 0.0f, 1.0f);
 
-  AccumulateRadiance(radiance, direction, &result);
+  AccumulateRadiance(radiance, direction, normal, &result);
 
   // Allow small epsilon for float precision
   constexpr float kEpsilon = 1e-5f;
@@ -35,6 +36,11 @@ TEST(SHCoeffsTest, BasisFunctionCheck) {
   EXPECT_NEAR(result.coeffs[6].x(), 0.630784f, kEpsilon);  // Y20  (3z^2-1)
   EXPECT_NEAR(result.coeffs[7].x(), 0.0f, kEpsilon);       // Y21  (xz)
   EXPECT_NEAR(result.coeffs[8].x(), 0.0f, kEpsilon);       // Y22  (x^2-y^2)
+
+  // Irradiance
+  EXPECT_NEAR(result.irradiance.x(), 1.0f, kEpsilon);
+  EXPECT_NEAR(result.irradiance.y(), 1.0f, kEpsilon);
+  EXPECT_NEAR(result.irradiance.z(), 1.0f, kEpsilon);
 }
 
 TEST(SHCoeffsTest, Accumulate) {
