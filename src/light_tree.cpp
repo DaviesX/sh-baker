@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "scene.h"
+
 namespace sh_baker {
 namespace light_tree_internal {
 
@@ -192,12 +194,14 @@ LightBounds ComputeLightBounds(const Light& light) {
       // Area light: bounds from geometry.
       if (light.geometry) {
         const auto& geo = *light.geometry;
-        for (const auto& v : geo.vertices) {
+        const auto vertices = TransformedVertices(geo);
+        const auto normals = TransformedNormals(geo);
+        for (const auto& v : vertices) {
           lb.bounds.extend(v);
         }
         // Compute average normal as axis.
         Eigen::Vector3f avg_normal = Eigen::Vector3f::Zero();
-        for (const auto& n : geo.normals) {
+        for (const auto& n : normals) {
           avg_normal += n;
         }
         if (avg_normal.squaredNorm() > 1e-6f) {

@@ -8,7 +8,7 @@
 #include "occlusion.h"
 #include "sh_coeffs.h"
 
-#define USE_UNIFORM_SAMPLING 1
+// #define USE_UNIFORM_SAMPLING 1
 
 namespace sh_baker {
 
@@ -47,8 +47,7 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
   const Eigen::Vector3f& v1 = geo.vertices[i1];
   const Eigen::Vector3f& v2 = geo.vertices[i2];
 
-  Eigen::Vector3f p = w * v0 + u1 * v1 + u2 * v2;
-  p = geo.transform * p;
+  Eigen::Vector3f p = geo.transform * (w * v0 + u1 * v1 + u2 * v2);
 
   // 4. Radiance (Emission)
   Eigen::Vector2f uv = Eigen::Vector2f::Zero();

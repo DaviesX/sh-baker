@@ -219,8 +219,9 @@ void main() {
 
   const float PI = 3.14159265359;
   vec3 diffuse = kD * (E_total * (1.0 / PI)) * albedo;
-  vec3 specular = u_ShowDirectional ? specularRadiance * F : vec3(0.0);
+  vec3 specular = specularRadiance * F;
 
-  vec3 color = diffuse + specular;
+  vec3 color =
+      u_ShowDirectional ? diffuse + specular : (E_total * (1.0 / PI)) * albedo;
   FragColor = vec4(color, 1.0);
 }

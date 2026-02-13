@@ -107,8 +107,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
       tbb::blocked_range<size_t>(0, total_pixels),
       [&](const tbb::blocked_range<size_t>& r) {
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-          // for (size_t idx = 0; idx < total_pixels; ++idx) {
-          // Update progress.
           size_t done =
               processed_count.fetch_add(1, std::memory_order_relaxed) + 1;
           int percent = static_cast<int>((done * 100) / total_pixels);
@@ -147,17 +145,16 @@ BakeResult BakeSHLightMap(const Scene& scene,
                                            rng, &sample_sh_accum);
 
             // Indirect lighting.
-            // TraceConfig trace_config(
-            //     rtc_scene, scene, &light_tree, config.bounces,
-            //     config.num_light_samples,
-            //     /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
-            //       visibility_accum += 1.0f;
-            //     });
-            // Eigen::Vector3f Li_indirect =
-            //     Trace(trace_config, *ray, /*depth=*/0, rng) *
-            //     inv_pdf_uniform;
-            // AccumulateRadiance(Li_indirect, ray->direction, sp.normal,
-            //                    &sample_sh_accum);
+            TraceConfig trace_config(
+                rtc_scene, scene, &light_tree, config.bounces,
+                config.num_light_samples,
+                /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
+                  visibility_accum += 1.0f;
+                });
+            Eigen::Vector3f Li_indirect =
+                Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
+            AccumulateRadiance(Li_indirect, ray->direction, sp.normal,
+                               &sample_sh_accum);
 
             AddSample(sample_sh_accum, &sensor);
           }
