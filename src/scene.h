@@ -93,7 +93,6 @@ struct Light {
   float flux = 0.0f;
   const Material* material = nullptr;
   const Geometry* geometry = nullptr;
-  std::optional<Texture32F> emission_pdf;
   std::optional<Texture32F> emission_cdf;
   std::optional<Texture32F> uv_to_world_area_ratio;
   std::optional<Texture32I> prim_id_map;
@@ -142,9 +141,8 @@ float SurfaceArea(const Geometry& geometry);
 // The CDF is stored as a 2-channel texture:
 //   - Channel 0: conditional_cdf P(u | v) for each row.
 //   - Channel 1: marginal_cdf P(v) (stored in the first column of each row).
-void ComputeTextureEmissionDistribution(
-    const Texture& texture, const Texture32F& uv_to_world_area_ratio,
-    Texture32F* pdf, Texture32F* cdf);
+std::optional<Texture32F> ComputeTextureEmissionCDF(
+    const Texture& texture, const Texture32F& uv_to_world_area_ratio);
 
 // Returns the flux of the light.
 float Flux(const Light& light);

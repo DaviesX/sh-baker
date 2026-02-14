@@ -88,12 +88,14 @@ TEST(LightTreeInternalTest, ComputeLightBoundsPointLight) {
   light.position = Eigen::Vector3f(5, 5, 5);
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
+  // Flux for point light is intensity * 4 * PI (roughly, for test purposes).
+  light.flux = light.intensity * 4.0f * 3.14159f;
 
   auto lb = light_tree_internal::ComputeLightBounds(light);
 
   EXPECT_EQ(lb.bounds.min(), light.position);
   EXPECT_EQ(lb.bounds.max(), light.position);
-  EXPECT_FLOAT_EQ(lb.phi, 100.0f);
+  EXPECT_NEAR(lb.phi, 4 * M_PI * 100.0f, 1e-2f);
   EXPECT_FLOAT_EQ(lb.cos_theta_o, -1.0f);  // Full sphere.
   EXPECT_TRUE(lb.two_sided);
 }
@@ -106,6 +108,7 @@ TEST(LightTreeInternalTest, ComputeLightBoundsSpotLight) {
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 50.0f;
   light.cos_outer_cone = 0.7f;
+  light.flux = light.intensity * 1.0f;  // Dummy flux for test.
 
   auto lb = light_tree_internal::ComputeLightBounds(light);
 
@@ -144,6 +147,7 @@ TEST(LightTreeTest, BuildSingleLight) {
   light.position = Eigen::Vector3f(0, 0, 0);
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
+  light.flux = 1000.0f;
 
   LightTree tree;
   std::vector<Light> lights = {light};
@@ -162,12 +166,14 @@ TEST(LightTreeTest, BuildTwoLights) {
   light1.position = Eigen::Vector3f(0, 0, 0);
   light1.color = Eigen::Vector3f::Ones();
   light1.intensity = 100.0f;
+  light1.flux = 1000.0f;
 
   Light light2;
   light2.type = Light::Type::Point;
   light2.position = Eigen::Vector3f(10, 0, 0);
   light2.color = Eigen::Vector3f::Ones();
   light2.intensity = 100.0f;
+  light2.flux = 1000.0f;
 
   LightTree tree;
   tree.Build({light1, light2});
@@ -185,6 +191,7 @@ TEST(LightTreeTest, SampleSingleLight) {
   light.position = Eigen::Vector3f(0, 0, 0);
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
+  light.flux = 1000.0f;
 
   std::vector<Light> lights = {light};
   LightTree tree;
@@ -206,12 +213,14 @@ TEST(LightTreeTest, SampleTwoLightsCloserHasHigherProbability) {
   light1.position = Eigen::Vector3f(0, 0, 0);
   light1.color = Eigen::Vector3f::Ones();
   light1.intensity = 100.0f;
+  light1.flux = 1000.0f;
 
   Light light2;
   light2.type = Light::Type::Point;
   light2.position = Eigen::Vector3f(100, 0, 0);  // Far away.
   light2.color = Eigen::Vector3f::Ones();
   light2.intensity = 100.0f;
+  light2.flux = 1000.0f;
 
   std::vector<Light> lights = {light1, light2};
   LightTree tree;
@@ -244,6 +253,7 @@ TEST(LightTreeTest, PdfSingleLight) {
   light.position = Eigen::Vector3f(0, 0, 0);
   light.color = Eigen::Vector3f::Ones();
   light.intensity = 100.0f;
+  light.flux = 1000.0f;
 
   std::vector<Light> lights = {light};
   LightTree tree;
@@ -262,12 +272,14 @@ TEST(LightTreeTest, PdfSumToOne) {
   light1.position = Eigen::Vector3f(0, 0, 0);
   light1.color = Eigen::Vector3f::Ones();
   light1.intensity = 100.0f;
+  light1.flux = 1000.0f;
 
   Light light2;
   light2.type = Light::Type::Point;
   light2.position = Eigen::Vector3f(10, 0, 0);
   light2.color = Eigen::Vector3f::Ones();
   light2.intensity = 100.0f;
+  light2.flux = 1000.0f;
 
   std::vector<Light> lights = {light1, light2};
   LightTree tree;
@@ -291,6 +303,7 @@ TEST(LightTreeTest, SamplePdfConsistency) {
     light.position = Eigen::Vector3f(static_cast<float>(i * 5), 0, 0);
     light.color = Eigen::Vector3f::Ones();
     light.intensity = 100.0f * (i + 1);
+    light.flux = light.intensity * 10.0f;
     lights.push_back(light);
   }
 
@@ -320,6 +333,7 @@ TEST(LightTreeTest, DirectionalLightsIncluded) {
   point_light.position = Eigen::Vector3f(0, 0, 0);
   point_light.color = Eigen::Vector3f::Ones();
   point_light.intensity = 100.0f;
+  point_light.flux = 1000.0f;
 
   Light dir_light;
   dir_light.type = Light::Type::Directional;
@@ -359,7 +373,8 @@ TEST(LightTreeInternalTest, ComputeLightBoundsAreaLight) {
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 10.0f;
-  area_light.area = 2.0f;  // Triangle area.
+  area_light.flux = 20.0f;  // 10 * 2
+  area_light.area = 2.0f;   // Triangle area.
 
   auto lb = light_tree_internal::ComputeLightBounds(area_light);
 
@@ -410,6 +425,7 @@ TEST(LightTreeTest, BuildAreaLight) {
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 50.0f;
+  area_light.flux = 100.0f;
   area_light.area = 2.0f;
 
   std::vector<Light> lights = {area_light};
@@ -437,6 +453,7 @@ TEST(LightTreeTest, SampleAreaLight) {
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 100.0f;
+  area_light.flux = 200.0f;
   area_light.area = 2.0f;
 
   std::vector<Light> lights = {area_light};
@@ -470,6 +487,7 @@ TEST(LightTreeTest, SampleAreaLightFromBehind) {
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 100.0f;
+  area_light.flux = 200.0f;
   area_light.area = 2.0f;
 
   std::vector<Light> lights = {area_light};
@@ -503,6 +521,7 @@ TEST(LightTreeTest, AreaLightImportanceIsNonZeroFromBothSides) {
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 100.0f;
+  area_light.flux = 200.0f;
   area_light.area = 2.0f;
 
   auto lb = light_tree_internal::ComputeLightBounds(area_light);
@@ -538,12 +557,14 @@ TEST(LightTreeTest, MixedPointAndAreaLights) {
   point_light.position = Eigen::Vector3f(0, 10, 0);
   point_light.color = Eigen::Vector3f::Ones();
   point_light.intensity = 100.0f;
+  point_light.flux = 1000.0f;
 
   Light area_light;
   area_light.type = Light::Type::Area;
   area_light.geometry = &geo;
   area_light.color = Eigen::Vector3f::Ones();
   area_light.intensity = 100.0f;
+  area_light.flux = 200.0f;
   area_light.area = 2.0f;
 
   std::vector<Light> lights = {point_light, area_light};

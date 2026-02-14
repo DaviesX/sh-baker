@@ -211,11 +211,10 @@ float SurfaceArea(const Geometry& geometry) {
   return total_area;
 }
 
-void ComputeTextureEmissionDistribution(
-    const Texture& texture, const Texture32F& uv_to_world_area_ratio,
-    Texture32F* pdf, Texture32F* cdf) {
+std::optional<Texture32F> ComputeTextureEmissionCDF(
+    const Texture& texture, const Texture32F& uv_to_world_area_ratio) {
   if (texture.pixel_data.empty() || texture.width == 0 || texture.height == 0) {
-    return;
+    return std::nullopt;
   }
 
   int w = texture.width;
@@ -253,16 +252,7 @@ void ComputeTextureEmissionDistribution(
   }
 
   if (total_luminance <= 0.0f) {
-    return;
-  }
-
-  // Step 2: Build PDF (normalized luminance).
-  pdf->width = w;
-  pdf->height = h;
-  pdf->channels = 1;
-  pdf->pixel_data.resize(w * h);
-  for (int i = 0; i < w * h; ++i) {
-    pdf->pixel_data[i] = luminance[i] / total_luminance;
+    return std::nullopt;
   }
 
   // Step 3: Build 2D CDF.
@@ -277,48 +267,51 @@ void ComputeTextureEmissionDistribution(
   // Layout: (h+1) rows x (w+1) columns, 1 channel.
   int cdf_w = w + 1;
   int cdf_h = h + 1;
-  cdf->width = cdf_w;
-  cdf->height = cdf_h;
-  cdf->channels = 1;
-  cdf->pixel_data.resize(cdf_w * cdf_h, 0.0f);
+  Texture32F result;
+  result.width = cdf_w;
+  result.height = cdf_h;
+  result.channels = 1;
+  result.pixel_data.resize(cdf_w * cdf_h, 0.0f);
 
   // Row integrals for marginal.
   std::vector<float> row_integrals(h, 0.0f);
 
   for (int y = 0; y < h; ++y) {
     // Conditional CDF for row y.
-    cdf->pixel_data[y * cdf_w + 0] = 0.0f;
+    result.pixel_data[y * cdf_w + 0] = 0.0f;
     float row_sum = 0.0f;
     for (int x = 0; x < w; ++x) {
       row_sum += luminance[y * w + x];
-      cdf->pixel_data[y * cdf_w + (x + 1)] = row_sum;
+      result.pixel_data[y * cdf_w + (x + 1)] = row_sum;
     }
     row_integrals[y] = row_sum;
 
     // Normalize conditional CDF.
     if (row_sum > 0.0f) {
       for (int x = 1; x <= w; ++x) {
-        cdf->pixel_data[y * cdf_w + x] /= row_sum;
+        result.pixel_data[y * cdf_w + x] /= row_sum;
       }
     }
     // Ensure last entry is exactly 1.
-    cdf->pixel_data[y * cdf_w + w] = 1.0f;
+    result.pixel_data[y * cdf_w + w] = 1.0f;
   }
 
   // Marginal CDF (stored in the last row).
-  cdf->pixel_data[h * cdf_w + 0] = 0.0f;
+  result.pixel_data[h * cdf_w + 0] = 0.0f;
   float marginal_sum = 0.0f;
   for (int y = 0; y < h; ++y) {
     marginal_sum += row_integrals[y];
-    cdf->pixel_data[h * cdf_w + (y + 1)] = marginal_sum;
+    result.pixel_data[h * cdf_w + (y + 1)] = marginal_sum;
   }
   // Normalize marginal CDF.
   if (marginal_sum > 0.0f) {
     for (int y = 1; y <= h; ++y) {
-      cdf->pixel_data[h * cdf_w + y] /= marginal_sum;
+      result.pixel_data[h * cdf_w + y] /= marginal_sum;
     }
   }
-  cdf->pixel_data[h * cdf_w + h] = 1.0f;
+  result.pixel_data[h * cdf_w + h] = 1.0f;
+
+  return result;
 }
 
 float Flux(const Light& light) {

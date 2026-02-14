@@ -42,6 +42,7 @@ TEST_F(LightTest, EvaluatePointLight) {
   point.position = Eigen::Vector3f(0, 10, 0);
   point.color = Eigen::Vector3f(1, 1, 1);
   point.intensity = 100.0f;
+  point.flux = 1000.0f;
 
   std::vector<Light> lights{point};
   LightTree light_tree;
@@ -107,6 +108,7 @@ TEST_F(LightTest, EvaluateAreaLight) {
   area.geometry = &area_geo;
   area.material = &emissive_mat;
   area.intensity = 10.0f;
+  area.flux = 20.0f;
   area.area = 2.0f;
 
   std::vector<Light> lights{area};
@@ -138,6 +140,7 @@ TEST_F(LightTest, DirectionalLightRadiance) {
   dir_light.direction = Eigen::Vector3f(0, -1, 0);  // Down
   dir_light.color = Eigen::Vector3f(1, 1, 1);
   dir_light.intensity = 2.0f;
+  dir_light.flux = 1000.0f;
 
   // Need to ensure non-zero return, check BRDF inputs.
   // DirectionalLightRadiance uses brdf(-dir).
@@ -171,6 +174,7 @@ TEST_F(LightTest, SpotLightRadiance_Falloff) {
   spot.direction = Eigen::Vector3f(0, -1, 0);
   spot.color = Eigen::Vector3f(1, 1, 1);
   spot.intensity = 100.0f;
+  spot.flux = 100.0f;
   // Inner: 45 deg (cos ~0.707), Outer: 60 deg (cos 0.5)
   spot.cos_inner_cone = 0.70710678f;
   spot.cos_outer_cone = 0.5f;
@@ -271,14 +275,15 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   area.geometry = &area_geo;
   area.material = &emissive_mat;
   area.intensity = 10.0f;
+  area.flux = 20.0f;
   area.area = 2.0f;
 
   // Sample
   light_internal::AreaSample sample =
       light_internal::SampleAreaLight(area, rng_);
 
-  // Verify Point is on plane (x=10)
-  EXPECT_NEAR(sample.point.x(), 10.0f, 1e-4f);
+  // Verify Point is on plane (y=10)
+  EXPECT_NEAR(sample.point.y(), 10.0f, 1e-4f);
 
   // Verify PDF
   // Area = 2.0. NumTriangles = 1.
