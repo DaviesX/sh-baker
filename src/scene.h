@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,12 @@ struct Texture32I {
   uint32_t height = 0;
   uint32_t channels = 0;
   std::vector<int32_t> pixel_data;
+};
+
+// --- EmissionCDF ---
+struct EmissionCDF {
+  std::vector<float> marginal_cdf;
+  std::vector<std::vector<float>> conditional_cdf;
 };
 
 // --- Material ---
@@ -93,7 +100,7 @@ struct Light {
   float flux = 0.0f;
   const Material* material = nullptr;
   const Geometry* geometry = nullptr;
-  std::optional<Texture32F> emission_cdf;
+  std::optional<EmissionCDF> emission_cdf;
   std::optional<Texture32F> uv_to_world_area_ratio;
   std::optional<Texture32I> prim_id_map;
 };
@@ -137,12 +144,12 @@ float SurfaceArea(const Geometry& geometry);
 // Computes the PDF and CDF of the emissive texture. It converts the texels to
 // luminance, weights by the UV-to-world area ratio (Jacobian), and then
 // computes the 2D PDF and CDF.
-//
-// The CDF is stored as a 2-channel texture:
-//   - Channel 0: conditional_cdf P(u | v) for each row.
-//   - Channel 1: marginal_cdf P(v) (stored in the first column of each row).
-std::optional<Texture32F> ComputeTextureEmissionCDF(
+std::optional<EmissionCDF> ComputeTextureEmissionCDF(
     const Texture& texture, const Texture32F& uv_to_world_area_ratio);
+
+// Samples a 2D UV location from the CDF and returns the PDF.
+std::pair<Eigen::Vector2f, float> SampleEmissionCDF(const EmissionCDF& cdf,
+                                                    float u, float v);
 
 // Returns the flux of the light.
 float Flux(const Light& light);

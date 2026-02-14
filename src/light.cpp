@@ -22,43 +22,25 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   CHECK(light.uv_to_world_area_ratio);
   CHECK(light.geometry);
 
-  const Texture32F& cdf = *light.emission_cdf;
+  // 1. Sample UV from the CDF.
+  const EmissionCDF& cdf = *light.emission_cdf;
+  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
+  auto [uv, pdf_uv] = SampleEmissionCDF(cdf, u_dist(rng), u_dist(rng));
+
+  if (pdf_uv <= 0.0f) {
+    return {};
+  }
+
   const Texture32I& prim_map = *light.prim_id_map;
   const Texture32F& ratio_map = *light.uv_to_world_area_ratio;
   const Geometry& geo = *light.geometry;
 
-  // CDF layout: (h+1) rows x (w+1) columns.
-  // Rows [0..h-1]: conditional CDF P(u|v) for each row.
-  // Row h: marginal CDF P(v).
-  int tex_w = prim_map.width;   // Same as emissive texture width.
-  int tex_h = prim_map.height;  // Same as emissive texture height.
-  int cdf_w = tex_w + 1;
+  int tex_w = prim_map.width;
+  int tex_h = prim_map.height;
 
-  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
-
-  // 1. Sample row v from marginal CDF (last row of CDF texture).
-  float xi_v = u_dist(rng);
-  const float* marginal = &cdf.pixel_data[tex_h * cdf_w];
-
-  // Binary search in marginal CDF [1..h].
-  int v_idx = static_cast<int>(
-      std::lower_bound(marginal + 1, marginal + tex_h + 1, xi_v) -
-      (marginal + 1));
-  v_idx = std::clamp(v_idx, 0, tex_h - 1);
-
-  // Marginal PDF for this row.
-  float marginal_pdf = marginal[v_idx + 1] - marginal[v_idx];
-
-  // 2. Sample column u from conditional CDF (row v_idx).
-  float xi_u = u_dist(rng);
-  const float* conditional = &cdf.pixel_data[v_idx * cdf_w];
-
-  int u_idx = static_cast<int>(
-      std::lower_bound(conditional + 1, conditional + tex_w + 1, xi_u) -
-      (conditional + 1));
-  u_idx = std::clamp(u_idx, 0, tex_w - 1);
-
-  float conditional_pdf = conditional[u_idx + 1] - conditional[u_idx];
+  // 2. Identify the texel (u_idx, v_idx).
+  int u_idx = std::clamp(static_cast<int>(uv.x() * tex_w), 0, tex_w - 1);
+  int v_idx = std::clamp(static_cast<int>(uv.y() * tex_h), 0, tex_h - 1);
 
   // 3. Look up triangle ID.
   int prim_id = prim_map.pixel_data[v_idx * tex_w + u_idx];
@@ -73,10 +55,6 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   uint32_t i1 = geo.indices[prim_id * 3 + 1];
   uint32_t i2 = geo.indices[prim_id * 3 + 2];
 
-  // Sampled UV (center of texel).
-  float su = (u_idx + 0.5f) / tex_w;
-  float sv = (v_idx + 0.5f) / tex_h;
-
   // Triangle UVs.
   const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
   const Eigen::Vector2f& uv1 = geo.texture_uvs[i1];
@@ -85,7 +63,7 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   // Solve for barycentrics: P = w*uv0 + b1*uv1 + b2*uv2.
   Eigen::Vector2f d1 = uv1 - uv0;
   Eigen::Vector2f d2 = uv2 - uv0;
-  Eigen::Vector2f dp = Eigen::Vector2f(su, sv) - uv0;
+  Eigen::Vector2f dp = uv - uv0;
 
   float det = d1.x() * d2.y() - d1.y() * d2.x();
   if (std::abs(det) < 1e-12f) {
@@ -114,15 +92,11 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   Eigen::Vector3f p = geo.transform * (b0 * v0 + b1 * v1 + b2 * v2);
 
   // 6. Emission at sampled UV.
-  Eigen::Vector3f emission =
-      GetEmission(*light.material, Eigen::Vector2f(su, sv));
+  Eigen::Vector3f emission = GetEmission(*light.material, uv);
 
-  // 7. PDF: texture_pdf / jacobian.
-  // texture_pdf = marginal_pdf * conditional_pdf * (tex_w * tex_h)
-  // (the w*h factor converts from per-texel to per-unit-UV-area).
+  // 7. PDF: pdf_uv / jacobian.
   float jacobian = ratio_map.pixel_data[v_idx * tex_w + u_idx];
-  float texture_pdf = marginal_pdf * conditional_pdf * (tex_w * tex_h);
-  float pdf_area = (jacobian > 1e-12f) ? (texture_pdf / jacobian) : 1e-6f;
+  float pdf_area = (jacobian > 1e-12f) ? (pdf_uv / jacobian) : 1e-6f;
   pdf_area = std::max(pdf_area, 1e-6f);
 
   return AreaSample{p, emission, pdf_area};

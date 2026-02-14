@@ -689,7 +689,7 @@ void ProcessAreaLights(const std::vector<Material>& materials,
             std::move(uv_maps.uv_to_world_area_ratio);
         area_light.prim_id_map = std::move(uv_maps.prim_id_map);
 
-        std::optional<Texture32F> emission_cdf = ComputeTextureEmissionCDF(
+        std::optional<EmissionCDF> emission_cdf = ComputeTextureEmissionCDF(
             emissive_tex, *area_light.uv_to_world_area_ratio);
         if (emission_cdf) {
           area_light.emission_cdf = std::move(emission_cdf);

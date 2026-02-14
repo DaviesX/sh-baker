@@ -211,7 +211,7 @@ float SurfaceArea(const Geometry& geometry) {
   return total_area;
 }
 
-std::optional<Texture32F> ComputeTextureEmissionCDF(
+std::optional<EmissionCDF> ComputeTextureEmissionCDF(
     const Texture& texture, const Texture32F& uv_to_world_area_ratio) {
   if (texture.pixel_data.empty() || texture.width == 0 || texture.height == 0) {
     return std::nullopt;
@@ -220,23 +220,19 @@ std::optional<Texture32F> ComputeTextureEmissionCDF(
   int w = texture.width;
   int h = texture.height;
 
-  // Step 1: Compute luminance weighted by Jacobian for each texel.
-  std::vector<float> luminance(w * h, 0.0f);
-  float total_luminance = 0.0f;
-
+  // Step 1: Compute weighted luminance for each texel.
+  std::vector<float> weights(w * h, 0.0f);
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
       int tex_idx = (y * w + x) * texture.channels;
       float r = SRGBToLinear(texture.pixel_data[tex_idx + 0]);
       float g = SRGBToLinear(texture.pixel_data[tex_idx + 1]);
       float b = SRGBToLinear(texture.pixel_data[tex_idx + 2]);
-      // Luminance (Rec. 709).
-      float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+      float lum = Luminance(r, g, b);
 
       // Weight by Jacobian (UV-to-world area ratio).
       float jacobian = 0.0f;
       if (uv_to_world_area_ratio.width > 0) {
-        // Map from emissive texture coords to Jacobian texture coords.
         int jx = std::clamp((int)(float(x) / w * uv_to_world_area_ratio.width),
                             0, (int)uv_to_world_area_ratio.width - 1);
         int jy = std::clamp((int)(float(y) / h * uv_to_world_area_ratio.height),
@@ -245,73 +241,86 @@ std::optional<Texture32F> ComputeTextureEmissionCDF(
                        .pixel_data[jy * uv_to_world_area_ratio.width + jx];
       }
 
-      float weighted_lum = lum * jacobian;
-      luminance[y * w + x] = weighted_lum;
-      total_luminance += weighted_lum;
+      float weight = lum * jacobian;
+      weights[y * texture.width + x] = weight;
     }
   }
 
-  if (total_luminance <= 0.0f) {
-    return std::nullopt;
-  }
+  // Step 2: Build CDF using float types.
+  EmissionCDF result;
+  result.conditional_cdf.resize(h + 1);
+  result.marginal_cdf.resize(h + 1);
 
-  // Step 3: Build 2D CDF.
-  // We store the CDF as a (w+1) x (h+1) texture with 1 channel.
-  // - conditional_cdf[y][x] = P(u <= x/w | v = y/h) stored at row y,
-  //   column x. Each row has (w+1) entries (starting from 0).
-  // - marginal_cdf[y] = P(v <= y/h) stored as the last column in each row
-  //   or separately. For simplicity, we use a flat layout:
-  //   cdf row y: conditional CDF values [0..w] (w+1 entries).
-  //   Then an extra row (h+1-th) for the marginal CDF: marginal[0..h].
-  //
-  // Layout: (h+1) rows x (w+1) columns, 1 channel.
-  int cdf_w = w + 1;
-  int cdf_h = h + 1;
-  Texture32F result;
-  result.width = cdf_w;
-  result.height = cdf_h;
-  result.channels = 1;
-  result.pixel_data.resize(cdf_w * cdf_h, 0.0f);
-
-  // Row integrals for marginal.
-  std::vector<float> row_integrals(h, 0.0f);
-
+  float current_marginal_sum = 0;
   for (int y = 0; y < h; ++y) {
-    // Conditional CDF for row y.
-    result.pixel_data[y * cdf_w + 0] = 0.0f;
-    float row_sum = 0.0f;
+    result.conditional_cdf[y].resize(w + 1);
+    float current_row_sum = 0;
     for (int x = 0; x < w; ++x) {
-      row_sum += luminance[y * w + x];
-      result.pixel_data[y * cdf_w + (x + 1)] = row_sum;
+      result.conditional_cdf[y][x] = current_row_sum;
+      current_row_sum += weights[y * texture.width + x];
     }
-    row_integrals[y] = row_sum;
-
-    // Normalize conditional CDF.
-    if (row_sum > 0.0f) {
-      for (int x = 1; x <= w; ++x) {
-        result.pixel_data[y * cdf_w + x] /= row_sum;
+    result.conditional_cdf[y][w] = current_row_sum;
+    if (current_row_sum > 1e-3f) {
+      for (float& conditional_cdf : result.conditional_cdf[y]) {
+        conditional_cdf /= current_row_sum;
+      }
+    } else {
+      for (float& conditional_cdf : result.conditional_cdf[y]) {
+        conditional_cdf = 0.0f;
       }
     }
-    // Ensure last entry is exactly 1.
-    result.pixel_data[y * cdf_w + w] = 1.0f;
-  }
 
-  // Marginal CDF (stored in the last row).
-  result.pixel_data[h * cdf_w + 0] = 0.0f;
-  float marginal_sum = 0.0f;
-  for (int y = 0; y < h; ++y) {
-    marginal_sum += row_integrals[y];
-    result.pixel_data[h * cdf_w + (y + 1)] = marginal_sum;
+    result.marginal_cdf[y] = current_marginal_sum;
+    current_marginal_sum += current_row_sum;
   }
-  // Normalize marginal CDF.
-  if (marginal_sum > 0.0f) {
-    for (int y = 1; y <= h; ++y) {
-      result.pixel_data[h * cdf_w + y] /= marginal_sum;
+  result.marginal_cdf[h] = current_marginal_sum;
+
+  if (current_marginal_sum > 1e-3f) {
+    for (float& marginal_cdf : result.marginal_cdf) {
+      marginal_cdf /= current_marginal_sum;
+    }
+  } else {
+    for (float& marginal_cdf : result.marginal_cdf) {
+      marginal_cdf = 0.0f;
     }
   }
-  result.pixel_data[h * cdf_w + h] = 1.0f;
 
   return result;
+}
+
+std::pair<Eigen::Vector2f, float> SampleEmissionCDF(const EmissionCDF& cdf,
+                                                    float u, float v) {
+  // 1. Sample row v from marginal.
+  auto marginal_it =
+      std::upper_bound(cdf.marginal_cdf.begin(), cdf.marginal_cdf.end(), v);
+  int v_idx = std::distance(cdf.marginal_cdf.begin(), marginal_it);
+  v_idx = std::clamp(v_idx, 1, (int)cdf.marginal_cdf.size() - 1);
+  float marginal_pdf = cdf.marginal_cdf[v_idx] - cdf.marginal_cdf[v_idx - 1];
+
+  int row_idx = v_idx - 1;
+
+  float row_total = cdf.conditional_cdf[row_idx].back();
+  if (row_total == 0) {
+    return {{0.f, 0.f}, 0.f};
+  }
+
+  // 2. Sample column u from conditional.
+  auto row_it = std::upper_bound(cdf.conditional_cdf[row_idx].begin(),
+                                 cdf.conditional_cdf[row_idx].end(), u);
+  int u_idx = std::distance(cdf.conditional_cdf[row_idx].begin(), row_it);
+  u_idx = std::clamp(u_idx, 1, (int)cdf.conditional_cdf[row_idx].size() - 1);
+  float conditional_pdf = cdf.conditional_cdf[row_idx][u_idx] -
+                          cdf.conditional_cdf[row_idx][u_idx - 1];
+
+  int col_idx = u_idx - 1;
+
+  // Final PDF is the product of the marginal and conditional PDFs.
+  float pdf = conditional_pdf * marginal_pdf;
+
+  int w = cdf.conditional_cdf[row_idx].size() - 1;
+  int h = cdf.marginal_cdf.size() - 1;
+
+  return {{(col_idx + .5f) / w, (row_idx + .5f) / h}, pdf};
 }
 
 float Flux(const Light& light) {
