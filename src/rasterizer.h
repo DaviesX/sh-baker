@@ -28,15 +28,15 @@ struct SurfacePoint {
 std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
                                          const RasterConfig& config);
 
-// Rasterizes the scene UVs into a buffer of SurfacePoints.
-// The buffer size will be config.width * config.supersample_scale *
-// config.height * config.supersample_scale.
-std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
-                                                 const RasterConfig& config);
+// Rasterizes the area scale of the texel in the UV. The area scale is the
+// ratio: world triangle area / UV triangle area. It would be constant over a
+// triangle.
+Texture32F RasterizeGeometryUVToWorldAreaRatio(const Geometry& geo,
+                                               const RasterConfig& config);
 
 // Rasterizes the scene UVs into a buffer of color coded material IDs.
-// The buffer size will be config.width * config.height (supersample scale is
-// not applied).
+// The buffer size will be config.width * config.height (supersample scale
+// is not applied).
 Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config);
 
 // Extracts a validity mask (1 for valid, 0 for invalid) from surface points.

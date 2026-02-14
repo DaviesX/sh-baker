@@ -168,7 +168,7 @@ LightBounds ComputeLightBounds(const Light& light) {
       lb.axis = Eigen::Vector3f::UnitY();  // Arbitrary.
       lb.cos_theta_o = -1.0f;              // Emits in all directions.
       lb.cos_theta_e = -1.0f;              // Full sphere emission.
-      lb.phi = light.intensity * light.color.maxCoeff();
+      lb.phi = light.flux;
       lb.two_sided = true;
       break;
     }
@@ -178,7 +178,7 @@ LightBounds ComputeLightBounds(const Light& light) {
       lb.axis = light.direction;
       lb.cos_theta_o = 1.0f;  // Single direction.
       lb.cos_theta_e = light.cos_outer_cone;
-      lb.phi = light.intensity * light.color.maxCoeff();
+      lb.phi = light.flux;
       lb.two_sided = false;
       break;
     }
@@ -207,7 +207,7 @@ LightBounds ComputeLightBounds(const Light& light) {
         }
         lb.cos_theta_o = 0.0f;   // Hemisphere.
         lb.cos_theta_e = -1.0f;  // Full sphere emission (two-sided).
-        lb.phi = light.intensity * light.color.maxCoeff() * light.area;
+        lb.phi = light.flux;
         lb.two_sided = true;
       }
       break;

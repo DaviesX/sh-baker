@@ -71,25 +71,6 @@ struct SurfaceVertex {
   Eigen::Vector4f tangent;
 };
 
-// Helper to compute Barycentric coordinates
-// Returns true if inside triangle.
-bool Barycentric(const Eigen::Vector2f& p, const Eigen::Vector2f& a,
-                 const Eigen::Vector2f& b, const Eigen::Vector2f& c, float& u,
-                 float& v, float& w) {
-  Eigen::Vector2f v0 = b - a, v1 = c - a, v2 = p - a;
-  float d00 = v0.dot(v0);
-  float d01 = v0.dot(v1);
-  float d11 = v1.dot(v1);
-  float d20 = v2.dot(v0);
-  float d21 = v2.dot(v1);
-  float denom = d00 * d11 - d01 * d01;
-  if (std::abs(denom) < 1e-8f) return false;
-  v = (d11 * d20 - d01 * d21) / denom;
-  w = (d00 * d21 - d01 * d20) / denom;
-  u = 1.0f - v - w;
-  return (v >= 0.0f) && (w >= 0.0f) && (u >= 0.0f);
-}
-
 // Orthonormal basis from normal
 void BuildBasis(const Eigen::Vector3f& n, Eigen::Vector3f& t,
                 Eigen::Vector3f& b) {
@@ -239,151 +220,6 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
   int scaled_height = config.height * config.supersample_scale;
   std::vector<SurfacePoint> surface_map(scaled_width * scaled_height);
 
-  // We parallelize over geometries. TBB's work stealing should balance it?
-  // If a geometry is huge, we should parallelize inside it.
-
-  tbb::parallel_for(
-      tbb::blocked_range<size_t>(0, scene.geometries.size()),
-      [&](const tbb::blocked_range<size_t>& r_geom) {
-        for (size_t geom_idx = r_geom.begin(); geom_idx != r_geom.end();
-             ++geom_idx) {
-          const auto& geo = scene.geometries[geom_idx];
-          auto vertices = TransformedVertices(geo);
-          auto normals = TransformedNormals(geo);
-          auto tangents = TransformedTangents(geo);
-          CHECK(!vertices.empty());
-          CHECK(!normals.empty());
-          CHECK(!tangents.empty());
-
-          size_t tri_count = geo.indices.size() / 3;
-
-          for (size_t i = 0; i < tri_count; ++i) {
-            uint32_t idx0 = geo.indices[i * 3 + 0];
-            uint32_t idx1 = geo.indices[i * 3 + 1];
-            uint32_t idx2 = geo.indices[i * 3 + 2];
-
-            Eigen::Vector2f uv0 = geo.lightmap_uvs[idx0];
-            Eigen::Vector2f uv1 = geo.lightmap_uvs[idx1];
-            Eigen::Vector2f uv2 = geo.lightmap_uvs[idx2];
-
-            // Bounding box in UV space
-            float min_u = std::min({uv0.x(), uv1.x(), uv2.x()});
-            float max_u = std::max({uv0.x(), uv1.x(), uv2.x()});
-            float min_v = std::min({uv0.y(), uv1.y(), uv2.y()});
-            float max_v = std::max({uv0.y(), uv1.y(), uv2.y()});
-
-            int min_x = std::max(0, (int)(min_u * scaled_width));
-            int max_x = std::min(scaled_width - 1,
-                                 (int)(std::ceil(max_u * scaled_width)));
-            int min_y = std::max(0, (int)(min_v * scaled_height));
-            int max_y = std::min(scaled_height - 1,
-                                 (int)(std::ceil(max_v * scaled_height)));
-
-            bool triangle_hit_any_pixels = false;
-
-            // Track pixels per material to debug missing materials
-            int pixels_for_this_triangle = 0;
-
-            for (int y = min_y; y <= max_y; ++y) {
-              for (int x = min_x; x <= max_x; ++x) {
-                Eigen::Vector2f p((x + 0.5f) / scaled_width,
-                                  (y + 0.5f) / scaled_height);
-                float u, v, w;
-                if (!Barycentric(p, uv0, uv1, uv2, u, v, w)) {
-                  // Outside of the triangle.
-                  continue;
-                }
-
-                triangle_hit_any_pixels = true;
-                pixels_for_this_triangle++;
-                int pixel_idx = y * scaled_width + x;
-
-                SurfacePoint sp;
-                sp.material_id = geo.material_id;
-
-                sp.position = vertices[idx0] * u + vertices[idx1] * v +
-                              vertices[idx2] * w;
-
-                sp.normal =
-                    (normals[idx0] * u + normals[idx1] * v + normals[idx2] * w)
-                        .normalized();
-
-                Eigen::Vector4f t0 = tangents[idx0];
-                Eigen::Vector4f t1 = tangents[idx1];
-                Eigen::Vector4f t2 = tangents[idx2];
-                sp.tangent = t0 * u + t1 * v + t2 * w;
-                Eigen::Vector3f tangent3 = sp.tangent.head<3>();
-                tangent3 = (tangent3 - sp.normal * sp.normal.dot(tangent3))
-                               .normalized();  // Gram-Schmidt orthogonalization
-                sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
-                                             tangent3.z(), sp.tangent.w());
-
-                surface_map[pixel_idx] = sp;
-              }
-            }
-
-            // Fallback: If triangle was too small to hit any pixel center,
-            // sample at the centroid and write to the nearest pixel
-            // *if* it is currently empty.
-            if (!triangle_hit_any_pixels) {
-              float center_u = (uv0.x() + uv1.x() + uv2.x()) / 3.0f;
-              float center_v = (uv0.y() + uv1.y() + uv2.y()) / 3.0f;
-
-              int cx = (int)(center_u * scaled_width);
-              int cy = (int)(center_v * scaled_height);
-
-              if (cx >= 0 && cx < scaled_width && cy >= 0 &&
-                  cy < scaled_height) {
-                int pixel_idx = cy * scaled_width + cx;
-
-                // Only write if valid bit is not set (don't overwrite
-                // legitimate hits) This assumes standard rasterizer wins over
-                // fallback.
-                if (surface_map[pixel_idx].material_id < 0) {
-                  SurfacePoint sp;
-                  sp.material_id = geo.material_id;
-
-                  // Centroid barycentrics
-                  float u = 1.0f / 3.0f, v = 1.0f / 3.0f, w = 1.0f / 3.0f;
-
-                  Eigen::Vector3f pos0 = vertices[idx0];
-                  Eigen::Vector3f pos1 = vertices[idx1];
-                  Eigen::Vector3f pos2 = vertices[idx2];
-                  sp.position = pos0 * u + pos1 * v + pos2 * w;
-
-                  Eigen::Vector3f n0 = normals[idx0];
-                  Eigen::Vector3f n1 = normals[idx1];
-                  Eigen::Vector3f n2 = normals[idx2];
-                  sp.normal = (n0 * u + n1 * v + n2 * w).normalized();
-
-                  Eigen::Vector4f t0 = tangents[idx0];
-                  Eigen::Vector4f t1 = tangents[idx1];
-                  Eigen::Vector4f t2 = tangents[idx2];
-                  sp.tangent = t0 * u + t1 * v + t2 * w;
-                  Eigen::Vector3f tangent3 = sp.tangent.head<3>();
-                  tangent3 =
-                      (tangent3 - sp.normal * sp.normal.dot(tangent3))
-                          .normalized();  // Gram-Schmidt orthogonalization
-                  sp.tangent = Eigen::Vector4f(tangent3.x(), tangent3.y(),
-                                               tangent3.z(), sp.tangent.w());
-
-                  surface_map[pixel_idx] = sp;
-                }
-              }
-            }
-          }
-        }
-      });
-
-  return surface_map;
-}
-
-std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
-                                                 const RasterConfig& config) {
-  int scaled_width = config.width * config.supersample_scale;
-  int scaled_height = config.height * config.supersample_scale;
-  std::vector<SurfacePoint> surface_map(scaled_width * scaled_height);
-
   // Serial execution as requested for correctness priority
   for (const auto& geo : scene.geometries) {
     auto vertices = TransformedVertices(geo);
@@ -444,6 +280,20 @@ std::vector<SurfacePoint> RasterizeSceneScanline(const Scene& scene,
   }
 
   return surface_map;
+}
+
+Texture32F RasterizeGeometryUVToWorldAreaRatio(const Geometry& geo,
+                                               const RasterConfig& config) {
+  // TODO: Implement this function.
+  //
+  // The UV-to-world area ratio is the ratio of the world triangle area to the
+  // UV triangle area. It would be constant over a triangle.
+  //
+  // The UV triangle area can be computed using the UV coordinates.
+  //
+  // The world triangle area can be computed using the world vertices.
+  //
+  // The ratio is then used to scale the radiance of the light.
 }
 
 Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {

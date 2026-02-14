@@ -82,8 +82,12 @@ struct Light {
 
   // Area Light Parameters
   float area = 0.0f;
+  float flux = 0.0f;
   const Material* material = nullptr;
   const Geometry* geometry = nullptr;
+  std::optional<Texture32F> emission_pdf;
+  std::optional<Texture32F> emission_cdf;
+  std::optional<Texture32F> uv_to_world_area_ratio;
 };
 
 // --- Environment ---
@@ -121,6 +125,14 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 
 // Returns the surface area of the geometry.
 float SurfaceArea(const Geometry& geometry);
+
+// Computes the PDF and CDF of the emissive texture. It converts the texels to
+// luminance and then computes the 2D PDF and CDF.
+void ComputeTextureEmissionDistribution(const Texture& texture, Texture32F* pdf,
+                                        Texture32F* cdf);
+
+// Returns the flux of the light.
+float Flux(const Light& light);
 
 // Projects the environment to SH coefficients.
 SHCoeffs ProjectEnvironmentToSH(const Environment& env);

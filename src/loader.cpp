@@ -642,6 +642,9 @@ void ProcessPunctualLight(const tinygltf::Model& model,
 void ProcessAreaLights(const std::vector<Material>& materials,
                        const std::vector<Geometry>& geometries,
                        std::vector<Light>* result) {
+  // TODO: Pre-compute the CDF and PDF of the emissive texture and the
+  // UV-to-world area ratio for each geometry. Finally, the flux.
+
   // Group geometries by material id for faster lookup.
   std::unordered_map<int, std::vector<const Geometry*>> geos_by_mat;
   for (size_t i = 0; i < geometries.size(); i++) {

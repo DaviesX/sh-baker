@@ -195,15 +195,41 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry) {
 }
 
 float SurfaceArea(const Geometry& geometry) {
+  const auto& vertices = TransformedVertices(geometry);
   float total_area = 0.0f;
   for (size_t i = 0; i < geometry.indices.size(); i += 3) {
-    Eigen::Vector3f v0 = geometry.vertices[geometry.indices[i]];
-    Eigen::Vector3f v1 = geometry.vertices[geometry.indices[i + 1]];
-    Eigen::Vector3f v2 = geometry.vertices[geometry.indices[i + 2]];
+    Eigen::Vector3f v0 = vertices[geometry.indices[i]];
+    Eigen::Vector3f v1 = vertices[geometry.indices[i + 1]];
+    Eigen::Vector3f v2 = vertices[geometry.indices[i + 2]];
     float tri_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
     total_area += tri_area;
   }
   return total_area;
+}
+
+void ComputeTextureEmissionDistribution(const Texture& texture, Texture32F* pdf,
+                                        Texture32F* cdf) {
+  // TODO: Implement this function.
+  //
+  // Convert the texture to luminance and then compute the 2D PDF and CDF.
+  //
+  // The PDF should be normalized such that the sum of all texels is 1.
+  //
+  // The CDF should be computed such that the last texel is 1.
+}
+
+float Flux(const Light& light) {
+  // TODO: Implement this function.
+  //
+  // Note, for area light without emissive texture, we can simply multiply the
+  // emissive_strength by the surface area and the max coefficient of the
+  // emissive_factor.
+  //
+  // When there is an emissive texture, we need to compute the flux by
+  // integrating the emissive texture over the surface area of the geometry. In
+  // particular, we take the texel's max coefficient and multiply it by the max
+  // coefficient of the emissive_factor and the uv_to_world_area_ratio at that
+  // uv location. Then we sum up all the texels.
 }
 
 RTCScene BuildBVH(const Scene& scene, RTCDevice device) {

@@ -13,6 +13,11 @@ namespace sh_baker {
 namespace light_internal {
 
 AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
+  // TODO: Incorporate the emissive CDF and UV-to-world area ratio into the
+  // sampling if available. This will allow us to sample the light more
+  // efficiently. To do this, we sample an emissive texel using the 2D CDF.
+  // Scale the sample radiance by the UV-to-world area ratio.
+
   if (!light.geometry || !light.material) {
     return {};
   }
