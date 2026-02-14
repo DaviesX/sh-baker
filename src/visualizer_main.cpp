@@ -6,7 +6,7 @@
 
 #include <Eigen/Dense>
 #include <filesystem>
-#include <fstream>
+// #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -32,6 +32,9 @@ const int kWindowHeight = 720;
 DEFINE_string(input, "",
               "Path to the input folder containing scene.gltf and "
               "lightmap_*.exr files.");
+DEFINE_bool(directional, false,
+            "Reconstruct the incoming radiance field from the SH-coefficients. "
+            "Otherwise, use the baked irradiance map.");
 
 // --- Globals ---
 
@@ -259,6 +262,7 @@ int main(int argc, char* argv[]) {
     LOG(ERROR) << "Failed to init Radiance Render";
     return 1;
   }
+  g_RadianceRenderer.SetShowDirectional(FLAGS_directional);
 
   if (!g_DepthPrepass.Init()) {
     LOG(ERROR) << "Failed to init Depth Prepass";

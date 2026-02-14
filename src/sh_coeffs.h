@@ -22,6 +22,9 @@ struct SHCoeffs {
                                Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero(),
                                Eigen::Vector3f::Zero()};
 
+  // Irradiance is the integral of the incident radiance over the hemisphere.
+  Eigen::Vector3f irradiance = Eigen::Vector3f::Zero();
+
   // Scalar multiplication (scaling brightness).
   SHCoeffs operator*(float scalar) const;
 
@@ -36,9 +39,11 @@ struct SHCoeffs {
 //   radiance: The generic incoming radiance L_i(w).
 //   direction: The normalized direction vector w pointing TOWARDS the light
 //              (away from the surface point).
+//   normal: The normalized surface normal vector n.
 //   result: Pointer to the SHCoeffs to accumulate into.
 void AccumulateRadiance(const Eigen::Vector3f& radiance,
-                        const Eigen::Vector3f& direction, SHCoeffs* result);
+                        const Eigen::Vector3f& direction,
+                        const Eigen::Vector3f& normal, SHCoeffs* result);
 
 }  // namespace sh_baker
 

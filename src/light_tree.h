@@ -87,6 +87,13 @@ class LightTree {
   std::optional<SampledLight> Sample(const Eigen::Vector3f& p,
                                      const Eigen::Vector3f& n, float u) const;
 
+  // Samples a light uniformly at random, ignoring importance.
+  // Useful for debugging and comparison against importance-based sampling.
+  // u: a uniform random number in [0, 1).
+  // Returns SampledLight with light pointer and pdf = 1 / NumLights().
+  // If no lights exist, returns std::nullopt.
+  std::optional<SampledLight> SampleUniform(float u) const;
+
   // Computes the PDF for sampling a specific light.
   // p: the shading point.
   // n: the shading normal.
