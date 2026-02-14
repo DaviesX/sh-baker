@@ -4,6 +4,7 @@
 #include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
 
+#include "colorspace.h"
 #include "sh_coeffs.h"
 
 namespace sh_baker {
@@ -207,29 +208,166 @@ float SurfaceArea(const Geometry& geometry) {
   return total_area;
 }
 
-void ComputeTextureEmissionDistribution(const Texture& texture, Texture32F* pdf,
-                                        Texture32F* cdf) {
-  // TODO: Implement this function.
+void ComputeTextureEmissionDistribution(
+    const Texture& texture, const Texture32F& uv_to_world_area_ratio,
+    Texture32F* pdf, Texture32F* cdf) {
+  if (texture.pixel_data.empty() || texture.width == 0 || texture.height == 0) {
+    return;
+  }
+
+  int w = texture.width;
+  int h = texture.height;
+
+  // Step 1: Compute luminance weighted by Jacobian for each texel.
+  std::vector<float> luminance(w * h, 0.0f);
+  float total_luminance = 0.0f;
+
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      int tex_idx = (y * w + x) * texture.channels;
+      float r = SRGBToLinear(texture.pixel_data[tex_idx + 0]);
+      float g = SRGBToLinear(texture.pixel_data[tex_idx + 1]);
+      float b = SRGBToLinear(texture.pixel_data[tex_idx + 2]);
+      // Luminance (Rec. 709).
+      float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+
+      // Weight by Jacobian (UV-to-world area ratio).
+      float jacobian = 0.0f;
+      if (uv_to_world_area_ratio.width > 0) {
+        // Map from emissive texture coords to Jacobian texture coords.
+        int jx = std::clamp((int)(float(x) / w * uv_to_world_area_ratio.width),
+                            0, (int)uv_to_world_area_ratio.width - 1);
+        int jy = std::clamp((int)(float(y) / h * uv_to_world_area_ratio.height),
+                            0, (int)uv_to_world_area_ratio.height - 1);
+        jacobian = uv_to_world_area_ratio
+                       .pixel_data[jy * uv_to_world_area_ratio.width + jx];
+      }
+
+      float weighted_lum = lum * jacobian;
+      luminance[y * w + x] = weighted_lum;
+      total_luminance += weighted_lum;
+    }
+  }
+
+  if (total_luminance <= 0.0f) {
+    return;
+  }
+
+  // Step 2: Build PDF (normalized luminance).
+  pdf->width = w;
+  pdf->height = h;
+  pdf->channels = 1;
+  pdf->pixel_data.resize(w * h);
+  for (int i = 0; i < w * h; ++i) {
+    pdf->pixel_data[i] = luminance[i] / total_luminance;
+  }
+
+  // Step 3: Build 2D CDF.
+  // We store the CDF as a (w+1) x (h+1) texture with 1 channel.
+  // - conditional_cdf[y][x] = P(u <= x/w | v = y/h) stored at row y,
+  //   column x. Each row has (w+1) entries (starting from 0).
+  // - marginal_cdf[y] = P(v <= y/h) stored as the last column in each row
+  //   or separately. For simplicity, we use a flat layout:
+  //   cdf row y: conditional CDF values [0..w] (w+1 entries).
+  //   Then an extra row (h+1-th) for the marginal CDF: marginal[0..h].
   //
-  // Convert the texture to luminance and then compute the 2D PDF and CDF.
-  //
-  // The PDF should be normalized such that the sum of all texels is 1.
-  //
-  // The CDF should be computed such that the last texel is 1.
+  // Layout: (h+1) rows x (w+1) columns, 1 channel.
+  int cdf_w = w + 1;
+  int cdf_h = h + 1;
+  cdf->width = cdf_w;
+  cdf->height = cdf_h;
+  cdf->channels = 1;
+  cdf->pixel_data.resize(cdf_w * cdf_h, 0.0f);
+
+  // Row integrals for marginal.
+  std::vector<float> row_integrals(h, 0.0f);
+
+  for (int y = 0; y < h; ++y) {
+    // Conditional CDF for row y.
+    cdf->pixel_data[y * cdf_w + 0] = 0.0f;
+    float row_sum = 0.0f;
+    for (int x = 0; x < w; ++x) {
+      row_sum += luminance[y * w + x];
+      cdf->pixel_data[y * cdf_w + (x + 1)] = row_sum;
+    }
+    row_integrals[y] = row_sum;
+
+    // Normalize conditional CDF.
+    if (row_sum > 0.0f) {
+      for (int x = 1; x <= w; ++x) {
+        cdf->pixel_data[y * cdf_w + x] /= row_sum;
+      }
+    }
+    // Ensure last entry is exactly 1.
+    cdf->pixel_data[y * cdf_w + w] = 1.0f;
+  }
+
+  // Marginal CDF (stored in the last row).
+  cdf->pixel_data[h * cdf_w + 0] = 0.0f;
+  float marginal_sum = 0.0f;
+  for (int y = 0; y < h; ++y) {
+    marginal_sum += row_integrals[y];
+    cdf->pixel_data[h * cdf_w + (y + 1)] = marginal_sum;
+  }
+  // Normalize marginal CDF.
+  if (marginal_sum > 0.0f) {
+    for (int y = 1; y <= h; ++y) {
+      cdf->pixel_data[h * cdf_w + y] /= marginal_sum;
+    }
+  }
+  cdf->pixel_data[h * cdf_w + h] = 1.0f;
 }
 
 float Flux(const Light& light) {
-  // TODO: Implement this function.
-  //
-  // Note, for area light without emissive texture, we can simply multiply the
-  // emissive_strength by the surface area and the max coefficient of the
-  // emissive_factor.
-  //
-  // When there is an emissive texture, we need to compute the flux by
-  // integrating the emissive texture over the surface area of the geometry. In
-  // particular, we take the texel's max coefficient and multiply it by the max
-  // coefficient of the emissive_factor and the uv_to_world_area_ratio at that
-  // uv location. Then we sum up all the texels.
+  if (light.type != Light::Type::Area) {
+    // For non-area lights, flux is intensity * 4*pi (point) or similar.
+    // This is already stored in light.flux for punctual lights.
+    return light.flux;
+  }
+
+  const Material* mat = light.material;
+  if (!mat) return 0.0f;
+
+  // No emissive texture: flux = emissive_strength * max(emissive_factor) *
+  // area.
+  if (!mat->emissive_texture || mat->emissive_texture->pixel_data.empty()) {
+    float max_factor = mat->emissive_factor.maxCoeff();
+    return mat->emissive_strength * max_factor * light.area;
+  }
+
+  // With emissive texture: integrate luminance * Jacobian over texels.
+  // Single-sided heuristic for light tree.
+  const Texture& tex = *mat->emissive_texture;
+  int w = tex.width;
+  int h = tex.height;
+
+  float max_emissive_factor = mat->emissive_factor.maxCoeff();
+  float total_flux = 0.0f;
+
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      int idx = (y * w + x) * tex.channels;
+      float r = SRGBToLinear(tex.pixel_data[idx + 0]);
+      float g = SRGBToLinear(tex.pixel_data[idx + 1]);
+      float b = SRGBToLinear(tex.pixel_data[idx + 2]);
+      float max_coeff = std::max({r, g, b});
+
+      // Get Jacobian if available.
+      float jacobian = 0.0f;
+      if (light.uv_to_world_area_ratio) {
+        const auto& ratio = *light.uv_to_world_area_ratio;
+        int jx = std::clamp((int)(float(x) / w * ratio.width), 0,
+                            (int)ratio.width - 1);
+        int jy = std::clamp((int)(float(y) / h * ratio.height), 0,
+                            (int)ratio.height - 1);
+        jacobian = ratio.pixel_data[jy * ratio.width + jx];
+      }
+
+      total_flux += max_coeff * max_emissive_factor * jacobian;
+    }
+  }
+
+  return total_flux * mat->emissive_strength;
 }
 
 RTCScene BuildBVH(const Scene& scene, RTCDevice device) {

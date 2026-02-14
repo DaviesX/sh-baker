@@ -282,18 +282,92 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
   return surface_map;
 }
 
-Texture32F RasterizeGeometryUVToWorldAreaRatio(const Geometry& geo,
-                                               const RasterConfig& config) {
-  // TODO: Implement this function.
-  //
-  // The UV-to-world area ratio is the ratio of the world triangle area to the
-  // UV triangle area. It would be constant over a triangle.
-  //
-  // The UV triangle area can be computed using the UV coordinates.
-  //
-  // The world triangle area can be computed using the world vertices.
-  //
-  // The ratio is then used to scale the radiance of the light.
+GeometryUVMaps RasterizeGeometryUVMaps(const Geometry& geo,
+                                       const RasterConfig& config) {
+  GeometryUVMaps result;
+
+  // Initialize the area ratio texture (1 channel float).
+  result.uv_to_world_area_ratio.width = config.width;
+  result.uv_to_world_area_ratio.height = config.height;
+  result.uv_to_world_area_ratio.channels = 1;
+  result.uv_to_world_area_ratio.pixel_data.resize(config.width * config.height,
+                                                  0.0f);
+
+  // Initialize the primitive ID map (1 channel int, -1 = no triangle).
+  result.prim_id_map.width = config.width;
+  result.prim_id_map.height = config.height;
+  result.prim_id_map.channels = 1;
+  result.prim_id_map.pixel_data.resize(config.width * config.height, -1);
+
+  if (geo.indices.empty() || geo.texture_uvs.empty()) {
+    return result;
+  }
+
+  auto vertices = TransformedVertices(geo);
+  size_t tri_count = geo.indices.size() / 3;
+
+  // A simple vertex type that carries the area ratio and triangle index.
+  struct RatioVertex {
+    float ratio;
+    int32_t tri_id;
+
+    RatioVertex() : ratio(0.0f), tri_id(-1) {}
+    RatioVertex(float r, int32_t t) : ratio(r), tri_id(t) {}
+
+    // These operators exist to satisfy the RasterizeTriangle template, but
+    // the ratio and tri_id are constant over a triangle so interpolation
+    // is a no-op effectively.
+    RatioVertex operator+(const RatioVertex& b) const { return *this; }
+    RatioVertex operator-(const RatioVertex& b) const { return *this; }
+    RatioVertex operator*(float s) const { return *this; }
+    RatioVertex operator/(float s) const { return *this; }
+  };
+
+  for (size_t i = 0; i < tri_count; ++i) {
+    uint32_t idx0 = geo.indices[i * 3 + 0];
+    uint32_t idx1 = geo.indices[i * 3 + 1];
+    uint32_t idx2 = geo.indices[i * 3 + 2];
+
+    // World-space triangle area.
+    const Eigen::Vector3f& v0 = vertices[idx0];
+    const Eigen::Vector3f& v1 = vertices[idx1];
+    const Eigen::Vector3f& v2 = vertices[idx2];
+    float world_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
+
+    // UV-space triangle area.
+    const Eigen::Vector2f& uv0 = geo.texture_uvs[idx0];
+    const Eigen::Vector2f& uv1 = geo.texture_uvs[idx1];
+    const Eigen::Vector2f& uv2 = geo.texture_uvs[idx2];
+    float uv_area = 0.5f * std::abs((uv1.x() - uv0.x()) * (uv2.y() - uv0.y()) -
+                                    (uv2.x() - uv0.x()) * (uv1.y() - uv0.y()));
+
+    float ratio = (uv_area > 1e-12f) ? (world_area / uv_area) : 0.0f;
+
+    RatioVertex vertex(ratio, static_cast<int32_t>(i));
+
+    // Convert UV to raster coordinates.
+    Eigen::Vector2i t0(int(uv0.x() * config.width),
+                       int(uv0.y() * config.height));
+    Eigen::Vector2i t1(int(uv1.x() * config.width),
+                       int(uv1.y() * config.height));
+    Eigen::Vector2i t2(int(uv2.x() * config.width),
+                       int(uv2.y() * config.height));
+
+    RasterizeTriangle(
+        t0, t1, t2, vertex, vertex, vertex,
+        [&](const Eigen::Vector2i& p, const RatioVertex& v) {
+          int x = p.x();
+          int y = p.y();
+          if (x < 0 || y < 0 || x >= config.width || y >= config.height) {
+            return;
+          }
+          int pixel_idx = y * config.width + x;
+          result.uv_to_world_area_ratio.pixel_data[pixel_idx] = v.ratio;
+          result.prim_id_map.pixel_data[pixel_idx] = v.tri_id;
+        });
+  }
+
+  return result;
 }
 
 Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {

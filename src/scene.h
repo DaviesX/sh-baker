@@ -38,6 +38,14 @@ struct Texture32F {
   std::vector<float> pixel_data;
 };
 
+// --- Texture32I ---
+struct Texture32I {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t channels = 0;
+  std::vector<int32_t> pixel_data;
+};
+
 // --- Material ---
 struct Material {
   std::string name;
@@ -88,6 +96,7 @@ struct Light {
   std::optional<Texture32F> emission_pdf;
   std::optional<Texture32F> emission_cdf;
   std::optional<Texture32F> uv_to_world_area_ratio;
+  std::optional<Texture32I> prim_id_map;
 };
 
 // --- Environment ---
@@ -127,9 +136,15 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 float SurfaceArea(const Geometry& geometry);
 
 // Computes the PDF and CDF of the emissive texture. It converts the texels to
-// luminance and then computes the 2D PDF and CDF.
-void ComputeTextureEmissionDistribution(const Texture& texture, Texture32F* pdf,
-                                        Texture32F* cdf);
+// luminance, weights by the UV-to-world area ratio (Jacobian), and then
+// computes the 2D PDF and CDF.
+//
+// The CDF is stored as a 2-channel texture:
+//   - Channel 0: conditional_cdf P(u | v) for each row.
+//   - Channel 1: marginal_cdf P(v) (stored in the first column of each row).
+void ComputeTextureEmissionDistribution(
+    const Texture& texture, const Texture32F& uv_to_world_area_ratio,
+    Texture32F* pdf, Texture32F* cdf);
 
 // Returns the flux of the light.
 float Flux(const Light& light);

@@ -313,9 +313,6 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
 
   // Verify Point is on plane (x=10)
   EXPECT_NEAR(sample.point.x(), 10.0f, 1e-4f);
-  // Verify Normal (-1, 0, 0)
-  EXPECT_NEAR(sample.normal.x(), -1.0f, 1e-4f);
-
   // Verify PDF
   // Area = 2.0. NumTriangles = 1.
   // PDF = 1/1 * 1/2 = 0.5.

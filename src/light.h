@@ -18,7 +18,6 @@ namespace light_internal {
 
 struct AreaSample {
   Eigen::Vector3f point;
-  Eigen::Vector3f normal;
   Eigen::Vector3f radiance;
   float pdf = 0.f;
 };

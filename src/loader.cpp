@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "rasterizer.h"
 #include "scene.h"
 
 #define TINYGLTF_IMPLEMENTATION
@@ -642,9 +643,6 @@ void ProcessPunctualLight(const tinygltf::Model& model,
 void ProcessAreaLights(const std::vector<Material>& materials,
                        const std::vector<Geometry>& geometries,
                        std::vector<Light>* result) {
-  // TODO: Pre-compute the CDF and PDF of the emissive texture and the
-  // UV-to-world area ratio for each geometry. Finally, the flux.
-
   // Group geometries by material id for faster lookup.
   std::unordered_map<int, std::vector<const Geometry*>> geos_by_mat;
   for (size_t i = 0; i < geometries.size(); i++) {
@@ -675,6 +673,32 @@ void ProcessAreaLights(const std::vector<Material>& materials,
       area_light.material = &materials[mat_idx];
       area_light.geometry = geo;
       area_light.area = SurfaceArea(*geo);
+
+      // Pre-compute UV maps and emission distribution for textured lights.
+      if (mat.emissive_texture && !mat.emissive_texture->pixel_data.empty() &&
+          !geo->texture_uvs.empty()) {
+        const Texture& emissive_tex = *mat.emissive_texture;
+        RasterConfig raster_config;
+        raster_config.width = emissive_tex.width;
+        raster_config.height = emissive_tex.height;
+
+        GeometryUVMaps uv_maps = RasterizeGeometryUVMaps(*geo, raster_config);
+        area_light.uv_to_world_area_ratio =
+            std::move(uv_maps.uv_to_world_area_ratio);
+        area_light.prim_id_map = std::move(uv_maps.prim_id_map);
+
+        Texture32F pdf, cdf;
+        ComputeTextureEmissionDistribution(
+            emissive_tex, *area_light.uv_to_world_area_ratio, &pdf, &cdf);
+        if (!pdf.pixel_data.empty()) {
+          area_light.emission_pdf = std::move(pdf);
+          area_light.emission_cdf = std::move(cdf);
+        }
+      }
+
+      // Compute flux (uses uv_to_world_area_ratio if available).
+      area_light.flux = Flux(area_light);
+
       result->emplace_back(std::move(area_light));
     }
   }

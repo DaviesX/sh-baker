@@ -177,7 +177,7 @@ TEST(RasterizerTest, RasterizeQuadScanline) {
   config.width = 4;
   config.height = 4;
 
-  std::vector<SurfacePoint> result = RasterizeSceneScanline(scene, config);
+  std::vector<SurfacePoint> result = RasterizeScene(scene, config);
 
   EXPECT_EQ(result.size(), 16);
 

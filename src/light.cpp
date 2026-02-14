@@ -13,72 +13,160 @@ namespace sh_baker {
 namespace light_internal {
 
 AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
-  // TODO: Incorporate the emissive CDF and UV-to-world area ratio into the
-  // sampling if available. This will allow us to sample the light more
-  // efficiently. To do this, we sample an emissive texel using the 2D CDF.
-  // Scale the sample radiance by the UV-to-world area ratio.
-
   if (!light.geometry || !light.material) {
     return {};
   }
   const Geometry& geo = *light.geometry;
   if (geo.indices.empty()) return {};
 
-  size_t num_triangles = geo.indices.size() / 3;
-
-  // 1. Select Triangle (Uniformly)
-  std::uniform_int_distribution<size_t> dist(0, num_triangles - 1);
-  size_t tri_idx = dist(rng);
-
-  uint32_t i0 = geo.indices[tri_idx * 3 + 0];
-  uint32_t i1 = geo.indices[tri_idx * 3 + 1];
-  uint32_t i2 = geo.indices[tri_idx * 3 + 2];
-
-  // 2. Sample Point (Uniform Barycentric)
   std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
-  float u1 = u_dist(rng);
-  float u2 = u_dist(rng);
 
-  if (u1 + u2 > 1.0f) {
-    u1 = 1.0f - u1;
-    u2 = 1.0f - u2;
+  // ---- CDF-based importance sampling path ----
+  if (light.emission_cdf && light.prim_id_map && light.uv_to_world_area_ratio &&
+      !geo.texture_uvs.empty()) {
+    const Texture32F& cdf = *light.emission_cdf;
+    const Texture32I& prim_map = *light.prim_id_map;
+    const Texture32F& ratio_map = *light.uv_to_world_area_ratio;
+
+    // CDF layout: (h+1) rows x (w+1) columns.
+    // Rows [0..h-1]: conditional CDF P(u|v) for each row.
+    // Row h: marginal CDF P(v).
+    int tex_w = prim_map.width;   // Same as emissive texture width.
+    int tex_h = prim_map.height;  // Same as emissive texture height.
+    int cdf_w = tex_w + 1;
+
+    // 1. Sample row v from marginal CDF (last row of CDF texture).
+    float xi_v = u_dist(rng);
+    const float* marginal = &cdf.pixel_data[tex_h * cdf_w];
+
+    // Binary search in marginal CDF [1..h].
+    int v_idx = static_cast<int>(
+        std::lower_bound(marginal + 1, marginal + tex_h + 1, xi_v) -
+        (marginal + 1));
+    v_idx = std::clamp(v_idx, 0, tex_h - 1);
+
+    // Marginal PDF for this row.
+    float marginal_pdf = marginal[v_idx + 1] - marginal[v_idx];
+
+    // 2. Sample column u from conditional CDF (row v_idx).
+    float xi_u = u_dist(rng);
+    const float* conditional = &cdf.pixel_data[v_idx * cdf_w];
+
+    int u_idx = static_cast<int>(
+        std::lower_bound(conditional + 1, conditional + tex_w + 1, xi_u) -
+        (conditional + 1));
+    u_idx = std::clamp(u_idx, 0, tex_w - 1);
+
+    float conditional_pdf = conditional[u_idx + 1] - conditional[u_idx];
+
+    // 3. Look up triangle ID.
+    int prim_id = prim_map.pixel_data[v_idx * tex_w + u_idx];
+    if (prim_id < 0 ||
+        static_cast<size_t>(prim_id) * 3 + 2 >= geo.indices.size()) {
+      // Sampled a background texel; fall through to uniform sampling.
+      goto uniform_sample;
+    }
+
+    {
+      // 4. Map sampled texel back to 3D point using barycentrics.
+      uint32_t i0 = geo.indices[prim_id * 3 + 0];
+      uint32_t i1 = geo.indices[prim_id * 3 + 1];
+      uint32_t i2 = geo.indices[prim_id * 3 + 2];
+
+      // Sampled UV (center of texel).
+      float su = (u_idx + 0.5f) / tex_w;
+      float sv = (v_idx + 0.5f) / tex_h;
+
+      // Triangle UVs.
+      const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
+      const Eigen::Vector2f& uv1 = geo.texture_uvs[i1];
+      const Eigen::Vector2f& uv2 = geo.texture_uvs[i2];
+
+      // Solve for barycentrics: P = w*uv0 + b1*uv1 + b2*uv2.
+      Eigen::Vector2f d1 = uv1 - uv0;
+      Eigen::Vector2f d2 = uv2 - uv0;
+      Eigen::Vector2f dp = Eigen::Vector2f(su, sv) - uv0;
+
+      float det = d1.x() * d2.y() - d1.y() * d2.x();
+      if (std::abs(det) < 1e-12f) {
+        goto uniform_sample;
+      }
+      float inv_det = 1.0f / det;
+      float b1 = (dp.x() * d2.y() - dp.y() * d2.x()) * inv_det;
+      float b2 = (d1.x() * dp.y() - d1.y() * dp.x()) * inv_det;
+      float b0 = 1.0f - b1 - b2;
+
+      // Clamp barycentrics (texel center may be slightly outside triangle).
+      b0 = std::clamp(b0, 0.0f, 1.0f);
+      b1 = std::clamp(b1, 0.0f, 1.0f);
+      b2 = std::clamp(b2, 0.0f, 1.0f);
+      float bsum = b0 + b1 + b2;
+      if (bsum > 0.0f) {
+        b0 /= bsum;
+        b1 /= bsum;
+        b2 /= bsum;
+      }
+
+      // 5. Interpolate world position.
+      const Eigen::Vector3f& v0 = geo.vertices[i0];
+      const Eigen::Vector3f& v1 = geo.vertices[i1];
+      const Eigen::Vector3f& v2 = geo.vertices[i2];
+      Eigen::Vector3f p = b0 * v0 + b1 * v1 + b2 * v2;
+
+      // 6. Emission at sampled UV.
+      Eigen::Vector3f emission =
+          GetEmission(*light.material, Eigen::Vector2f(su, sv));
+
+      // 7. PDF: texture_pdf / jacobian.
+      // texture_pdf = marginal_pdf * conditional_pdf * (tex_w * tex_h)
+      // (the w*h factor converts from per-texel to per-unit-UV-area).
+      float jacobian = ratio_map.pixel_data[v_idx * tex_w + u_idx];
+      float texture_pdf = marginal_pdf * conditional_pdf * (tex_w * tex_h);
+      float pdf_area = (jacobian > 1e-12f) ? (texture_pdf / jacobian) : 1e-6f;
+      pdf_area = std::max(pdf_area, 1e-6f);
+
+      return {p, emission, pdf_area};
+    }
   }
-  float w = 1.0f - u1 - u2;
 
-  // 3. Interpolate Attributes
-  const Eigen::Vector3f& v0 = geo.vertices[i0];
-  const Eigen::Vector3f& v1 = geo.vertices[i1];
-  const Eigen::Vector3f& v2 = geo.vertices[i2];
+uniform_sample:
+  // ---- Fallback: uniform triangle sampling ----
+  {
+    size_t num_triangles = geo.indices.size() / 3;
+    std::uniform_int_distribution<size_t> dist(0, num_triangles - 1);
+    size_t tri_idx = dist(rng);
 
-  Eigen::Vector3f p = w * v0 + u1 * v1 + u2 * v2;
+    uint32_t i0 = geo.indices[tri_idx * 3 + 0];
+    uint32_t i1 = geo.indices[tri_idx * 3 + 1];
+    uint32_t i2 = geo.indices[tri_idx * 3 + 2];
 
-  Eigen::Vector3f n = Eigen::Vector3f(0, 1, 0);
-  if (!geo.normals.empty()) {
-    const Eigen::Vector3f& n0 = geo.normals[i0];
-    const Eigen::Vector3f& n1 = geo.normals[i1];
-    const Eigen::Vector3f& n2 = geo.normals[i2];
-    n = (w * n0 + u1 * n1 + u2 * n2).normalized();
+    float u1 = u_dist(rng);
+    float u2 = u_dist(rng);
+    if (u1 + u2 > 1.0f) {
+      u1 = 1.0f - u1;
+      u2 = 1.0f - u2;
+    }
+    float w = 1.0f - u1 - u2;
+
+    const Eigen::Vector3f& v0 = geo.vertices[i0];
+    const Eigen::Vector3f& v1 = geo.vertices[i1];
+    const Eigen::Vector3f& v2 = geo.vertices[i2];
+    Eigen::Vector3f p = w * v0 + u1 * v1 + u2 * v2;
+
+    Eigen::Vector2f uv = Eigen::Vector2f::Zero();
+    if (!geo.texture_uvs.empty()) {
+      const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
+      const Eigen::Vector2f& uv1 = geo.texture_uvs[i1];
+      const Eigen::Vector2f& uv2 = geo.texture_uvs[i2];
+      uv = w * uv0 + u1 * uv1 + u2 * uv2;
+    }
+
+    Eigen::Vector3f emission = GetEmission(*light.material, uv);
+
+    float triangle_area = (v0 - v1).cross(v0 - v2).norm() / 2.f;
+    float pdf = std::max(1e-6f, 1.f / num_triangles * 1.f / triangle_area);
+    return {p, emission, pdf};
   }
-
-  // 4. Radiance (Emission)
-  Eigen::Vector2f uv = Eigen::Vector2f::Zero();
-  if (!geo.texture_uvs.empty()) {
-    const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
-    const Eigen::Vector2f& uv1 = geo.texture_uvs[i1];
-    const Eigen::Vector2f& uv2 = geo.texture_uvs[i2];
-    uv = w * uv0 + u1 * uv1 + u2 * uv2;
-  }
-
-  Eigen::Vector3f emission = GetEmission(*light.material, uv);
-
-  // 5. PDF
-  // We first uniformly picked a triangle, then a point on the triangle.
-  // So P(x) = P(triangle) * P(point | triangle)
-  // P(triangle) = 1 / num_triangles
-  // P(point | triangle) = 1 / triangle_area
-  float triangle_area = (v0 - v1).cross(v0 - v2).norm() / 2.f;
-  float pdf = std::max(1e-6f, 1.f / num_triangles * 1.f / triangle_area);
-  return {p, n, emission, pdf};
 }
 
 }  // namespace light_internal
