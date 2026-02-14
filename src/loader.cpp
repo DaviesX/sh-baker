@@ -637,6 +637,8 @@ void ProcessPunctualLight(const tinygltf::Model& model,
     }
   }
 
+  l.flux = Flux(l);
+
   result->push_back(std::move(l));
 }
 

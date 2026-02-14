@@ -315,55 +315,65 @@ std::optional<Texture32F> ComputeTextureEmissionCDF(
 }
 
 float Flux(const Light& light) {
-  if (light.type != Light::Type::Area) {
-    // For non-area lights, flux is intensity * 4*pi (point) or similar.
-    // This is already stored in light.flux for punctual lights.
-    return light.flux;
-  }
+  switch (light.type) {
+    case Light::Type::Point: {
+      return light.intensity * 4.0f * kPi;
+    }
+    case Light::Type::Spot: {
+      return light.intensity * 2.0f * kPi * (1.0f - light.cos_outer_cone);
+    }
+    case Light::Type::Directional: {
+      return light.intensity * kPi;
+    }
+    case Light::Type::Area: {
+      const Material* mat = light.material;
+      CHECK_NOTNULL(mat);
 
-  const Material* mat = light.material;
-  if (!mat) return 0.0f;
-
-  // No emissive texture: flux = emissive_strength * max(emissive_factor) *
-  // area.
-  if (!mat->emissive_texture || mat->emissive_texture->pixel_data.empty()) {
-    float max_factor = mat->emissive_factor.maxCoeff();
-    return mat->emissive_strength * max_factor * light.area;
-  }
-
-  // With emissive texture: integrate luminance * Jacobian over texels.
-  // Single-sided heuristic for light tree.
-  const Texture& tex = *mat->emissive_texture;
-  int w = tex.width;
-  int h = tex.height;
-
-  float max_emissive_factor = mat->emissive_factor.maxCoeff();
-  float total_flux = 0.0f;
-
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      int idx = (y * w + x) * tex.channels;
-      float r = SRGBToLinear(tex.pixel_data[idx + 0]);
-      float g = SRGBToLinear(tex.pixel_data[idx + 1]);
-      float b = SRGBToLinear(tex.pixel_data[idx + 2]);
-      float max_coeff = std::max({r, g, b});
-
-      // Get Jacobian if available.
-      float jacobian = 0.0f;
-      if (light.uv_to_world_area_ratio) {
-        const auto& ratio = *light.uv_to_world_area_ratio;
-        int jx = std::clamp((int)(float(x) / w * ratio.width), 0,
-                            (int)ratio.width - 1);
-        int jy = std::clamp((int)(float(y) / h * ratio.height), 0,
-                            (int)ratio.height - 1);
-        jacobian = ratio.pixel_data[jy * ratio.width + jx];
+      // No emissive texture: flux = emissive_strength * max(emissive_factor) *
+      // area.
+      if (!mat->emissive_texture || mat->emissive_texture->pixel_data.empty()) {
+        float max_factor = mat->emissive_factor.maxCoeff();
+        return mat->emissive_strength * max_factor * light.area;
       }
 
-      total_flux += max_coeff * max_emissive_factor * jacobian;
-    }
-  }
+      // With emissive texture: integrate luminance * Jacobian over texels.
+      // Single-sided heuristic for light tree.
+      const Texture& tex = *mat->emissive_texture;
+      int w = tex.width;
+      int h = tex.height;
 
-  return total_flux * mat->emissive_strength;
+      float max_emissive_factor = mat->emissive_factor.maxCoeff();
+      float total_flux = 0.0f;
+
+      for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+          int idx = (y * w + x) * tex.channels;
+          float max_coeff = 0.f;
+          for (int c = 0; c < tex.channels; ++c) {
+            max_coeff =
+                std::max(max_coeff, SRGBToLinear(tex.pixel_data[idx + c]));
+          }
+
+          // Get Jacobian if available.
+          float jacobian = 0.0f;
+          if (light.uv_to_world_area_ratio) {
+            const auto& ratio = *light.uv_to_world_area_ratio;
+            int jx = std::clamp((int)(float(x) / w * ratio.width), 0,
+                                (int)ratio.width - 1);
+            int jy = std::clamp((int)(float(y) / h * ratio.height), 0,
+                                (int)ratio.height - 1);
+            jacobian = ratio.pixel_data[jy * ratio.width + jx];
+          }
+
+          total_flux += max_coeff * max_emissive_factor * jacobian;
+        }
+      }
+
+      return total_flux * mat->emissive_strength;
+    }
+    default:
+      return 0.0f;
+  }
 }
 
 RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
