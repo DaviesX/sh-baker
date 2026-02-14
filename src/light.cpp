@@ -8,6 +8,8 @@
 #include "occlusion.h"
 #include "sh_coeffs.h"
 
+// #define USE_UNIFORM_SAMPLING 1
+
 namespace sh_baker {
 
 namespace light_internal {
@@ -111,7 +113,7 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
       const Eigen::Vector3f& v0 = geo.vertices[i0];
       const Eigen::Vector3f& v1 = geo.vertices[i1];
       const Eigen::Vector3f& v2 = geo.vertices[i2];
-      Eigen::Vector3f p = b0 * v0 + b1 * v1 + b2 * v2;
+      Eigen::Vector3f p = geo.transform * (b0 * v0 + b1 * v1 + b2 * v2);
 
       // 6. Emission at sampled UV.
       Eigen::Vector3f emission =
@@ -151,7 +153,7 @@ uniform_sample:
     const Eigen::Vector3f& v0 = geo.vertices[i0];
     const Eigen::Vector3f& v1 = geo.vertices[i1];
     const Eigen::Vector3f& v2 = geo.vertices[i2];
-    Eigen::Vector3f p = w * v0 + u1 * v1 + u2 * v2;
+    Eigen::Vector3f p = geo.transform * (w * v0 + u1 * v1 + u2 * v2);
 
     Eigen::Vector2f uv = Eigen::Vector2f::Zero();
     if (!geo.texture_uvs.empty()) {
@@ -188,8 +190,12 @@ Eigen::Vector3f EvaluateLightSamples(
 
   for (unsigned i = 0; i < num_samples; ++i) {
     float u = u_dist(rng);
+#ifdef USE_UNIFORM_SAMPLING
+    std::optional<SampledLight> sampled_light = light_tree->SampleUniform(u);
+#else
     std::optional<SampledLight> sampled_light =
         light_tree->Sample(hit_point, hit_point_normal, u);
+#endif
 
     if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
 
@@ -253,8 +259,12 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
 
   for (unsigned i = 0; i < num_samples; ++i) {
     float u = u_dist(rng);
+#ifdef USE_UNIFORM_SAMPLING
+    std::optional<SampledLight> sampled_light = light_tree->SampleUniform(u);
+#else
     std::optional<SampledLight> sampled_light =
         light_tree->Sample(hit_point, hit_point_normal, u);
+#endif
 
     if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
 
@@ -304,8 +314,10 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
 
     float joint_pdf = sampled_light->pdf * area_sample_pdf;
     if (joint_pdf > 1e-8f) {
-      Eigen::Vector3f Li = radiance / (joint_pdf * float(num_samples));
-      AccumulateRadiance(Li, visibility_ray.direction, accumulator);
+      float Li_factor = 1.0f / (joint_pdf * float(num_samples));
+      Eigen::Vector3f Li = radiance * Li_factor;
+      AccumulateRadiance(Li, visibility_ray.direction, hit_point_normal,
+                         accumulator);
     }
   }
 }

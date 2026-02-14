@@ -39,6 +39,8 @@ SHCoeffs ProjectLatLongMap(const Texture32F& tex) {
   float d_phi = kTwoPi / w;
   float d_theta = kPi / h;
 
+  Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
+
   for (int y = 0; y < h; ++y) {
     // Theta from 0 (top) to pi (bottom)
     float theta = (y + 0.5f) * d_theta;
@@ -64,7 +66,7 @@ SHCoeffs ProjectLatLongMap(const Texture32F& tex) {
 
       Eigen::Vector3f radiance = GetPixel(tex, x, y);
 
-      AccumulateRadiance(radiance * d_omega, dir, &coeffs);
+      AccumulateRadiance(radiance * d_omega, dir, up, &coeffs);
     }
   }
   return coeffs;
@@ -101,9 +103,10 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
   float d_phi = kTwoPi / steps_phi;
 
   Eigen::Vector3f sun_dir = env.sun_direction.normalized();
+  Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
 
   // Zenith luminance for normalization
-  float zenith_val = EvaluatePerez(Eigen::Vector3f(0, 1, 0), sun_dir);
+  float zenith_val = EvaluatePerez(up, sun_dir);
   if (zenith_val <= 1e-6f) zenith_val = 1.0f;
 
   for (int t = 0; t < steps_theta; ++t) {
@@ -143,7 +146,7 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
       float differential_solid_angle = sin_theta * d_theta * d_phi;
 
       // 4. Accumulate
-      AccumulateRadiance(radiance * differential_solid_angle, dir, &coeffs);
+      AccumulateRadiance(radiance * differential_solid_angle, dir, up, &coeffs);
     }
   }
 

@@ -12,6 +12,10 @@ uniform sampler2D u_MRTex;  // Metallic (B), Roughness (G)
 
 uniform vec3 u_CamPos;
 
+// --- Options ---
+uniform int u_UsePackedLuminance;
+uniform bool u_ShowDirectional;
+
 // --- SH Textures (Standard) ---
 uniform sampler2D u_L0;
 uniform sampler2D u_L1m1;
@@ -24,10 +28,10 @@ uniform sampler2D u_L21;
 uniform sampler2D u_L22;
 
 // --- SH Textures (Packed) ---
-uniform int u_UsePackedLuminance;
 uniform sampler2D u_PackedTex0;
 uniform sampler2D u_PackedTex1;
 uniform sampler2D u_PackedTex2;
+uniform sampler2D u_IrradianceTex;
 
 // -- SH Sky ---
 uniform vec3 u_SkySH[9];
@@ -159,25 +163,17 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
 
 void main() {
   // 1. PBR Parameters
-  // Albedo
-  vec3 albedo = texture(u_AlbedoTex, vTexCoord0).rgb;
+  vec4 albedo_sample = texture(u_AlbedoTex, vTexCoord0);
+  if (albedo_sample.a < 0.1) {
+    discard;
+  }
+
+  vec3 albedo = albedo_sample.rgb;
 
   // Normal
-  // 1. Normalize the interpolated Normal
-  // Interpolation shortens vectors, so we must normalize back to length 1.
   vec3 N = normalize(vNormal);
-
-  // 2. Re-orthogonalize Tangent (Gram-Schmidt)
-  // We remove the part of T that points in the same direction as N.
-  // T_new = T - (N * dot(T, N))
   vec3 T = normalize(vTangent.xyz - N * dot(vTangent.xyz, N));
-
-  // 3. Re-calculate Bitangent
-  // Do NOT trust the interpolated bitangent. It is safer and cheaper
-  // to calculate it using the Cross Product of the clean N and T.
-  // (Note: You might need a 'handedness' multiplier here if your meshes use
-  // mirrored UVs)
-  vec3 B = cross(N, T) * (vTangent.w > 0 ? 1.0 : -1.0);
+  vec3 B = cross(N, T) * (vTangent.w > 0.0 ? 1.0 : -1.0);
   vec3 mapNormal = texture(u_NormalTex, vTexCoord0).rgb;
   mapNormal = mapNormal * 2.0 - 1.0;
   mat3 TBN = mat3(T, B, N);
@@ -185,38 +181,36 @@ void main() {
 
   // Metallic/Roughness
   vec4 mrSample = texture(u_MRTex, vTexCoord0);
-  // glTF: G = Roughness, B = Metallic
   float roughness = mrSample.g;
   float metallic = mrSample.b;
 
-  // 2. View/Reflect vectors
+  // 2. View/Reflect
   vec3 V = normalize(u_CamPos - vWorldPos);
-  vec3 R = reflect(-V, N);  // Reflection vector
+  vec3 R = reflect(-V, N);
 
   // 3. Shading
-  // Fetch SH Coefficients from lightmap
   vec3 sh_coeffs[9];
   float visibility;
   GetSHCoeffs(vTexCoord1, sh_coeffs, visibility);
 
-  // Diffuse Irradiance (SH along Normal)
-  // We use EvalSHIrradiance to include the Cosine Lobe convolution (A_l
-  // factors). Note: Irradiance E = Integral(L * cos theta). For Lambertian
-  // diffuse: Lo = (Albedo / PI) * E. Evaluate E:
-  vec3 E_diffuse = EvalSHIrradiance(N, sh_coeffs);
+  vec3 E_diffuse;
+  if (u_ShowDirectional) {
+    E_diffuse = EvalSHIrradiance(N, sh_coeffs);
+  } else {
+    // Sample Irradiance Map (which is already convoluted irradiance)
+    E_diffuse = texture(u_IrradianceTex, vTexCoord1).rgb;
+  }
 
-  // Add Sky Ambient (also convolved)
+  // Add Sky Ambient
   vec3 E_sky = visibility * EvalSHIrradiance(N, u_SkySH);
   vec3 E_total = E_diffuse + E_sky;
 
-  // Specular Radiance (SH along Reflection) -> Rough approximation
-  // We use EvalSHRadiance to get the raw incident light L(R).
+  // Specular
   vec3 specularRadiance = EvalSHRadiance(R, sh_coeffs);
 
-  // Compute F0
+  // Fresnel
   vec3 F0 = vec3(0.04);
   F0 = mix(F0, albedo, metallic);
-
   vec3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
 
   vec3 kS = F;
@@ -227,7 +221,7 @@ void main() {
   vec3 diffuse = kD * (E_total * (1.0 / PI)) * albedo;
   vec3 specular = specularRadiance * F;
 
-  // Output Linear HDR Color
-  vec3 color = diffuse + specular;
+  vec3 color =
+      u_ShowDirectional ? diffuse + specular : (E_total * (1.0 / PI)) * albedo;
   FragColor = vec4(color, 1.0);
 }

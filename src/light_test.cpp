@@ -17,68 +17,21 @@ class LightTest : public ::testing::Test {
   void SetUp() override {
     device_ = rtcNewDevice(nullptr);
 
-    // Setup a simple scene
-    scene_.lights.clear();
-    scene_.materials.clear();
-    scene_.geometries.clear();
-
     // Dummy Material
-    Material mat;
-    mat.name = "default";
-    mat.albedo =
+    mat_.name = "default";
+    mat_.albedo =
         Texture{.width = 1,
                 .height = 1,
                 .channels = 3,
                 .pixel_data = std::vector<uint8_t>(3, LinearToSRGB(.8f))};
-    scene_.materials.push_back(mat);
-
-    // Add Point Light
-    Light point;
-    point.type = Light::Type::Point;
-    point.position = Eigen::Vector3f(0, 10, 0);
-    point.color = Eigen::Vector3f(1, 1, 1);
-    point.intensity = 100.0f;
-    scene_.lights.push_back(point);
-
-    // Add Area Light
-    // Need dummy geometry
-    Geometry area_geo;
-    area_geo.vertices = {Eigen::Vector3f(10, -1, 1), Eigen::Vector3f(10, 1, 0),
-                         Eigen::Vector3f(10, -1, -1)};
-    area_geo.normals = {Eigen::Vector3f(-1, 0, 0), Eigen::Vector3f(-1, 0, 0),
-                        Eigen::Vector3f(-1, 0, 0)};
-    area_geo.indices = {0, 1, 2};
-    area_geo.material_id = 0;
-
-    scene_.geometries.push_back(area_geo);
-
-    Light area;
-    area.type = Light::Type::Area;
-
-    area.intensity = 10.0f;
-    area.area = 2.0f;
-    // Pointers must be set manually as Loader does it
-    // Wait, Loader sets pointers at end of LoadScene.
-    // Here we construct manually. So we must set pointers.
-    // Warning: scene_.geometries vector might reallocate if we push more.
-    // But we only push once here.
-    // However, scene_.lights copy 'area'. If 'area' has pointers to
-    // &scene_.geometries[0], it's fine.
-    scene_.lights.push_back(area);
-
-    // Fix pointers for test
-    scene_.lights[1].geometry = &scene_.geometries[0];
-    scene_.lights[1].material = &scene_.materials[0];
-
-    // Build light tree
-    light_tree_.Build(scene_.lights);
   }
 
   void TearDown() override { rtcReleaseDevice(device_); }
 
   RTCDevice device_;
-  Scene scene_;
-  LightTree light_tree_;
+  Material mat_;
+  // Scene scene_;
+  // LightTree light_tree_;
   std::mt19937 rng_{12345};
 };
 
@@ -90,7 +43,9 @@ TEST_F(LightTest, EvaluatePointLight) {
   point.color = Eigen::Vector3f(1, 1, 1);
   point.intensity = 100.0f;
 
-  std::vector<Light> lights = {point};
+  std::vector<Light> lights{point};
+  LightTree light_tree;
+  light_tree.Build(lights);
 
   // Hit Point at Origin, Normal Up.
   Eigen::Vector3f P(0, 0, 0);
@@ -109,8 +64,8 @@ TEST_F(LightTest, EvaluatePointLight) {
   // BRDF = 1/PI.
   // Result = 1/PI.
 
-  Eigen::Vector3f result = EvaluateLightSamples(
-      &light_tree_, rtc_scene, P, N, wo, scene_.materials[0], uv, 1, rng_);
+  Eigen::Vector3f result =
+      EvaluateLightSamples(&light_tree, rtc_scene, P, N, wo, mat_, uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -121,16 +76,10 @@ TEST_F(LightTest, EvaluatePointLight) {
 }
 
 TEST_F(LightTest, EvaluateAreaLight) {
-  // Clear scene to avoid pollution/pointer invalidation from SetUp
-  scene_.lights.clear();
-  scene_.geometries.clear();
-  scene_.materials.clear();
-
-  Material mat;
-  mat.name = "emit";
-  mat.emissive_strength = 10.0f;  // Important
-  mat.emissive_factor = Eigen::Vector3f::Ones();
-  scene_.materials.push_back(mat);
+  Material emissive_mat;
+  emissive_mat.name = "emit";
+  emissive_mat.emissive_strength = 10.0f;  // Important
+  emissive_mat.emissive_factor = Eigen::Vector3f::Ones();
 
   // Area Light Geometry (Y=10)
   Geometry area_geo;
@@ -152,21 +101,19 @@ TEST_F(LightTest, EvaluateAreaLight) {
   area_geo.indices = {0, 2, 1};
   area_geo.material_id = 0;
 
-  scene_.geometries.push_back(area_geo);
-
   Light area;
   area.type = Light::Type::Area;
 
-  area.geometry = &scene_.geometries[0];
-  area.material = &scene_.materials[0];
+  area.geometry = &area_geo;
+  area.material = &emissive_mat;
   area.intensity = 10.0f;
   area.area = 2.0f;
 
-  scene_.lights.push_back(area);
+  std::vector<Light> lights{area};
 
   // Rebuild light tree for this test's specific scene
   LightTree test_light_tree;
-  test_light_tree.Build(scene_.lights);
+  test_light_tree.Build(lights);
 
   Eigen::Vector3f P(0, 0, 0);
   Eigen::Vector3f N(0, 1, 0);   // Pointing UP towards Light
@@ -176,9 +123,8 @@ TEST_F(LightTest, EvaluateAreaLight) {
   RTCScene rtc_scene = rtcNewScene(device_);
 
   // Eval 100 samples
-  Eigen::Vector3f result =
-      EvaluateLightSamples(&test_light_tree, rtc_scene, P, N, wo,
-                           scene_.materials[0], uv, 100, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(&test_light_tree, rtc_scene, P,
+                                                N, wo, mat_, uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -294,18 +240,38 @@ TEST_F(LightTest, SpotLightRadiance_Falloff) {
 }
 
 TEST_F(LightTest, SampleAreaLight_Internal) {
-  ASSERT_GE(scene_.lights.size(), 2);
-  // Use the Area Light from SetUp (index 1)
-  const Light& area = scene_.lights[1];
-  ASSERT_NE(area.geometry, nullptr);
-  ASSERT_NE(area.material, nullptr);
+  Material emissive_mat;
+  emissive_mat.name = "emit";
+  emissive_mat.emissive_strength = 10.0f;  // Important
+  emissive_mat.emissive_factor = Eigen::Vector3f::Ones();
 
-  // Set Emission
-  scene_.materials[0].emissive_strength = 10.0f;
-  // Previously emission might have used albedo (0.8), but now uses
-  // emissive_factor. We need to set emissive_factor if we want non-zero
-  // emission without texture.
-  scene_.materials[0].emissive_factor = Eigen::Vector3f::Ones();
+  // Area Light Geometry (Y=10)
+  Geometry area_geo;
+  area_geo.vertices = {Eigen::Vector3f(-1, 10, 1), Eigen::Vector3f(1, 10, 1),
+                       Eigen::Vector3f(0, 10, -1)};
+  // Normal (0, -1, 0) -- Down
+  area_geo.normals = {Eigen::Vector3f(0, -1, 0), Eigen::Vector3f(0, -1, 0),
+                      Eigen::Vector3f(0, -1, 0)};
+  area_geo.indices = {0, 1, 2};  // Winding?
+  // V1-V0 = (2,0,0). V2-V0=(1,0,-2). Cross=(0,4,0) -> Up.
+  // Wait, if geometric normal is UP, and we provide normal DOWN,
+  // SampleAreaLight uses interpolated normal (-1).
+  // But AreaLightRadiance checks dot(N, -L).
+  // If we are below (0,0,0), L is (0,1,0). -L is (0,-1,0).
+  // dot((0,-1,0), (0,-1,0)) = 1. Good.
+  // But strictly, geometric normal check?
+  // Embree ray intersection should hit it.
+  // Let's ensure indices produce Down normal to be safe: {0, 2, 1}.
+  area_geo.indices = {0, 2, 1};
+  area_geo.material_id = 0;
+
+  Light area;
+  area.type = Light::Type::Area;
+
+  area.geometry = &area_geo;
+  area.material = &emissive_mat;
+  area.intensity = 10.0f;
+  area.area = 2.0f;
 
   // Sample
   light_internal::AreaSample sample =
@@ -313,6 +279,7 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
 
   // Verify Point is on plane (x=10)
   EXPECT_NEAR(sample.point.x(), 10.0f, 1e-4f);
+
   // Verify PDF
   // Area = 2.0. NumTriangles = 1.
   // PDF = 1/1 * 1/2 = 0.5.

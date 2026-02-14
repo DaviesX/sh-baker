@@ -76,22 +76,20 @@ inline PointLightIncoming PointLightIncomingRadiance(const Light& light,
   Eigen::Vector3f L = light.position - P;
   float dist_sq = L.squaredNorm();
   float dist = std::sqrt(dist_sq);
+  L /= dist;
 
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
-  visibility_ray->direction = light.position - P;
+  visibility_ray->direction = L;
   visibility_ray->tnear = 0.005f;
   visibility_ray->tfar = dist - 0.005f;
 
   // Incoming radiance without visibility term.
-  L /= dist;
-
   float cos_n = N.dot(L);
   if (cos_n < 0.f) {
     return PointLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
-  return PointLightIncoming{light.intensity * light.color / (dist * dist), L,
-                            cos_n};
+  return PointLightIncoming{light.intensity * light.color / dist_sq, L, cos_n};
 }
 
 template <typename Brdf>
@@ -121,16 +119,15 @@ inline SpotLightIncoming SpotLightIncomingRadiance(const Light& light,
   Eigen::Vector3f L = light.position - P;
   float dist_sq = L.squaredNorm();
   float dist = std::sqrt(dist_sq);
+  L /= dist;
 
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
-  visibility_ray->direction = light.position - P;
+  visibility_ray->direction = L;
   visibility_ray->tnear = 0.005f;
   visibility_ray->tfar = dist - 0.005f;
 
   // Incoming radiance without visibility term.
-  L /= dist;
-
   float cos_n = N.dot(L);
   float cos_l = light.direction.dot(-L);
   float falloff = (cos_l - light.cos_outer_cone) /
@@ -139,8 +136,8 @@ inline SpotLightIncoming SpotLightIncomingRadiance(const Light& light,
   if (cos_n < 0.f) {
     return SpotLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
-  return SpotLightIncoming{
-      light.intensity * light.color / (dist * dist) * falloff, L, cos_n};
+  return SpotLightIncoming{light.intensity * light.color / dist_sq * falloff, L,
+                           cos_n};
 }
 
 template <typename Brdf>
@@ -184,7 +181,7 @@ inline AreaLightIncoming AreaLightIncomingRadiance(const AreaSample& sample,
   if (cos_n < 0.f) {
     return AreaLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
-  return AreaLightIncoming{sample.radiance / (dist * dist), L, cos_n};
+  return AreaLightIncoming{sample.radiance / dist_sq, L, cos_n};
 }
 
 template <typename Brdf>
