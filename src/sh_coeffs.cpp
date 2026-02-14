@@ -37,6 +37,7 @@ SHCoeffs SHCoeffs::operator*(float scalar) const {
   for (int i = 0; i < 9; ++i) {
     result.coeffs[i] = coeffs[i] * scalar;
   }
+  result.irradiance = irradiance * scalar;
   return result;
 }
 
@@ -44,11 +45,13 @@ SHCoeffs& SHCoeffs::operator+=(const SHCoeffs& other) {
   for (int i = 0; i < 9; ++i) {
     coeffs[i] += other.coeffs[i];
   }
+  irradiance += other.irradiance;
   return *this;
 }
 
 void AccumulateRadiance(const Eigen::Vector3f& radiance,
-                        const Eigen::Vector3f& direction, SHCoeffs* result) {
+                        const Eigen::Vector3f& direction,
+                        const Eigen::Vector3f& normal, SHCoeffs* result) {
   if (!result) return;
 
   float x = direction.x();
@@ -75,6 +78,9 @@ void AccumulateRadiance(const Eigen::Vector3f& radiance,
   for (int i = 0; i < 9; ++i) {
     result->coeffs[i] += radiance * sh[i];
   }
+
+  // Accumulate irradiance
+  result->irradiance += radiance * std::max(0.0f, normal.dot(direction));
 }
 
 }  // namespace sh_baker

@@ -6,6 +6,7 @@
 
 #include "scene.h"
 // visualizer_utils.h defines GL headers
+// visualizer_utils.h defines GL headers
 #include "visualizer_utils.h"
 
 namespace sh_baker {
@@ -39,6 +40,8 @@ class RadianceRenderer {
 
   const std::vector<RenderMesh>& GetMeshes() const { return meshes_; }
 
+  void SetShowDirectional(bool show) { show_directional_ = show; }
+
  private:
   GLuint program_ = 0;
   std::vector<RenderMesh> meshes_;
@@ -48,8 +51,10 @@ class RadianceRenderer {
   std::vector<GLuint> normal_textures_;
   std::vector<GLuint> mr_textures_;
   std::vector<GLuint> sh_textures_;
+  GLuint irradiance_texture_ = 0;
 
   bool use_packed_luminance_ = false;
+  bool show_directional_ = false;
 
   void UploadGeometry(const Scene& scene);
   void LoadMaterials(const Scene& scene);

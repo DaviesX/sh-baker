@@ -106,10 +106,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, total_pixels),
       [&](const tbb::blocked_range<size_t>& r) {
-        // Each thread needs its own RNG? Or use thread-local?
-        // Simple way: Seed based on index.
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-          // Update progress.
           size_t done =
               processed_count.fetch_add(1, std::memory_order_relaxed) + 1;
           int percent = static_cast<int>((done * 100) / total_pixels);
@@ -156,7 +153,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
                 });
             Eigen::Vector3f Li_indirect =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
-            AccumulateRadiance(Li_indirect, ray->direction, &sample_sh_accum);
+            AccumulateRadiance(Li_indirect, ray->direction, sp.normal,
+                               &sample_sh_accum);
 
             AddSample(sample_sh_accum, &sensor);
           }

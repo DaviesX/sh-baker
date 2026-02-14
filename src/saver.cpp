@@ -402,6 +402,75 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
   return true;
 }
 
+bool SaveIrradianceMap(const SHTexture& sh_texture,
+                       const std::filesystem::path& path) {
+  std::filesystem::path parent = path.parent_path();
+  std::string stem = path.stem().string();
+  std::string extension = path.extension().string();
+
+  std::string filename = stem + "_irradiance" + extension;
+  std::filesystem::path full_path = parent / filename;
+
+  EXRHeader header;
+  InitEXRHeader(&header);
+
+  EXRImage image;
+  InitEXRImage(&image);
+
+  image.num_channels = 3;
+
+  std::vector<float> channels[3];
+  float* image_ptr[3];
+  header.channels = (EXRChannelInfo*)malloc(sizeof(EXRChannelInfo) * 3);
+  header.pixel_types = (int*)malloc(sizeof(int) * 3);
+  header.requested_pixel_types = (int*)malloc(sizeof(int) * 3);
+
+  int num_pixels = sh_texture.width * sh_texture.height;
+
+  for (int c = 0; c < 3; ++c) {
+    channels[c].resize(num_pixels);
+    image_ptr[c] = channels[c].data();
+
+    for (int p = 0; p < num_pixels; ++p) {
+      if (c == 0)
+        channels[c][p] = sh_texture.pixels[p].irradiance.x();
+      else if (c == 1)
+        channels[c][p] = sh_texture.pixels[p].irradiance.y();
+      else
+        channels[c][p] = sh_texture.pixels[p].irradiance.z();
+    }
+
+    header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
+    header.requested_pixel_types[c] = TINYEXR_PIXELTYPE_HALF;
+    const char* names[] = {"R", "G", "B"};
+    strncpy(header.channels[c].name, names[c], 255);
+  }
+
+  image.images = (unsigned char**)image_ptr;
+  image.width = sh_texture.width;
+  image.height = sh_texture.height;
+
+  header.num_channels = 3;
+  header.compression_type = TINYEXR_COMPRESSIONTYPE_ZIP;
+
+  const char* err = nullptr;
+  int ret =
+      SaveEXRImageToFile(&image, &header, full_path.string().c_str(), &err);
+
+  free(header.channels);
+  free(header.pixel_types);
+  free(header.requested_pixel_types);
+
+  if (ret != TINYEXR_SUCCESS) {
+    LOG(ERROR) << "SaveEXRImageToFile failed: "
+               << (err ? err : "Unknown error");
+    FreeEXRErrorMessage(err);
+    return false;
+  }
+  LOG(INFO) << "Saved irradiance map: " << full_path;
+  return true;
+}
+
 }  // namespace
 
 bool SaveSHLightMap(const SHTexture& sh_texture,
@@ -411,6 +480,11 @@ bool SaveSHLightMap(const SHTexture& sh_texture,
       sh_texture.height <= 0) {
     LOG(ERROR) << "Invalid SHTexture dimensions or empty pixels.";
     return false;
+  }
+  // Always save the irradiance map.
+  if (!SaveIrradianceMap(sh_texture, path)) {
+    LOG(ERROR) << "Failed to save irradiance map.";
+    // Non-fatal? Or fatal? Let's keep going but log error.
   }
 
   if (mode == SaveMode::kCombined) {

@@ -14,9 +14,9 @@ RadianceRenderer::~RadianceRenderer() {
   // Textures should ideally be deleted too, but for this simple visualizer we
   // rely on OS cleanup or simple destructor. Implementing proper cleanup:
   glDeleteTextures(albedo_textures_.size(), albedo_textures_.data());
-  glDeleteTextures(normal_textures_.size(), normal_textures_.data());
   glDeleteTextures(mr_textures_.size(), mr_textures_.data());
   glDeleteTextures(sh_textures_.size(), sh_textures_.data());
+  if (irradiance_texture_) glDeleteTextures(1, &irradiance_texture_);
 }
 
 bool RadianceRenderer::Init(const Scene& scene,
@@ -66,6 +66,9 @@ bool RadianceRenderer::Init(const Scene& scene,
       glUniform1i(glGetUniformLocation(program_, u_name.c_str()), 1 + i);
     }
   }
+
+  // Irradiance Texture Unit (10)
+  glUniform1i(glGetUniformLocation(program_, "u_IrradianceTex"), 10);
 
   glUseProgram(0);
   return true;
@@ -215,6 +218,21 @@ void RadianceRenderer::LoadSH(const std::filesystem::path& input_dir) {
       sh_textures_.push_back(CreatePlaceholderTexture(0.0f, 0.0f, 0.0f));
     }
   }
+
+  // Load Irradiance Map
+  if (std::filesystem::exists(input_dir / "lightmap_irradiance.exr")) {
+    irradiance_texture_ =
+        LoadEXRTexture((input_dir / "lightmap_irradiance.exr").string());
+    if (irradiance_texture_ == 0) {
+      LOG(WARNING) << "Failed to load irradiance texture.";
+    } else {
+      LOG(INFO) << "Loaded Irradiance Map.";
+    }
+  } else {
+    // Placeholder
+    irradiance_texture_ = CreatePlaceholderTexture(0.5f, 0.5f, 0.5f);
+    LOG(INFO) << "No Irradiance Map found. Using Placeholder.";
+  }
 }
 
 void RadianceRenderer::Draw(const Scene& scene, const Eigen::Matrix4f& vp,
@@ -231,6 +249,14 @@ void RadianceRenderer::Draw(const Scene& scene, const Eigen::Matrix4f& vp,
     glActiveTexture(GL_TEXTURE1 + i);
     glBindTexture(GL_TEXTURE_2D, sh_textures_[i]);
   }
+
+  // Bind Irradiance
+  glActiveTexture(GL_TEXTURE10);
+  glBindTexture(GL_TEXTURE_2D, irradiance_texture_);
+
+  // Update Directional Flag
+  glUniform1i(glGetUniformLocation(program_, "u_ShowDirectional"),
+              show_directional_ ? 1 : 0);
 
   // Draw Meshes
   for (size_t i = 0; i < meshes_.size(); ++i) {
