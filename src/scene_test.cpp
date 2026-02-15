@@ -222,9 +222,10 @@ TEST_F(SceneTest, SampleEmissionCDF_Manual) {
   // Row 0 (matches v in [0, 0.2]): Only Col 0 has prob. CDF: [0, 1.0, 1.0]
   // Row 1 (matches v in [0.2, 1.0]): Col 0 (25%), Col 1 (75%). CDF: [0,
   // 0.25, 1.0]
-  cdf.conditional_cdf.resize(2);
-  cdf.conditional_cdf[0] = {0.0f, 1.0f, 1.0f};
-  cdf.conditional_cdf[1] = {0.0f, 0.25f, 1.0f};
+  cdf.conditional_cdf.resize(3);
+  cdf.conditional_cdf[0] = {0.0f, 0.0f, 0.0f};
+  cdf.conditional_cdf[1] = {0.0f, 1.0f, 1.0f};
+  cdf.conditional_cdf[2] = {0.0f, 0.25f, 1.0f};
 
   // Case 1: Sample Row 0, Col 0
   // v = 0.1 (in 0.0 - 0.2) -> Row 0

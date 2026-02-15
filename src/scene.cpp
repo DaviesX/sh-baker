@@ -153,6 +153,25 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
   return coeffs;
 }
 
+float ComputeCDF(const std::vector<float>& weights, std::vector<float>* cdf) {
+  cdf->resize(weights.size() + 1);
+  (*cdf)[0] = 0.0f;
+  for (size_t i = 0; i < weights.size(); ++i) {
+    (*cdf)[i + 1] = (*cdf)[i] + weights[i];
+  }
+  float total_weight = (*cdf).back();
+  if (total_weight > 1e-3f) {
+    for (float& cdf_val : *cdf) {
+      cdf_val /= total_weight;
+    }
+  } else {
+    for (float& cdf_val : *cdf) {
+      cdf_val = 0.0f;
+    }
+  }
+  return total_weight;
+}
+
 }  // namespace
 
 SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
@@ -221,8 +240,10 @@ std::optional<EmissionCDF> ComputeTextureEmissionCDF(
   int h = texture.height;
 
   // Step 1: Compute weighted luminance for each texel.
-  std::vector<float> weights(w * h, 0.0f);
+  std::vector<std::vector<float>> weights;
+  weights.resize(h);
   for (int y = 0; y < h; ++y) {
+    weights[y].resize(w);
     for (int x = 0; x < w; ++x) {
       int tex_idx = (y * w + x) * texture.channels;
       float r = SRGBToLinear(texture.pixel_data[tex_idx + 0]);
@@ -241,8 +262,7 @@ std::optional<EmissionCDF> ComputeTextureEmissionCDF(
                        .pixel_data[jy * uv_to_world_area_ratio.width + jx];
       }
 
-      float weight = lum * jacobian;
-      weights[y * texture.width + x] = weight;
+      weights[y][x] = lum * jacobian;
     }
   }
 
@@ -251,33 +271,17 @@ std::optional<EmissionCDF> ComputeTextureEmissionCDF(
   result.conditional_cdf.resize(h + 1);
   result.marginal_cdf.resize(h + 1);
 
-  float current_marginal_sum = 0;
-  for (int y = 0; y < h; ++y) {
-    result.conditional_cdf[y].resize(w + 1);
-    float current_row_sum = 0;
-    for (int x = 0; x < w; ++x) {
-      result.conditional_cdf[y][x] = current_row_sum;
-      current_row_sum += weights[y * texture.width + x];
-    }
-    result.conditional_cdf[y][w] = current_row_sum;
-    if (current_row_sum > 1e-3f) {
-      for (float& conditional_cdf : result.conditional_cdf[y]) {
-        conditional_cdf /= current_row_sum;
-      }
-    } else {
-      for (float& conditional_cdf : result.conditional_cdf[y]) {
-        conditional_cdf = 0.0f;
-      }
-    }
-
-    result.marginal_cdf[y] = current_marginal_sum;
-    current_marginal_sum += current_row_sum;
+  result.conditional_cdf[0].resize(w + 1);
+  for (int y = 1; y <= h; ++y) {
+    result.marginal_cdf[y] =
+        result.marginal_cdf[y - 1] +
+        ComputeCDF(weights[y - 1], &result.conditional_cdf[y]);
   }
-  result.marginal_cdf[h] = current_marginal_sum;
 
-  if (current_marginal_sum > 1e-3f) {
+  float total_marginal_sum = result.marginal_cdf.back();
+  if (total_marginal_sum > 1e-3f) {
     for (float& marginal_cdf : result.marginal_cdf) {
-      marginal_cdf /= current_marginal_sum;
+      marginal_cdf /= total_marginal_sum;
     }
   } else {
     for (float& marginal_cdf : result.marginal_cdf) {
@@ -297,30 +301,26 @@ std::pair<Eigen::Vector2f, float> SampleEmissionCDF(const EmissionCDF& cdf,
   v_idx = std::clamp(v_idx, 1, (int)cdf.marginal_cdf.size() - 1);
   float marginal_pdf = cdf.marginal_cdf[v_idx] - cdf.marginal_cdf[v_idx - 1];
 
-  int row_idx = v_idx - 1;
-
-  float row_total = cdf.conditional_cdf[row_idx].back();
+  float row_total = cdf.conditional_cdf[v_idx].back();
   if (row_total == 0) {
     return {{0.f, 0.f}, 0.f};
   }
 
   // 2. Sample column u from conditional.
-  auto row_it = std::upper_bound(cdf.conditional_cdf[row_idx].begin(),
-                                 cdf.conditional_cdf[row_idx].end(), u);
-  int u_idx = std::distance(cdf.conditional_cdf[row_idx].begin(), row_it);
-  u_idx = std::clamp(u_idx, 1, (int)cdf.conditional_cdf[row_idx].size() - 1);
-  float conditional_pdf = cdf.conditional_cdf[row_idx][u_idx] -
-                          cdf.conditional_cdf[row_idx][u_idx - 1];
-
-  int col_idx = u_idx - 1;
+  auto row_it = std::upper_bound(cdf.conditional_cdf[v_idx].begin(),
+                                 cdf.conditional_cdf[v_idx].end(), u);
+  int u_idx = std::distance(cdf.conditional_cdf[v_idx].begin(), row_it);
+  u_idx = std::clamp(u_idx, 1, (int)cdf.conditional_cdf[v_idx].size() - 1);
+  float conditional_pdf =
+      cdf.conditional_cdf[v_idx][u_idx] - cdf.conditional_cdf[v_idx][u_idx - 1];
 
   // Final PDF is the product of the marginal and conditional PDFs.
   float pdf = conditional_pdf * marginal_pdf;
 
-  int w = cdf.conditional_cdf[row_idx].size() - 1;
+  int w = cdf.conditional_cdf[v_idx].size() - 1;
   int h = cdf.marginal_cdf.size() - 1;
 
-  return {{(col_idx + .5f) / w, (row_idx + .5f) / h}, pdf};
+  return {{(u_idx - .5f) / w, (v_idx - .5f) / h}, pdf};
 }
 
 float Flux(const Light& light) {
