@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "rasterizer.h"
 #include "scene.h"
 
 #define TINYGLTF_IMPLEMENTATION
@@ -636,6 +637,8 @@ void ProcessPunctualLight(const tinygltf::Model& model,
     }
   }
 
+  l.flux = Flux(l);
+
   result->push_back(std::move(l));
 }
 
@@ -672,6 +675,30 @@ void ProcessAreaLights(const std::vector<Material>& materials,
       area_light.material = &materials[mat_idx];
       area_light.geometry = geo;
       area_light.area = SurfaceArea(*geo);
+
+      // Pre-compute UV maps and emission distribution for textured lights.
+      if (mat.emissive_texture && !mat.emissive_texture->pixel_data.empty() &&
+          !geo->texture_uvs.empty()) {
+        const Texture& emissive_tex = *mat.emissive_texture;
+        RasterConfig raster_config;
+        raster_config.width = emissive_tex.width;
+        raster_config.height = emissive_tex.height;
+
+        GeometryUVMaps uv_maps = RasterizeGeometryUVMaps(*geo, raster_config);
+        area_light.uv_to_world_area_ratio =
+            std::move(uv_maps.uv_to_world_area_ratio);
+        area_light.prim_id_map = std::move(uv_maps.prim_id_map);
+
+        std::optional<EmissionCDF> emission_cdf = ComputeTextureEmissionCDF(
+            emissive_tex, *area_light.uv_to_world_area_ratio);
+        if (emission_cdf) {
+          area_light.emission_cdf = std::move(emission_cdf);
+        }
+      }
+
+      // Compute flux (uses uv_to_world_area_ratio if available).
+      area_light.flux = Flux(area_light);
+
       result->emplace_back(std::move(area_light));
     }
   }

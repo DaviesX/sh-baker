@@ -1,5 +1,7 @@
 #include "light.h"
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -14,16 +16,99 @@ namespace sh_baker {
 
 namespace light_internal {
 
-AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
-  if (!light.geometry || !light.material) {
+AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
+  CHECK(light.emission_cdf);
+  CHECK(light.prim_id_map);
+  CHECK(light.uv_to_world_area_ratio);
+  CHECK(light.geometry);
+
+  // 1. Sample UV from the CDF.
+  const EmissionCDF& cdf = *light.emission_cdf;
+  std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
+  auto [uv, pdf_uv] = SampleEmissionCDF(cdf, u_dist(rng), u_dist(rng));
+
+  if (pdf_uv <= 0.0f) {
     return {};
   }
+
+  const Texture32I& prim_map = *light.prim_id_map;
+  const Texture32F& ratio_map = *light.uv_to_world_area_ratio;
   const Geometry& geo = *light.geometry;
-  if (geo.indices.empty()) return {};
+
+  int tex_w = prim_map.width;
+  int tex_h = prim_map.height;
+
+  // 2. Identify the texel (u_idx, v_idx).
+  int u_idx = std::clamp(static_cast<int>(uv.x() * tex_w), 0, tex_w - 1);
+  int v_idx = std::clamp(static_cast<int>(uv.y() * tex_h), 0, tex_h - 1);
+
+  // 3. Look up triangle ID.
+  int prim_id = prim_map.pixel_data[v_idx * tex_w + u_idx];
+  if (prim_id < 0 ||
+      static_cast<size_t>(prim_id) * 3 + 2 >= geo.indices.size()) {
+    // Sampled a background texel; fall through to uniform sampling.
+    return {};
+  }
+
+  // 4. Map sampled texel back to 3D point using barycentrics.
+  uint32_t i0 = geo.indices[prim_id * 3 + 0];
+  uint32_t i1 = geo.indices[prim_id * 3 + 1];
+  uint32_t i2 = geo.indices[prim_id * 3 + 2];
+
+  // Triangle UVs.
+  const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
+  const Eigen::Vector2f& uv1 = geo.texture_uvs[i1];
+  const Eigen::Vector2f& uv2 = geo.texture_uvs[i2];
+
+  // Solve for barycentrics: P = w*uv0 + b1*uv1 + b2*uv2.
+  Eigen::Vector2f d1 = uv1 - uv0;
+  Eigen::Vector2f d2 = uv2 - uv0;
+  Eigen::Vector2f dp = uv - uv0;
+
+  float det = d1.x() * d2.y() - d1.y() * d2.x();
+  if (std::abs(det) < 1e-12f) {
+    return {};
+  }
+  float inv_det = 1.0f / det;
+  float b1 = (dp.x() * d2.y() - dp.y() * d2.x()) * inv_det;
+  float b2 = (d1.x() * dp.y() - d1.y() * dp.x()) * inv_det;
+  float b0 = 1.0f - b1 - b2;
+
+  // Clamp barycentrics (texel center may be slightly outside triangle).
+  b0 = std::clamp(b0, 0.0f, 1.0f);
+  b1 = std::clamp(b1, 0.0f, 1.0f);
+  b2 = std::clamp(b2, 0.0f, 1.0f);
+  float bsum = b0 + b1 + b2;
+  if (bsum > 0.0f) {
+    b0 /= bsum;
+    b1 /= bsum;
+    b2 /= bsum;
+  }
+
+  // 5. Interpolate world position.
+  const Eigen::Vector3f& v0 = geo.vertices[i0];
+  const Eigen::Vector3f& v1 = geo.vertices[i1];
+  const Eigen::Vector3f& v2 = geo.vertices[i2];
+  Eigen::Vector3f p = geo.transform * (b0 * v0 + b1 * v1 + b2 * v2);
+
+  // 6. Emission at sampled UV.
+  Eigen::Vector3f emission = GetEmission(*light.material, uv);
+
+  // 7. PDF: pdf_uv / jacobian.
+  float jacobian = ratio_map.pixel_data[v_idx * tex_w + u_idx];
+  float pdf_area = (jacobian > 1e-12f) ? (pdf_uv / jacobian) : 1e-6f;
+  pdf_area = std::max(pdf_area, 1e-6f);
+
+  return AreaSample{p, emission, pdf_area};
+}
+
+AreaSample SampleAreaLightUniform(const Light& light, std::mt19937& rng) {
+  CHECK_NOTNULL(light.geometry);
+  CHECK_NOTNULL(light.material);
+
+  const Geometry& geo = *light.geometry;
 
   size_t num_triangles = geo.indices.size() / 3;
-
-  // 1. Select Triangle (Uniformly)
   std::uniform_int_distribution<size_t> dist(0, num_triangles - 1);
   size_t tri_idx = dist(rng);
 
@@ -31,25 +116,20 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
   uint32_t i1 = geo.indices[tri_idx * 3 + 1];
   uint32_t i2 = geo.indices[tri_idx * 3 + 2];
 
-  // 2. Sample Point (Uniform Barycentric)
   std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
   float u1 = u_dist(rng);
   float u2 = u_dist(rng);
-
   if (u1 + u2 > 1.0f) {
     u1 = 1.0f - u1;
     u2 = 1.0f - u2;
   }
   float w = 1.0f - u1 - u2;
 
-  // 3. Interpolate Attributes
   const Eigen::Vector3f& v0 = geo.vertices[i0];
   const Eigen::Vector3f& v1 = geo.vertices[i1];
   const Eigen::Vector3f& v2 = geo.vertices[i2];
-
   Eigen::Vector3f p = geo.transform * (w * v0 + u1 * v1 + u2 * v2);
 
-  // 4. Radiance (Emission)
   Eigen::Vector2f uv = Eigen::Vector2f::Zero();
   if (!geo.texture_uvs.empty()) {
     const Eigen::Vector2f& uv0 = geo.texture_uvs[i0];
@@ -60,14 +140,24 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 
   Eigen::Vector3f emission = GetEmission(*light.material, uv);
 
-  // 5. PDF
-  // We first uniformly picked a triangle, then a point on the triangle.
-  // So P(x) = P(triangle) * P(point | triangle)
-  // P(triangle) = 1 / num_triangles
-  // P(point | triangle) = 1 / triangle_area
   float triangle_area = (v0 - v1).cross(v0 - v2).norm() / 2.f;
   float pdf = std::max(1e-6f, 1.f / num_triangles * 1.f / triangle_area);
   return {p, emission, pdf};
+}
+
+AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
+  CHECK_NOTNULL(light.geometry);
+  CHECK_NOTNULL(light.material);
+
+  if (light.material->emissive_texture &&
+      !light.geometry->texture_uvs.empty()) {
+    AreaSample importance_sample = SampleAreaLightTextured(light, rng);
+    if (importance_sample.pdf > 0.f) {
+      return importance_sample;
+    }
+  }
+
+  return SampleAreaLightUniform(light, rng);
 }
 
 }  // namespace light_internal

@@ -17,6 +17,8 @@
 #include "sensor.h"
 #include "tracer.h"
 
+#define USE_TBB 1
+
 namespace sh_baker {
 namespace {
 constexpr float kCVThreshold = 0.01f;
@@ -103,10 +105,14 @@ BakeResult BakeSHLightMap(const Scene& scene,
   std::atomic<size_t> processed_count{0};
   std::atomic<int> last_progress{-1};
 
+#if USE_TBB
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, total_pixels),
       [&](const tbb::blocked_range<size_t>& r) {
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
+#else
+  for (size_t idx = 0; idx < total_pixels; ++idx) {
+#endif
           size_t done =
               processed_count.fetch_add(1, std::memory_order_relaxed) + 1;
           int percent = static_cast<int>((done * 100) / total_pixels);
@@ -165,7 +171,9 @@ BakeResult BakeSHLightMap(const Scene& scene,
           result.environment_visibility_texture.pixel_data[idx] =
               visibility_accum * inv_samples;
         }
+#if USE_TBB
       });
+#endif
   std::cout << std::endl;
 
   // Clean up
