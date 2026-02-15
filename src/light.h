@@ -167,15 +167,13 @@ inline AreaLightIncoming AreaLightIncomingRadiance(const AreaSample& sample,
   Eigen::Vector3f L = sample.point - P;
   float dist_sq = L.squaredNorm();
   float dist = std::sqrt(dist_sq);
+  L /= dist;
 
   // Pending visibility ray/shadow ray.
   visibility_ray->origin = P;
-  visibility_ray->direction = sample.point - P;
+  visibility_ray->direction = L;
   visibility_ray->tnear = 0.005f;
   visibility_ray->tfar = dist - 0.005f;
-
-  // Incoming radiance without visibility term.
-  L /= dist;
 
   float cos_n = N.dot(L);
   if (cos_n < 0.f) {

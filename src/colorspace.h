@@ -20,6 +20,10 @@ inline uint8_t LinearToSRGB(float x) {
       std::rint((1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f) * 255.0f));
 }
 
+inline float Luminance(float r, float g, float b) {
+  return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+}
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_COLORSPACE_H

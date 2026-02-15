@@ -38,6 +38,20 @@ struct Texture32F {
   std::vector<float> pixel_data;
 };
 
+// --- Texture32I ---
+struct Texture32I {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t channels = 0;
+  std::vector<int32_t> pixel_data;
+};
+
+// --- EmissionCDF ---
+struct EmissionCDF {
+  std::vector<float> marginal_cdf;
+  std::vector<std::vector<float>> conditional_cdf;
+};
+
 // --- Material ---
 struct Material {
   std::string name;
@@ -82,8 +96,12 @@ struct Light {
 
   // Area Light Parameters
   float area = 0.0f;
+  float flux = 0.0f;
   const Material* material = nullptr;
   const Geometry* geometry = nullptr;
+  std::optional<EmissionCDF> emission_cdf;
+  std::optional<Texture32F> uv_to_world_area_ratio;
+  std::optional<Texture32I> prim_id_map;
 };
 
 // --- Environment ---
@@ -121,6 +139,19 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 
 // Returns the surface area of the geometry.
 float SurfaceArea(const Geometry& geometry);
+
+// Computes the PDF and CDF of the emissive texture. It converts the texels to
+// luminance, weights by the UV-to-world area ratio (Jacobian), and then
+// computes the 2D PDF and CDF.
+std::optional<EmissionCDF> ComputeTextureEmissionCDF(
+    const Texture& texture, const Texture32F& uv_to_world_area_ratio);
+
+// Samples a 2D UV location from the CDF and returns the PDF.
+std::pair<Eigen::Vector2f, float> SampleEmissionCDF(const EmissionCDF& cdf,
+                                                    float u, float v);
+
+// Returns the flux of the light.
+float Flux(const Light& light);
 
 // Projects the environment to SH coefficients.
 SHCoeffs ProjectEnvironmentToSH(const Environment& env);
