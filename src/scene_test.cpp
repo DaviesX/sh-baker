@@ -3,7 +3,9 @@
 #include <embree4/rtcore.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <random>
 
 namespace sh_baker {
 

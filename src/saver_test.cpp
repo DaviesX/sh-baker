@@ -29,9 +29,9 @@ TEST(SaverTest, SaveCombinedImage) {
   }
 
   std::filesystem::path test_path = "test_output.exr";
-  if (std::filesystem::exists(test_path)) {
-    std::filesystem::remove(test_path);
-  }
+  std::filesystem::path irr_path = "test_output_irradiance.exr";
+  if (std::filesystem::exists(test_path)) std::filesystem::remove(test_path);
+  if (std::filesystem::exists(irr_path)) std::filesystem::remove(irr_path);
 
   bool success = SaveSHLightMap(tex, env_tex, test_path, SaveMode::kCombined);
   EXPECT_TRUE(success);
@@ -40,9 +40,8 @@ TEST(SaverTest, SaveCombinedImage) {
   int verify_ret = IsEXR(test_path.string().c_str());
   EXPECT_EQ(verify_ret, TINYEXR_SUCCESS);
 
-  if (std::filesystem::exists(test_path)) {
-    std::filesystem::remove(test_path);
-  }
+  if (std::filesystem::exists(test_path)) std::filesystem::remove(test_path);
+  if (std::filesystem::exists(irr_path)) std::filesystem::remove(irr_path);
 }
 
 TEST(SaverTest, SaveSplitChannels) {
@@ -71,6 +70,8 @@ TEST(SaverTest, SaveSplitChannels) {
     std::string filename = std::string("test_split_") + suffix + ".exr";
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+  if (std::filesystem::exists("test_split_irradiance.exr"))
+    std::filesystem::remove("test_split_irradiance.exr");
 
   bool success =
       SaveSHLightMap(tex, env_tex, test_path, SaveMode::kSplitChannels);
@@ -100,6 +101,12 @@ TEST(SaverTest, SaveSplitChannels) {
   // Verify that EnvVisibility file does NOT exist
   std::string env_filename = "test_split_EnvVisibility.exr";
   EXPECT_FALSE(std::filesystem::exists(env_filename));
+
+  // Verify and cleanup Irradiance
+  std::string irr_filename = "test_split_irradiance.exr";
+  EXPECT_TRUE(std::filesystem::exists(irr_filename));
+  if (std::filesystem::exists(irr_filename))
+    std::filesystem::remove(irr_filename);
 }
 
 TEST(SaverTest, SaveSceneWithTexture) {
@@ -240,6 +247,8 @@ TEST(SaverTest, SavePackedLuminance) {
     std::string filename = "test_packed_packed_" + std::to_string(i) + ".exr";
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+  if (std::filesystem::exists("test_packed_irradiance.exr"))
+    std::filesystem::remove("test_packed_irradiance.exr");
 
   bool success =
       SaveSHLightMap(tex, env_tex, test_path, SaveMode::kLuminancePacked);
@@ -256,6 +265,11 @@ TEST(SaverTest, SavePackedLuminance) {
     // Clean up
     if (std::filesystem::exists(filename)) std::filesystem::remove(filename);
   }
+
+  std::string irr_filename = "test_packed_irradiance.exr";
+  EXPECT_TRUE(std::filesystem::exists(irr_filename));
+  if (std::filesystem::exists(irr_filename))
+    std::filesystem::remove(irr_filename);
 }
 
 TEST(SaverTest, SaveComplexScene) {
