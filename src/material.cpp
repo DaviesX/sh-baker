@@ -53,9 +53,10 @@ Eigen::Vector3f FresnelSchlick(float cosTheta, const Eigen::Vector3f& F0) {
 }
 
 int ToTexelIndex(const Texture& texture, const Eigen::Vector2f& uv) {
-  int tx = std::clamp((int)(uv.x() * texture.width), 0, (int)texture.width - 1);
-  int ty =
-      std::clamp((int)(uv.y() * texture.height), 0, (int)texture.height - 1);
+  float u = uv.x() - std::floor(uv.x());
+  float v = uv.y() - std::floor(uv.y());
+  int tx = std::clamp((int)(u * texture.width), 0, (int)texture.width - 1);
+  int ty = std::clamp((int)(v * texture.height), 0, (int)texture.height - 1);
   return (ty * texture.width + tx) * texture.channels;
 }
 

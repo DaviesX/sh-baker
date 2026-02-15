@@ -163,5 +163,48 @@ TEST(MaterialTest, GetAlphaNoAlphaChannel) {
   EXPECT_NEAR(alpha, 1.0f, 1e-5f);
 }
 
+TEST(MaterialTest, GetAlbedoWrapping) {
+  Material mat;
+  mat.albedo.width = 2;
+  mat.albedo.height = 2;
+  mat.albedo.channels = 3;
+  // 2x2 Texture:
+  // Red (255,0,0)   | Green (0,255,0)
+  // Blue (0,0,255)  | White (255,255,255)
+  mat.albedo.pixel_data = {255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255};
+
+  // 1. Normal access (0.25, 0.25) -> Top-Left (Red)
+  {
+    Eigen::Vector3f res = GetAlbedo(mat, Eigen::Vector2f(0.25f, 0.25f));
+    EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
+    EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+    EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
+  }
+
+  // 2. Wrapped access (1.25, 0.25) -> Should be same as (0.25, 0.25) -> Red
+  {
+    Eigen::Vector3f res = GetAlbedo(mat, Eigen::Vector2f(1.25f, 0.25f));
+    EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
+    EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+    EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
+  }
+
+  // 3. Negative access (-0.75, 0.25) -> Should map to 0.25 -> Red
+  {
+    Eigen::Vector3f res = GetAlbedo(mat, Eigen::Vector2f(-0.75f, 0.25f));
+    EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
+    EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+    EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
+  }
+
+  // 4. Large Negative (-10.75, 0.25) -> Red
+  {
+    Eigen::Vector3f res = GetAlbedo(mat, Eigen::Vector2f(-10.75f, 0.25f));
+    EXPECT_NEAR(res.x(), 1.0f, 1e-5f);
+    EXPECT_NEAR(res.y(), 0.0f, 1e-5f);
+    EXPECT_NEAR(res.z(), 0.0f, 1e-5f);
+  }
+}
+
 }  // namespace
 }  // namespace sh_baker
