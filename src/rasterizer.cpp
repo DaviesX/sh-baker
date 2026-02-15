@@ -351,18 +351,21 @@ GeometryUVMaps RasterizeGeometryUVMaps(const Geometry& geo,
     Eigen::Vector2i t1(int(uv1.x()), int(uv1.y()));
     Eigen::Vector2i t2(int(uv2.x()), int(uv2.y()));
 
-    RasterizeTriangle(
-        t0, t1, t2, vertex, vertex, vertex,
-        [&](const Eigen::Vector2i& p, const RatioVertex& v) {
-          int x = p.x();
-          int y = p.y();
-          if (x < 0 || y < 0 || x >= config.width || y >= config.height) {
-            return;
-          }
-          int pixel_idx = y * config.width + x;
-          result.uv_to_world_area_ratio.pixel_data[pixel_idx] = v.ratio;
-          result.prim_id_map.pixel_data[pixel_idx] = v.tri_id;
-        });
+    RasterizeTriangle(t0, t1, t2, vertex, vertex, vertex,
+                      [&](const Eigen::Vector2i& p, const RatioVertex& v) {
+                        int x = p.x();
+                        int y = p.y();
+                        // Wrap coordinates
+                        x = x % config.width;
+                        y = y % config.height;
+                        if (x < 0) x += config.width;
+                        if (y < 0) y += config.height;
+
+                        int pixel_idx = y * config.width + x;
+                        result.uv_to_world_area_ratio.pixel_data[pixel_idx] =
+                            v.ratio;
+                        result.prim_id_map.pixel_data[pixel_idx] = v.tri_id;
+                      });
   }
 
   return result;

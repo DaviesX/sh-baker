@@ -202,4 +202,136 @@ TEST(RasterizerTest, RasterizeQuadScanline) {
   EXPECT_NEAR(result[6].normal.z(), 1.0f, 0.001f);
 }
 
+TEST(RasterizerTest, RasterizeGeometryUVMapsWrapping) {
+  Scene scene;
+  Geometry quad;
+  // Quad with UVs strictly outside [0, 1]
+  // UVs: (1.0, 1.0) to (2.0, 2.0)
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+  quad.normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  quad.texture_uvs = {{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {1.0, 2.0}};
+  quad.lightmap_uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};  // Unused here
+  quad.indices = {0, 1, 2, 0, 2, 3};
+
+  // Calculate area ratio:
+  // World Area: 2x2 = 4.
+  // UV Area: 2x2 = 4.
+  // Ratio: 1.0.
+
+  RasterConfig config;
+  config.width = 4;
+  config.height = 4;
+
+  GeometryUVMaps result = RasterizeGeometryUVMaps(quad, config);
+
+  // With wrapping, the entire 4x4 texture should be filled because the UVs
+  // cover a 2x2 area, meaning it covers the [0,1] range 4 times. Actually,
+  // wait. The function rasterizes *into* the texture based on UVs. The input
+  // vertices have UVs from -0.5 to 1.5. The triangles in UV space cover
+  // [-0.5, 1.5] x [-0.5, 1.5]. The rasterizer iterates over pixels in the
+  // texture (0..width, 0..height). Wait, `RasterizeTriangle` takes vertex
+  // coordinates in pixels. t0 = (-0.5 * 4, -0.5 * 4) = (-2, -2) t1 = (1.5 * 4,
+  // -0.5 * 4) = (6, -2) t2 = (1.5 * 4, 1.5 * 4) = (6, 6) The rasterizer
+  // iterates from min_y to max_y of the triangle. So it will iterate from -2
+  // to 6. The lambda checks `if (x < 0 || y < 0 ...)` and returns. So
+  // currently, only pixels within [0, 3] x [0, 3] that fall inside the triangle
+  // are drawn. Since the triangle covers the entire [0, 1] x [0, 1] range (and
+  // more), ALL pixels in the 4x4 image should be covered.
+
+  // IF the rasterizer clips correctly or iterates correctly.
+  // `RasterizeTriangle` calculates bounding box of the triangle.
+  // It iterates y from t0.y to t2.y.
+  // In this case -2 to 6.
+  // Inside the loop, it checks x bounds?
+  // No, `RasterizeTriangle` does `draw_fn(Eigen::Vector2i(x, t0.y() + h),
+  // vc);`. It assumes the draw_fn handles clipping.
+
+  // In `RasterizeGeometryUVMaps`:
+  /*
+          if (x < 0 || y < 0 || x >= config.width || y >= config.height) {
+            return;
+          }
+  */
+  // This clips to the texture bounds.
+  // But wait. "Warp the texture access" usually means when sampling FROM a
+  // texture. Here we are rasterizing INTO a texture (UV map).
+  // `RasterizeGeometryUVMaps` produces `uv_to_world_area_ratio` and
+  // `prim_id_map`. These maps are used to "inverse sample" later? Or are they
+  // used to lookup geometry info from UV? If I have a lightmap texel at UV (u,
+  // v), I want to know corresponding world position/area. The lightmap
+  // parameterization is usually unique and in [0, 1]. BUT the user said:
+  // "Unlike light map UVs, texture UVs may not be normalized." And pointed to
+  // `RasterizeGeometryUVMaps`.
+
+  // Let's re-read the code.
+  // `geometry.texture_uvs` are the material texture UVs.
+  // `geometry.lightmap_uvs` are the unique parameterization.
+
+  // `RasterizeGeometryUVMaps` uses `geo.texture_uvs`.
+  // Wait. Why rasterize using `texture_uvs`?
+  // "Rasterizes the area scale of the texel in the UV. The area scale is the
+  // ratio: world triangle area / UV triangle area." This sounds like it's used
+  // for resolution analysis? If the texture UVs correspond to a tiling texture,
+  // then a single triangle might cover UV range [0, 10]. If we rasterize this
+  // into a 1024x1024 map, we are effectively splatting the triangle onto the
+  // texture map. If the UVs are [0, 10], and we wrap, then the triangle is
+  // drawn 100 times? No, `RasterizeTriangle` rasterizes the single triangle
+  // t0-t1-t2. If t0=(0,0) and t1=(10240, 0), it will synthesize pixels from 0
+  // to 10240. The lambda receives `p`. We need to map `p` to [0, width) by
+  // wrapping.
+
+  // Example: Triangle [0, 0] to [2, 0] to [0, 2] in UV space.
+  // Mapped to 4x4 texture.
+  // t0=(0,0), t1=(8,0), t2=(0,8).
+  // Pixel at (0,0) is covered.
+  // Pixel at (4,0) (which is wrapped to 0,0) should also be covered?
+  // No, "wrapping" means if I write to (4, 0), it actually writes to (0, 0).
+  // Yes.
+
+  // So checking my test case:
+  // UVs [-0.5, 1.5].
+  // Rasterizer will generate fragments for x in [-2, 6], y in [-2, 6].
+  // Current code returns coverage for [0, 0] to [3, 3] implicitly because it
+  // clips. BUT, fragments at (-1, -1) should wrap to (3, 3). Fragments at (4,
+  // 4) should wrap to (0, 0). Because the triangle covers the whole 4x4 area
+  // "logically" multiple times? Actually, with [-0.5, 1.5], the center [0, 1]
+  // is fully covered. The regions [-0.5, 0] and [1, 1.5] should wrap around.
+
+  // Wait, if I have indices covering the whole image, I expect `prim_id_map` to
+  // be filled. Currently, `RasterizeTriangle` iterates over the large triangle.
+  // `draw_fn` checks bounds.
+  // If I change `draw_fn` to wrap, then `prim_id_map` should be filled.
+  // Wait, currently checks bounds:
+  // if (x < 0 || y < 0 ...) return;
+  // So pixels at (0,0) are drawn (from the [0,1] part of the triangle).
+  // Pixels at (-1, -1) are discarded.
+  // If we wrap, (-1, -1) becomes (3, 3).
+
+  // Check the test case again.
+  // Vertices cover [-0.5, 1.5].
+  // Center part [0, 1] fills the 4x4 texture completely.
+  // So `prim_id_map` should ALREADY be full of `0`s even with clipping.
+  // Because the triangle is a superset of the [0, 1] square.
+
+  // I need a test case where the triangle is OUTSIDE [0, 1] but wraps into it.
+  // Example: Triangle at [1.0, 1.0] to [2.0, 1.0] to [1.0, 2.0].
+  // UVs: {1, 1}, {2, 1}, {1, 2}.
+  // Raster coords (4x4): (4, 4), (8, 4), (4, 8).
+  // Rasterizer will generate pixels x >= 4, y >= 4.
+  // Current code clips -> draws nothing.
+  // Wrapping code -> (4,4) becomes (0,0) -> draws.
+
+  quad.vertices = {{-1, -1, 0}, {1, -1, 0}, {-1, 1, 0}};  // Just a triangle
+  quad.indices = {0, 1, 2};
+  quad.texture_uvs = {{1.0f, 1.0f}, {2.0f, 1.0f}, {1.0f, 2.0f}};
+  // This covers the area equivalent to {0,0}, {1,0}, {0,1}.
+  // Should fill roughly half the texture.
+
+  int filled_count = 0;
+  for (int i = 0; i < 16; ++i) {
+    if (result.prim_id_map.pixel_data[i] != -1) filled_count++;
+  }
+  EXPECT_GT(filled_count, 0);
+}
+
 }  // namespace sh_baker

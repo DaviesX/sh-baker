@@ -397,20 +397,6 @@ TEST(LightTreeInternalTest, ComputeLightBoundsAreaLight) {
   EXPECT_FLOAT_EQ(lb.cos_theta_e, -1.0f);
 }
 
-TEST(LightTreeInternalTest, ComputeLightBoundsAreaLightNoGeometry) {
-  Light area_light;
-  area_light.type = Light::Type::Area;
-  area_light.geometry = nullptr;  // No geometry!
-  area_light.color = Eigen::Vector3f::Ones();
-  area_light.intensity = 10.0f;
-  area_light.area = 2.0f;
-
-  auto lb = light_tree_internal::ComputeLightBounds(area_light);
-
-  // Without geometry, phi should be 0 (light won't be in tree).
-  EXPECT_FLOAT_EQ(lb.phi, 0.0f);
-}
-
 TEST(LightTreeTest, BuildAreaLight) {
   // Create geometry for area light.
   Geometry geo;

@@ -52,28 +52,28 @@ Eigen::Vector3f FresnelSchlick(float cosTheta, const Eigen::Vector3f& F0) {
   return F0 + (Eigen::Vector3f::Ones() - F0) * std::pow(1.0f - cosTheta, 5.0f);
 }
 
+int ToTexelIndex(const Texture& texture, const Eigen::Vector2f& uv) {
+  float u = uv.x() - std::floor(uv.x());
+  float v = uv.y() - std::floor(uv.y());
+  int tx = std::clamp((int)(u * texture.width), 0, (int)texture.width - 1);
+  int ty = std::clamp((int)(v * texture.height), 0, (int)texture.height - 1);
+  return (ty * texture.width + tx) * texture.channels;
+}
+
 }  // namespace
 
 float GetAlpha(const Material& mat, const Eigen::Vector2f& uv) {
   if (mat.albedo.pixel_data.empty()) return 1.0f;
   if (mat.albedo.channels < 4) return 1.0f;
 
-  int tx = std::clamp((int)(uv.x() * mat.albedo.width), 0,
-                      (int)mat.albedo.width - 1);
-  int ty = std::clamp((int)(uv.y() * mat.albedo.height), 0,
-                      (int)mat.albedo.height - 1);
-  int idx = (ty * mat.albedo.width + tx) * mat.albedo.channels;
+  int idx = ToTexelIndex(mat.albedo, uv);
   return mat.albedo.pixel_data[idx + 3] / 255.0f;
 }
 
 Eigen::Vector3f GetAlbedo(const Material& mat, const Eigen::Vector2f& uv) {
   Eigen::Vector3f albedo(1.0f, 0.0f, 1.0f);  // Default pink
   if (!mat.albedo.pixel_data.empty()) {
-    int tx = std::clamp((int)(uv.x() * mat.albedo.width), 0,
-                        (int)mat.albedo.width - 1);
-    int ty = std::clamp((int)(uv.y() * mat.albedo.height), 0,
-                        (int)mat.albedo.height - 1);
-    int idx = (ty * mat.albedo.width + tx) * mat.albedo.channels;
+    int idx = ToTexelIndex(mat.albedo, uv);
 
     // Convert sRGB -> Linear
     float r = SRGBToLinear(mat.albedo.pixel_data[idx]);
@@ -89,12 +89,7 @@ Eigen::Vector3f GetEmission(const Material& mat, const Eigen::Vector2f& uv) {
     return mat.emissive_factor * mat.emissive_strength;
   }
 
-  int tx = std::clamp((int)(uv.x() * mat.emissive_texture->width), 0,
-                      (int)mat.emissive_texture->width - 1);
-  int ty = std::clamp((int)(uv.y() * mat.emissive_texture->height), 0,
-                      (int)mat.emissive_texture->height - 1);
-  int idx =
-      (ty * mat.emissive_texture->width + tx) * mat.emissive_texture->channels;
+  int idx = ToTexelIndex(*mat.emissive_texture, uv);
 
   // Convert sRGB -> Linear
   float r = SRGBToLinear(mat.emissive_texture->pixel_data[idx]);
@@ -109,12 +104,7 @@ void GetMetallicRoughness(const Material& mat, const Eigen::Vector2f& uv,
                           float& metallic, float& roughness) {
   CHECK(!mat.metallic_roughness_texture.pixel_data.empty());
 
-  int tx = std::clamp((int)(uv.x() * mat.metallic_roughness_texture.width), 0,
-                      (int)mat.metallic_roughness_texture.width - 1);
-  int ty = std::clamp((int)(uv.y() * mat.metallic_roughness_texture.height), 0,
-                      (int)mat.metallic_roughness_texture.height - 1);
-  int idx = (ty * mat.metallic_roughness_texture.width + tx) *
-            mat.metallic_roughness_texture.channels;
+  int idx = ToTexelIndex(mat.metallic_roughness_texture, uv);
 
   // glTF: Metalness in B, Roughness in G.
   float b_metal = mat.metallic_roughness_texture.pixel_data[idx + 2] / 255.0f;

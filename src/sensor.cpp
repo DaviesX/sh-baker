@@ -54,23 +54,23 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
 
   // 2. Check convergence (Adaptive Sampling)
   constexpr int kMinSamples = 32;
-  // if (sensor.sample_count >= kMinSamples) {
-  //   // Calculate Standard Error of the Mean
-  //   if (sensor.mean_luminance > 1e-3f) {
-  //     float variance = sensor.m2_luminance / (sensor.sample_count - 1);
-  //     float std_dev = std::sqrt(variance);
-  //     float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
+  if (sensor.sample_count >= kMinSamples) {
+    // Calculate Standard Error of the Mean
+    if (sensor.mean_luminance > 1e-3f) {
+      float variance = sensor.m2_luminance / (sensor.sample_count - 1);
+      float std_dev = std::sqrt(variance);
+      float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
 
-  //     // Coefficient of Variation of the Mean = SEM / Mean
-  //     // If error is small enough relative to the signal, we stop.
-  //     if (sem < sensor.confidence_threshold * sensor.mean_luminance) {
-  //       return std::nullopt;
-  //     }
-  //   } else {
-  //     // If it's pitch black (or very close), we can stop early too.
-  //     return std::nullopt;
-  //   }
-  // }
+      // Coefficient of Variation of the Mean = SEM / Mean
+      // If error is small enough relative to the signal, we stop.
+      if (sem < sensor.confidence_threshold * sensor.mean_luminance) {
+        return std::nullopt;
+      }
+    } else {
+      // If it's pitch black (or very close), we can stop early too.
+      return std::nullopt;
+    }
+  }
 
   // 3. Generate Ray
   Ray ray;
