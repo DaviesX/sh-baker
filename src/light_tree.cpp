@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "glog/logging.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -192,28 +193,27 @@ LightBounds ComputeLightBounds(const Light& light) {
     }
     case Light::Type::Area: {
       // Area light: bounds from geometry.
-      if (light.geometry) {
-        const auto& geo = *light.geometry;
-        const auto vertices = TransformedVertices(geo);
-        const auto normals = TransformedNormals(geo);
-        for (const auto& v : vertices) {
-          lb.bounds.extend(v);
-        }
-        // Compute average normal as axis.
-        Eigen::Vector3f avg_normal = Eigen::Vector3f::Zero();
-        for (const auto& n : normals) {
-          avg_normal += n;
-        }
-        if (avg_normal.squaredNorm() > 1e-6f) {
-          lb.axis = avg_normal.normalized();
-        } else {
-          lb.axis = Eigen::Vector3f::UnitY();
-        }
-        lb.cos_theta_o = 0.0f;   // Hemisphere.
-        lb.cos_theta_e = -1.0f;  // Full sphere emission (two-sided).
-        lb.phi = light.flux;
-        lb.two_sided = true;
+      CHECK_NOTNULL(light.geometry);
+      const auto& geo = *light.geometry;
+      const auto vertices = TransformedVertices(geo);
+      const auto normals = TransformedNormals(geo);
+      for (const auto& v : vertices) {
+        lb.bounds.extend(v);
       }
+      // Compute average normal as axis.
+      Eigen::Vector3f avg_normal = Eigen::Vector3f::Zero();
+      for (const auto& n : normals) {
+        avg_normal += n;
+      }
+      if (avg_normal.squaredNorm() > 1e-6f) {
+        lb.axis = avg_normal.normalized();
+      } else {
+        lb.axis = Eigen::Vector3f::UnitY();
+      }
+      lb.cos_theta_o = 0.0f;   // Hemisphere.
+      lb.cos_theta_e = -1.0f;  // Full sphere emission (two-sided).
+      lb.phi = light.flux;
+      lb.two_sided = true;
       break;
     }
     default:

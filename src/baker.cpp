@@ -17,7 +17,7 @@
 #include "sensor.h"
 #include "tracer.h"
 
-#define USE_TBB 0
+#define USE_TBB 1
 
 namespace sh_baker {
 namespace {

@@ -335,9 +335,10 @@ GeometryUVMaps RasterizeGeometryUVMaps(const Geometry& geo,
     float world_area = 0.5f * (v1 - v0).cross(v2 - v0).norm();
 
     // UV-space triangle area.
-    const Eigen::Vector2f& uv0 = geo.texture_uvs[idx0];
-    const Eigen::Vector2f& uv1 = geo.texture_uvs[idx1];
-    const Eigen::Vector2f& uv2 = geo.texture_uvs[idx2];
+    Eigen::Vector2f uv_scale(config.width, config.height);
+    const Eigen::Vector2f uv0 = geo.texture_uvs[idx0].cwiseProduct(uv_scale);
+    const Eigen::Vector2f uv1 = geo.texture_uvs[idx1].cwiseProduct(uv_scale);
+    const Eigen::Vector2f uv2 = geo.texture_uvs[idx2].cwiseProduct(uv_scale);
     float uv_area = 0.5f * std::abs((uv1.x() - uv0.x()) * (uv2.y() - uv0.y()) -
                                     (uv2.x() - uv0.x()) * (uv1.y() - uv0.y()));
 
@@ -346,12 +347,9 @@ GeometryUVMaps RasterizeGeometryUVMaps(const Geometry& geo,
     RatioVertex vertex(ratio, static_cast<int32_t>(i));
 
     // Convert UV to raster coordinates.
-    Eigen::Vector2i t0(int(uv0.x() * config.width),
-                       int(uv0.y() * config.height));
-    Eigen::Vector2i t1(int(uv1.x() * config.width),
-                       int(uv1.y() * config.height));
-    Eigen::Vector2i t2(int(uv2.x() * config.width),
-                       int(uv2.y() * config.height));
+    Eigen::Vector2i t0(int(uv0.x()), int(uv0.y()));
+    Eigen::Vector2i t1(int(uv1.x()), int(uv1.y()));
+    Eigen::Vector2i t2(int(uv2.x()), int(uv2.y()));
 
     RasterizeTriangle(
         t0, t1, t2, vertex, vertex, vertex,

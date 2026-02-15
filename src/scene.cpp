@@ -364,15 +364,13 @@ float Flux(const Light& light) {
           }
 
           // Get Jacobian if available.
-          float jacobian = 0.0f;
-          if (light.uv_to_world_area_ratio) {
-            const auto& ratio = *light.uv_to_world_area_ratio;
-            int jx = std::clamp((int)(float(x) / w * ratio.width), 0,
-                                (int)ratio.width - 1);
-            int jy = std::clamp((int)(float(y) / h * ratio.height), 0,
-                                (int)ratio.height - 1);
-            jacobian = ratio.pixel_data[jy * ratio.width + jx];
-          }
+          CHECK(light.uv_to_world_area_ratio);
+          const auto& ratio = *light.uv_to_world_area_ratio;
+          int jx = std::clamp((int)(float(x) / w * ratio.width), 0,
+                              (int)ratio.width - 1);
+          int jy = std::clamp((int)(float(y) / h * ratio.height), 0,
+                              (int)ratio.height - 1);
+          float jacobian = ratio.pixel_data[jy * ratio.width + jx];
 
           total_flux += max_coeff * max_emissive_factor * jacobian;
         }
