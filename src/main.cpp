@@ -16,6 +16,9 @@ DEFINE_int32(width, 2048, "Width of the output image.");
 DEFINE_int32(height, 2048, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
+DEFINE_bool(indirect_only, false,
+            "Remove direct contributions from the bake (useful for real-time "
+            "direct + baked indirect solution).");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
@@ -133,6 +136,7 @@ int main(int argc, char* argv[]) {
   sh_baker::BakeConfig config;
   config.samples = FLAGS_samples;
   config.bounces = FLAGS_bounces;
+  config.indirect_only = FLAGS_indirect_only;
 
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";
