@@ -11,6 +11,7 @@ struct BakeConfig {
   int samples = 128;          // Rays per texel
   int bounces = 5;            // Max path depth
   int num_light_samples = 1;  // Number of light samples for NEE
+  bool indirect_only = false;
 };
 
 struct BakeResult {

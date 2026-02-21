@@ -6,7 +6,6 @@
 #include <tbb/parallel_for.h>
 
 #include <atomic>
-#include <cmath>
 #include <functional>
 #include <iostream>
 #include <random>
@@ -146,9 +145,11 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
             // Direct lighting (NEE).
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
-            AccumulateIncomingLightSamples(&light_tree, rtc_scene, sp.position,
-                                           sp.normal, config.num_light_samples,
-                                           rng, &sample_sh_accum);
+            if (!config.indirect_only) {
+              AccumulateIncomingLightSamples(
+                  &light_tree, rtc_scene, sp.position, sp.normal,
+                  config.num_light_samples, rng, &sample_sh_accum);
+            }
 
             // Indirect lighting.
             TraceConfig trace_config(
