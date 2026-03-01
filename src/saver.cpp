@@ -16,7 +16,7 @@ namespace sh_baker {
 
 namespace {
 
-const float kLightIntensityScale = 1e+3f;
+const float kLightIntensityScale = 200.f;
 
 // Helpers for buffer management
 void AddBufferView(const void* data, size_t size, size_t stride, int target,
