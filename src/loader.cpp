@@ -544,7 +544,9 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
   if (!ext.Has("layers") || !ext.Get("layers").IsArray()) return;
 
   int base_layer = 0;
-  if (ext.Has("baseLayer")) base_layer = ext.Get("baseLayer").Get<int>();
+  // GetNumberAsInt (not Get<int>) so a JSON integer parsed as a real by another
+  // glTF producer doesn't throw bad_variant_access.
+  if (ext.Has("baseLayer")) base_layer = ext.Get("baseLayer").GetNumberAsInt();
 
   const tinygltf::Value& larr = ext.Get("layers");
   std::vector<CompositeLayer> layers;
@@ -553,7 +555,7 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
     const auto& lo = larr.Get(int(i));
     CompositeLayer layer;
     if (lo.Has("texture") && lo.Get("texture").Has("index")) {
-      int tex_idx = lo.Get("texture").Get("index").Get<int>();
+      int tex_idx = lo.Get("texture").Get("index").GetNumberAsInt();
       LoadTexture(model, tex_idx, base_path, &layer.texture, true);
     }
     if (lo.Has("blendSrc")) {

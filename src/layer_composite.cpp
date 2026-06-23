@@ -39,6 +39,9 @@ void SampleTexture(const Texture& tex, const Eigen::Vector2f& uv,
     *alpha = 1.0f;
     return;
   }
+  // Exported layer/albedo textures are always RGB or RGBA; grayscale is not a
+  // case we need to support.
+  CHECK_GE(tex.channels, 3u);
   float u = uv.x() - std::floor(uv.x());
   float v = uv.y() - std::floor(uv.y());
   int tx = std::clamp(static_cast<int>(u * tex.width), 0,
