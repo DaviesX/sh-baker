@@ -16,6 +16,7 @@
 #include <Eigen/Geometry>
 
 #include "colorspace.h"
+#include "layer_composite.h"
 #include "mikktspace.h"
 #include "tiny_gltf.h"
 
@@ -452,6 +453,127 @@ void LoadTexture(const tinygltf::Model& model, int tex_idx,
   }
 }
 
+// Parses the `rgbGen` object of an SH_material_layers layer.
+RgbGen ParseRgbGen(const tinygltf::Value& obj) {
+  RgbGen gen;
+  if (!obj.IsObject() || !obj.Has("type")) return gen;
+  const std::string type = obj.Get("type").Get<std::string>();
+  if (type == "IDENTITY") {
+    gen.type = RgbGenType::kIdentity;
+  } else if (type == "IDENTITY_LIGHTING") {
+    gen.type = RgbGenType::kIdentityLighting;
+  } else if (type == "VERTEX") {
+    gen.type = RgbGenType::kVertex;
+  } else if (type == "EXACT_VERTEX") {
+    gen.type = RgbGenType::kExactVertex;
+  } else if (type == "WAVE") {
+    gen.type = RgbGenType::kWave;
+    const std::string func =
+        obj.Has("func") ? obj.Get("func").Get<std::string>() : "SIN";
+    if (func == "TRIANGLE") {
+      gen.wave = WaveType::kTriangle;
+    } else if (func == "SQUARE") {
+      gen.wave = WaveType::kSquare;
+    } else if (func == "SAWTOOTH") {
+      gen.wave = WaveType::kSawtooth;
+    } else if (func == "INVERSE_SAWTOOTH") {
+      gen.wave = WaveType::kInverseSawtooth;
+    } else {
+      gen.wave = WaveType::kSine;
+    }
+    auto num = [&](const char* k) -> float {
+      return obj.Has(k) ? float(obj.Get(k).GetNumberAsDouble()) : 0.0f;
+    };
+    gen.base = num("base");
+    gen.amplitude = num("amplitude");
+    gen.phase = num("phase");
+    gen.frequency = num("frequency");
+  }
+  if (gen.type == RgbGenType::kVertex || gen.type == RgbGenType::kExactVertex) {
+    LOG(WARNING) << "rgbGen vertex not supported (no COLOR_0); using identity.";
+  }
+  return gen;
+}
+
+// Parses the `tcMod` array of an SH_material_layers layer. Only SCALE and
+// TRANSFORM carry numeric values we use at t=0; the time-varying types freeze.
+std::vector<TcMod> ParseTcMods(const tinygltf::Value& arr) {
+  std::vector<TcMod> mods;
+  if (!arr.IsArray()) return mods;
+  for (size_t i = 0; i < arr.ArrayLen(); ++i) {
+    const auto& m = arr.Get(int(i));
+    if (!m.Has("type")) continue;
+    const std::string type = m.Get("type").Get<std::string>();
+    TcMod mod;
+    if (type == "SCALE") {
+      mod.type = TcModType::kScale;
+    } else if (type == "TRANSFORM") {
+      mod.type = TcModType::kTransform;
+    } else if (type == "SCROLL") {
+      mod.type = TcModType::kScroll;
+    } else if (type == "ROTATE") {
+      mod.type = TcModType::kRotate;
+    } else if (type == "TURB") {
+      mod.type = TcModType::kTurb;
+    } else if (type == "STRETCH") {
+      mod.type = TcModType::kStretch;
+    }
+    // Only SCALE/TRANSFORM have all-numeric `value` arrays we consume.
+    if ((mod.type == TcModType::kScale || mod.type == TcModType::kTransform) &&
+        m.Has("value") && m.Get("value").IsArray()) {
+      const auto& vals = m.Get("value");
+      for (size_t k = 0; k < vals.ArrayLen(); ++k) {
+        mod.values.push_back(float(vals.Get(int(k)).GetNumberAsDouble()));
+      }
+    }
+    mods.push_back(std::move(mod));
+  }
+  return mods;
+}
+
+// If the material carries SH_material_layers, composite the Quake 3 stack at t=0
+// over the modern albedo and replace mat->albedo with the result (RGBA8: sRGB
+// colour + coverage in alpha). No-op when the extension is absent.
+void ApplyMaterialLayers(const tinygltf::Model& model,
+                         const tinygltf::Material& gltf_mat,
+                         const std::filesystem::path& base_path,
+                         Material* mat) {
+  auto it = gltf_mat.extensions.find("SH_material_layers");
+  if (it == gltf_mat.extensions.end()) return;
+  const tinygltf::Value& ext = it->second;
+  if (!ext.Has("layers") || !ext.Get("layers").IsArray()) return;
+
+  int base_layer = 0;
+  if (ext.Has("baseLayer")) base_layer = ext.Get("baseLayer").Get<int>();
+
+  const tinygltf::Value& larr = ext.Get("layers");
+  std::vector<CompositeLayer> layers;
+  layers.reserve(larr.ArrayLen());
+  for (size_t i = 0; i < larr.ArrayLen(); ++i) {
+    const auto& lo = larr.Get(int(i));
+    CompositeLayer layer;
+    if (lo.Has("texture") && lo.Get("texture").Has("index")) {
+      int tex_idx = lo.Get("texture").Get("index").Get<int>();
+      LoadTexture(model, tex_idx, base_path, &layer.texture, true);
+    }
+    if (lo.Has("blendSrc")) {
+      layer.blend_src = ParseBlendFactor(lo.Get("blendSrc").Get<std::string>());
+    }
+    if (lo.Has("blendDst")) {
+      layer.blend_dst = ParseBlendFactor(lo.Get("blendDst").Get<std::string>());
+    }
+    if (lo.Has("rgbGen")) layer.rgbgen = ParseRgbGen(lo.Get("rgbGen"));
+    if (lo.Has("tcMod")) layer.tcmods = ParseTcMods(lo.Get("tcMod"));
+    layers.push_back(std::move(layer));
+  }
+  if (layers.empty()) return;
+  if (base_layer < 0 || base_layer >= static_cast<int>(layers.size())) {
+    base_layer = 0;
+  }
+
+  mat->albedo = CompositeAlbedoCoverage(layers, base_layer, mat->albedo);
+}
+
 void ProcessMaterials(const tinygltf::Model& model,
                       const std::filesystem::path& base_path,
                       std::vector<Material>* result) {
@@ -566,6 +688,10 @@ void ProcessMaterials(const tinygltf::Model& model,
           0, static_cast<uint8_t>(roughness * 255),
           static_cast<uint8_t>(metallic * 255)};
     }
+
+    // Composite the Quake 3 layer stack (SH_material_layers) over the modern
+    // albedo at t=0, if present. Overwrites mat.albedo with sRGB + coverage.
+    ApplyMaterialLayers(model, gltf_mat, base_path, &mat);
 
     result->push_back(std::move(mat));
   }
