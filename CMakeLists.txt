@@ -106,6 +106,7 @@ set(LIB_SOURCES
     ${mikktspace_SOURCE_DIR}/mikktspace.c
     src/rasterizer.cpp
     src/material.cpp
+    src/layer_composite.cpp
     src/dilation.cpp
     src/tinyexr_impl.cpp
     src/miniz.c
@@ -170,6 +171,7 @@ add_executable(sh_baker_test
     src/rasterizer_test.cpp
     src/dilation_test.cpp
     src/material_test.cpp
+    src/layer_composite_test.cpp
     src/atlas_test.cpp
     src/light_test.cpp
     src/sensor_test.cpp
