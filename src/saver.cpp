@@ -646,15 +646,18 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     // renderer composites these over the (modern) baseColorTexture itself.
     if (mat.layers) {
       auto remap = [&](int old_idx) -> int {
+        // The output model has its own texture index space built from scratch,
+        // so an input-space index is meaningless here. Fall back to -1 (glTF's
+        // invalid-texture sentinel) rather than an index from the wrong space.
         auto pit = mat.layers->texture_paths.find(old_idx);
         if (pit == mat.layers->texture_paths.end()) {
           LOG(WARNING) << "SH_material_layers: no source path for texture index "
                        << old_idx << " in material " << mat.name;
-          return old_idx;
+          return -1;
         }
         auto new_idx = AddOrReuseTexture(pit->second, path.parent_path(), &model,
                                          &texture_allocations);
-        return new_idx.value_or(old_idx);
+        return new_idx.value_or(-1);
       };
       gmat.extensions["SH_material_layers"] =
           RemapLayerTextureIndices(mat.layers->extension, remap);
