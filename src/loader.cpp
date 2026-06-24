@@ -453,6 +453,26 @@ void LoadTexture(const tinygltf::Model& model, int tex_idx,
   }
 }
 
+// Resolves a glTF texture index to its absolute source image path (mirrors the
+// path logic in LoadTexture, without loading pixels). Used to re-copy layer and
+// animMap-frame textures when passing SH_material_layers through to the output.
+std::optional<std::filesystem::path> ResolveTexturePath(
+    const tinygltf::Model& model, int tex_idx,
+    const std::filesystem::path& base_path) {
+  if (tex_idx < 0 || tex_idx >= static_cast<int>(model.textures.size())) {
+    return std::nullopt;
+  }
+  int img_idx = model.textures[tex_idx].source;
+  if (img_idx < 0 || img_idx >= static_cast<int>(model.images.size())) {
+    return std::nullopt;
+  }
+  const std::string& uri = model.images[img_idx].uri;
+  if (uri.empty()) return std::nullopt;
+  std::filesystem::path uri_path(UrlDecode(uri));
+  if (uri_path.is_absolute()) return uri_path;
+  return std::filesystem::absolute(base_path / uri_path);
+}
+
 // Parses the `rgbGen` object of an SH_material_layers layer.
 RgbGen ParseRgbGen(const tinygltf::Value& obj) {
   RgbGen gen;
@@ -549,6 +569,34 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
   if (ext.Has("baseLayer")) base_layer = ext.Get("baseLayer").GetNumberAsInt();
 
   const tinygltf::Value& larr = ext.Get("layers");
+
+  // Retain the extension verbatim so the saver can pass it through to the baked
+  // output, resolving every referenced texture index (layer textures + animMap
+  // frames) to its source file so the saver can re-copy and re-index them.
+  if (larr.ArrayLen() > 0) {
+    MaterialLayers passthrough;
+    passthrough.extension = ext;
+    auto remember = [&](int idx) {
+      if (passthrough.texture_paths.count(idx)) return;
+      if (auto p = ResolveTexturePath(model, idx, base_path)) {
+        passthrough.texture_paths[idx] = *p;
+      }
+    };
+    for (size_t i = 0; i < larr.ArrayLen(); ++i) {
+      const auto& lo = larr.Get(int(i));
+      if (lo.Has("texture") && lo.Get("texture").Has("index")) {
+        remember(lo.Get("texture").Get("index").GetNumberAsInt());
+      }
+      if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
+        const auto& frames = lo.Get("animFrames");
+        for (size_t f = 0; f < frames.ArrayLen(); ++f) {
+          remember(frames.Get(int(f)).GetNumberAsInt());
+        }
+      }
+    }
+    mat->layers = std::move(passthrough);
+  }
+
   std::vector<CompositeLayer> layers;
   layers.reserve(larr.ArrayLen());
   for (size_t i = 0; i < larr.ArrayLen(); ++i) {

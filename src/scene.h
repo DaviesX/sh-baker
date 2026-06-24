@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "material_layers.h"
 #include "sh_coeffs.h"
 
 namespace sh_baker {
@@ -65,6 +66,10 @@ struct Material {
   Eigen::Vector3f emissive_factor = Eigen::Vector3f::Zero();
   float emissive_strength = 0.f;
   std::optional<Texture> emissive_texture;
+
+  // Verbatim SH_material_layers extension, retained so the saver can re-emit it
+  // for the renderer. Absent when the source material had no extension.
+  std::optional<MaterialLayers> layers;
 };
 
 // --- Geometry ---

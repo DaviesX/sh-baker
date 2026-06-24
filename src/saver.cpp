@@ -102,6 +102,49 @@ std::optional<int> AddOrReuseTexture(
   return texture_index_it->second;
 }
 
+// Rebuilds an SH_material_layers extension Value with every layer/animMap texture
+// index passed through `remap` (old input index -> new output index). All other
+// fields (surfaceBlend, cullMode, baseLayer, blendSrc/Dst, rgbGen, tcMod,
+// animFreq) are copied verbatim. tinygltf::Value is immutable, so we reconstruct.
+template <typename RemapFn>
+tinygltf::Value RemapLayerTextureIndices(const tinygltf::Value& ext,
+                                         RemapFn remap) {
+  tinygltf::Value::Object out;
+  for (const std::string& key : ext.Keys()) {
+    if (key != "layers") out[key] = ext.Get(key);
+  }
+
+  tinygltf::Value::Array new_layers;
+  const tinygltf::Value& larr = ext.Get("layers");
+  for (size_t i = 0; i < larr.ArrayLen(); ++i) {
+    const tinygltf::Value& lo = larr.Get(static_cast<int>(i));
+    tinygltf::Value::Object new_lo;
+    for (const std::string& key : lo.Keys()) {
+      if (key != "texture" && key != "animFrames") new_lo[key] = lo.Get(key);
+    }
+    if (lo.Has("texture") && lo.Get("texture").Has("index")) {
+      tinygltf::Value::Object tex_obj;
+      tex_obj["index"] =
+          tinygltf::Value(remap(lo.Get("texture").Get("index").GetNumberAsInt()));
+      new_lo["texture"] = tinygltf::Value(tex_obj);
+    } else if (lo.Has("texture")) {
+      new_lo["texture"] = lo.Get("texture");
+    }
+    if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
+      const tinygltf::Value& frames = lo.Get("animFrames");
+      tinygltf::Value::Array new_frames;
+      for (size_t f = 0; f < frames.ArrayLen(); ++f) {
+        new_frames.push_back(
+            tinygltf::Value(remap(frames.Get(static_cast<int>(f)).GetNumberAsInt())));
+      }
+      new_lo["animFrames"] = tinygltf::Value(new_frames);
+    }
+    new_layers.push_back(tinygltf::Value(new_lo));
+  }
+  out["layers"] = tinygltf::Value(new_layers);
+  return tinygltf::Value(out);
+}
+
 // Coefficient names for file suffixes or channel prefixes
 // Order: L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22
 const char* kCoeffNames[] = {"L0",   "L1m1", "L10", "L11", "L2m2",
@@ -596,6 +639,32 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
           tinygltf::Value(double(mat.emissive_strength));
       gmat.extensions["KHR_materials_emissive_strength"] =
           tinygltf::Value(ext_obj);
+    }
+
+    // SH_material_layers: pass the Quake 3 layer stack through verbatim, copying
+    // each layer/animMap texture into the output and remapping its index. The
+    // renderer composites these over the (modern) baseColorTexture itself.
+    if (mat.layers) {
+      auto remap = [&](int old_idx) -> int {
+        // The output model has its own texture index space built from scratch,
+        // so an input-space index is meaningless here. Fall back to -1 (glTF's
+        // invalid-texture sentinel) rather than an index from the wrong space.
+        auto pit = mat.layers->texture_paths.find(old_idx);
+        if (pit == mat.layers->texture_paths.end()) {
+          LOG(WARNING) << "SH_material_layers: no source path for texture index "
+                       << old_idx << " in material " << mat.name;
+          return -1;
+        }
+        auto new_idx = AddOrReuseTexture(pit->second, path.parent_path(), &model,
+                                         &texture_allocations);
+        return new_idx.value_or(-1);
+      };
+      gmat.extensions["SH_material_layers"] =
+          RemapLayerTextureIndices(mat.layers->extension, remap);
+      if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
+                    "SH_material_layers") == model.extensionsUsed.end()) {
+        model.extensionsUsed.push_back("SH_material_layers");
+      }
     }
 
     model.materials.push_back(gmat);
