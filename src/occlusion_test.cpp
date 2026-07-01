@@ -183,4 +183,48 @@ TEST_F(OcclusionTest, MultiGeometryMaterialTest) {
   rtcReleaseScene(rtc_scene);
 }
 
+TEST_F(OcclusionTest, ReportsMaterialLessOccluder) {
+  Scene scene;
+
+  // A normal (materialed) triangle at Z=0.
+  Geometry lit;
+  lit.vertices = {
+      {-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+  lit.indices = {0, 1, 2};
+  lit.material_id = 0;
+  scene.geometries.push_back(lit);
+
+  // A material-less pure-occluder triangle at Z=-1 (behind the lit one).
+  Geometry shell;
+  shell.vertices = {
+      {-1.0f, -1.0f, -1.0f}, {1.0f, -1.0f, -1.0f}, {0.0f, 1.0f, -1.0f}};
+  shell.indices = {0, 1, 2};
+  shell.material_id = -1;
+  scene.geometries.push_back(shell);
+
+  RTCScene rtc_scene = BuildBVH(scene, device);
+  ASSERT_NE(rtc_scene, nullptr);
+
+  // Hitting the front (materialed) triangle: a real surface.
+  Ray front_ray;
+  front_ray.origin = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+  front_ray.direction = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+  auto front_hit = FindOcclusion(rtc_scene, front_ray);
+  ASSERT_TRUE(front_hit.has_value());
+  EXPECT_NEAR(front_hit->position.z(), 0.0f, 1e-4f);
+  EXPECT_GE(front_hit->material_id, 0);
+
+  // Hitting the shell directly (from below, missing the lit triangle's front):
+  // reported material-less so the tracer blocks transport without shading.
+  Ray shell_ray;
+  shell_ray.origin = Eigen::Vector3f(0.0f, 0.0f, -5.0f);
+  shell_ray.direction = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+  auto shell_hit = FindOcclusion(rtc_scene, shell_ray);
+  ASSERT_TRUE(shell_hit.has_value());
+  EXPECT_NEAR(shell_hit->position.z(), -1.0f, 1e-4f);
+  EXPECT_LT(shell_hit->material_id, 0);
+
+  rtcReleaseScene(rtc_scene);
+}
+
 }  // namespace sh_baker

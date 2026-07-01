@@ -149,11 +149,13 @@ bool ProcessPrimitive(const tinygltf::Model& model,
                       const tinygltf::Primitive& primitive,
                       const Eigen::Affine3f& transform,
                       std::vector<Geometry>* result) {
+  // A material-less primitive is, by pipeline convention, a pure occluder shell:
+  // it occludes light and passes through to the output, but is never atlased or
+  // shaded with texture. It legitimately carries only POSITION/NORMAL, so the
+  // material and texture-UV preconditions below are relaxed for it.
+  const bool is_occluder = primitive.material < 0;
+
   // Precondition.
-  if (primitive.material < 0) {
-    LOG(ERROR) << "Primitive missing material.";
-    return false;
-  }
   if (primitive.attributes.find("POSITION") == primitive.attributes.end()) {
     LOG(ERROR) << "Primitive missing POSITION attribute.";
     return false;
@@ -163,7 +165,8 @@ bool ProcessPrimitive(const tinygltf::Model& model,
                   "Normals.";
     return false;
   }
-  if (primitive.attributes.find("TEXCOORD_0") == primitive.attributes.end()) {
+  if (!is_occluder &&
+      primitive.attributes.find("TEXCOORD_0") == primitive.attributes.end()) {
     LOG(ERROR) << "Primitive missing TEXCOORD_0 attribute. Baking requires "
                   "UVs.";
     return false;
@@ -171,7 +174,7 @@ bool ProcessPrimitive(const tinygltf::Model& model,
 
   Geometry geo;
   geo.transform = transform;
-  geo.material_id = primitive.material;
+  geo.material_id = primitive.material;  // < 0 -> pure occluder
 
   // Get Position
   const tinygltf::Accessor& pos_accessor =
