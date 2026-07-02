@@ -11,6 +11,7 @@
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include <Eigen/Geometry>
@@ -19,6 +20,15 @@
 #include "layer_composite.h"
 #include "mikktspace.h"
 #include "tiny_gltf.h"
+
+// Emitted radiance scale for additive SH_material_layers surfaces (flames,
+// glows). Quake 3's q3map_surfacelight would be the physical source but it does
+// not yet reach the baker (the exporter parses it but omits it from the glTF),
+// so the LDR composite is scaled by this knob. Tune per map; revisit once the
+// exporter forwards q3map_surfacelight.
+DEFINE_double(additive_emissive_strength, 15.0,
+              "Emitted-radiance multiplier for additive (flame/glow) "
+              "SH_material_layers surfaces baked as area lights.");
 
 namespace sh_baker {
 namespace {
@@ -609,6 +619,19 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
       int tex_idx = lo.Get("texture").Get("index").GetNumberAsInt();
       LoadTexture(model, tex_idx, base_path, &layer.texture, true);
     }
+    // animMap frames -- only the emissive (additive) compositor reads these
+    // (it averages them). Loaded here so an additive stack is frame-averaged;
+    // non-animated stages pay nothing.
+    if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
+      const auto& frames = lo.Get("animFrames");
+      layer.anim_frames.reserve(frames.ArrayLen());
+      for (size_t f = 0; f < frames.ArrayLen(); ++f) {
+        Texture frame;
+        LoadTexture(model, frames.Get(int(f)).GetNumberAsInt(), base_path,
+                    &frame, true);
+        layer.anim_frames.push_back(std::move(frame));
+      }
+    }
     if (lo.Has("blendSrc")) {
       layer.blend_src = ParseBlendFactor(lo.Get("blendSrc").Get<std::string>());
     }
@@ -622,6 +645,34 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
   if (layers.empty()) return;
   if (base_layer < 0 || base_layer >= static_cast<int>(layers.size())) {
     base_layer = 0;
+  }
+
+  // Additive (order-independent) transparency: every stage blends with dst
+  // factor GL_ONE (flames, glows). Such a surface has no diffuse base; in the
+  // bake it is a *non-occluding emitter*, not a reflector. Composite the stack
+  // into an emitted-radiance texture and route it through the area-light path
+  // (emissive_*), zero the diffuse albedo so it does not also reflect, and flag
+  // it so BuildBVH keeps it out of the occluder scene. (The renderer draws
+  // these via its own additive pass; this only governs their GI contribution.)
+  bool all_additive = true;
+  for (const auto& layer : layers) {
+    if (layer.blend_dst != BlendFactor::kOne) {
+      all_additive = false;
+      break;
+    }
+  }
+  if (all_additive) {
+    mat->additive = true;
+    mat->emissive_texture = CompositeEmissiveRadiance(layers);
+    mat->emissive_factor = Eigen::Vector3f::Ones();
+    mat->emissive_strength = static_cast<float>(FLAGS_additive_emissive_strength);
+    // Pure emitter: no diffuse reflectance (1x1 opaque black).
+    mat->albedo.width = 1;
+    mat->albedo.height = 1;
+    mat->albedo.channels = 4;
+    mat->albedo.pixel_data = {0, 0, 0, 255};
+    mat->albedo.file_path.reset();
+    return;
   }
 
   mat->albedo = CompositeAlbedoCoverage(layers, base_layer, mat->albedo);
