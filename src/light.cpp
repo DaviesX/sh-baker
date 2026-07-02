@@ -29,10 +29,14 @@ Eigen::Vector3f InterpolatedWorldNormal(const Geometry& geo, uint32_t i0,
     n = geo.transform.rotation() *
         (b0 * geo.normals[i0] + b1 * geo.normals[i1] + b2 * geo.normals[i2]);
   } else {
-    const Eigen::Vector3f& v0 = geo.vertices[i0];
-    const Eigen::Vector3f& v1 = geo.vertices[i1];
-    const Eigen::Vector3f& v2 = geo.vertices[i2];
-    n = geo.transform.rotation() * (v1 - v0).cross(v2 - v0);
+    // Transform vertices to world space *before* the cross product: for a face
+    // normal, R * (edge x edge) is wrong under non-uniform scale (the correct
+    // map is the inverse-transpose, which (M*e1) x (M*e2) yields up to a
+    // positive scalar). Crossing world-space edges is exact and simpler.
+    const Eigen::Vector3f v0 = geo.transform * geo.vertices[i0];
+    const Eigen::Vector3f v1 = geo.transform * geo.vertices[i1];
+    const Eigen::Vector3f v2 = geo.transform * geo.vertices[i2];
+    n = (v1 - v0).cross(v2 - v0);
   }
   float len = n.norm();
   return (len > 1e-12f) ? Eigen::Vector3f(n / len) : Eigen::Vector3f::UnitZ();
