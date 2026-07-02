@@ -785,6 +785,12 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
                       geo.indices.size(), TINYGLTF_TYPE_SCALAR, {}, {}, &model);
     }
 
+    // Material-less pure occluders (solidified shells) round-trip naturally:
+    // prim.material was set to geo.material_id (< 0), which tinygltf omits, so
+    // the primitive stays material-less — the convention the renderer keys on to
+    // apply it during shadow mapping but not the color pass. They also carry no
+    // lightmap UVs, so no TEXCOORD_1 was emitted above.
+
     mesh.primitives.push_back(prim);
     model.meshes.push_back(mesh);
 

@@ -188,6 +188,73 @@ TEST(SaverTest, SaveSceneWithTexture) {
   std::filesystem::remove_all(temp_dir);
 }
 
+TEST(SaverTest, OccluderShellRoundTripsMaterialLess) {
+  Scene scene;
+  Material mat;
+  mat.name = "WallMat";
+  mat.albedo.width = 1;
+  mat.albedo.height = 1;
+  mat.albedo.pixel_data = {255, 255, 255, 255};
+  scene.materials.push_back(mat);
+
+  // A visible surface (has a material).
+  Geometry lit;
+  lit.vertices = {Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(1, 0, 0),
+                  Eigen::Vector3f(0, 1, 0)};
+  lit.indices = {0, 1, 2};
+  lit.material_id = 0;
+  scene.geometries.push_back(lit);
+
+  // A material-less pure occluder: no material, no lightmap UVs.
+  Geometry shell;
+  shell.vertices = {Eigen::Vector3f(0, 0, -1), Eigen::Vector3f(1, 0, -1),
+                    Eigen::Vector3f(0, 1, -1)};
+  shell.indices = {0, 1, 2};
+  shell.material_id = -1;
+  scene.geometries.push_back(shell);
+
+  std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() / "sh_baker_test_occluder";
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path output_gltf = temp_dir / "scene.gltf";
+
+  ASSERT_TRUE(SaveScene(scene, output_gltf));
+
+  tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+  std::string err, warn;
+  ASSERT_TRUE(loader.LoadASCIIFromFile(&model, &err, &warn,
+                                       output_gltf.string()))
+      << err;
+
+  // No SH_occluder extension is used — material-less IS the occluder signal.
+  EXPECT_EQ(std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
+                      "SH_occluder"),
+            model.extensionsUsed.end());
+
+  // Exactly one primitive is material-less, and it carries no lightmap UVs;
+  // exactly one keeps its material.
+  int material_less = 0;
+  int materialed = 0;
+  int lightmap_uv_on_material_less = 0;
+  for (const auto& mesh : model.meshes) {
+    for (const auto& prim : mesh.primitives) {
+      EXPECT_FALSE(prim.extensions.count("SH_occluder"));
+      if (prim.material < 0) {
+        ++material_less;
+        if (prim.attributes.count("TEXCOORD_1")) ++lightmap_uv_on_material_less;
+      } else {
+        ++materialed;
+      }
+    }
+  }
+  EXPECT_EQ(material_less, 1);
+  EXPECT_EQ(materialed, 1);
+  EXPECT_EQ(lightmap_uv_on_material_less, 0);
+
+  std::filesystem::remove_all(temp_dir);
+}
+
 TEST(SaverTest, SaveSceneFallback1x1) {
   Scene scene;
   Material mat;
