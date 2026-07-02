@@ -19,6 +19,9 @@ namespace light_internal {
 struct AreaSample {
   Eigen::Vector3f point;
   Eigen::Vector3f radiance;
+  // World-space surface normal at the sampled point, used for the emitter-side
+  // cosine (single-sided emission, matching the single-sided Flux()).
+  Eigen::Vector3f normal = Eigen::Vector3f::UnitZ();
   float pdf = 0.f;
 };
 
@@ -176,10 +179,23 @@ inline AreaLightIncoming AreaLightIncomingRadiance(const AreaSample& sample,
   visibility_ray->tfar = dist - 0.005f;
 
   float cos_n = N.dot(L);
-  if (cos_n < 0.f) {
+  // Emitter-side cosine (the cos_light factor of the area form-factor / the
+  // dA->dw Jacobian for the SH path). The previous estimator omitted it
+  // entirely and emitted ISOTROPICALLY -- radiating full L_e/dist^2 in every
+  // direction regardless of the emitter's orientation. That over-emits at
+  // off-axis/grazing angles, which is what produced fireflies on surfaces away
+  // from the light. Applying the cosine falloff is the fix.
+  //
+  // Kept TWO-SIDED (abs) to match the light tree, whose area-light bounds are
+  // two_sided with a full-sphere emission cone (ComputeLightBounds): these Q3
+  // emitters are billboard flames -- volumetric emitters faked as quads -- so
+  // they radiate from both faces. Estimator and selection pdf must agree on
+  // sidedness or samples are wasted / biased.
+  float cos_light = std::abs(sample.normal.dot(L));
+  if (cos_n < 0.f || cos_light <= 0.f) {
     return AreaLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
-  return AreaLightIncoming{sample.radiance / dist_sq, L, cos_n};
+  return AreaLightIncoming{sample.radiance * (cos_light / dist_sq), L, cos_n};
 }
 
 template <typename Brdf>

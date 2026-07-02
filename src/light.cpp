@@ -16,6 +16,30 @@ namespace sh_baker {
 
 namespace light_internal {
 
+namespace {
+
+// World-space surface normal at a barycentric point on a triangle. Uses the
+// interpolated vertex normals when present (matching TransformedNormals'
+// rotation-only convention), else the geometric face normal.
+Eigen::Vector3f InterpolatedWorldNormal(const Geometry& geo, uint32_t i0,
+                                        uint32_t i1, uint32_t i2, float b0,
+                                        float b1, float b2) {
+  Eigen::Vector3f n;
+  if (!geo.normals.empty()) {
+    n = geo.transform.rotation() *
+        (b0 * geo.normals[i0] + b1 * geo.normals[i1] + b2 * geo.normals[i2]);
+  } else {
+    const Eigen::Vector3f& v0 = geo.vertices[i0];
+    const Eigen::Vector3f& v1 = geo.vertices[i1];
+    const Eigen::Vector3f& v2 = geo.vertices[i2];
+    n = geo.transform.rotation() * (v1 - v0).cross(v2 - v0);
+  }
+  float len = n.norm();
+  return (len > 1e-12f) ? Eigen::Vector3f(n / len) : Eigen::Vector3f::UnitZ();
+}
+
+}  // namespace
+
 AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   CHECK(light.emission_cdf);
   CHECK(light.prim_id_map);
@@ -90,6 +114,7 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   const Eigen::Vector3f& v1 = geo.vertices[i1];
   const Eigen::Vector3f& v2 = geo.vertices[i2];
   Eigen::Vector3f p = geo.transform * (b0 * v0 + b1 * v1 + b2 * v2);
+  Eigen::Vector3f normal = InterpolatedWorldNormal(geo, i0, i1, i2, b0, b1, b2);
 
   // 6. Emission at sampled UV.
   Eigen::Vector3f emission = GetEmission(*light.material, uv);
@@ -99,7 +124,7 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   float pdf_area = (jacobian > 1e-12f) ? (pdf_uv / jacobian) : 1e-6f;
   pdf_area = std::max(pdf_area, 1e-6f);
 
-  return AreaSample{p, emission, pdf_area};
+  return AreaSample{p, emission, normal, pdf_area};
 }
 
 AreaSample SampleAreaLightUniform(const Light& light, std::mt19937& rng) {
@@ -139,10 +164,11 @@ AreaSample SampleAreaLightUniform(const Light& light, std::mt19937& rng) {
   }
 
   Eigen::Vector3f emission = GetEmission(*light.material, uv);
+  Eigen::Vector3f normal = InterpolatedWorldNormal(geo, i0, i1, i2, w, u1, u2);
 
   float triangle_area = (v0 - v1).cross(v0 - v2).norm() / 2.f;
   float pdf = std::max(1e-6f, 1.f / num_triangles * 1.f / triangle_area);
-  return {p, emission, pdf};
+  return {p, emission, normal, pdf};
 }
 
 AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
