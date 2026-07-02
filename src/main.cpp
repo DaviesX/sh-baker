@@ -72,6 +72,28 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "  Materials: " << scene.materials.size();
   LOG(INFO) << "  Lights: " << scene.lights.size();
 
+  // Set material-less pure occluders (solidified shells) aside before atlasing.
+  // They must not receive a lightmap chart or bake sensors, but they must
+  // occlude during path tracing and pass through to the output glTF for the
+  // renderer's shadow maps. They are folded back into scene.geometries after
+  // rasterization, just before the bake, so the path-tracing BVH and the saver
+  // both see them.
+  std::vector<sh_baker::Geometry> occluder_shells;
+  {
+    std::vector<sh_baker::Geometry> lit_geometries;
+    lit_geometries.reserve(scene.geometries.size());
+    for (auto& geo : scene.geometries) {
+      if (geo.material_id < 0) {
+        occluder_shells.push_back(std::move(geo));
+      } else {
+        lit_geometries.push_back(std::move(geo));
+      }
+    }
+    scene.geometries = std::move(lit_geometries);
+  }
+  LOG(INFO) << "  Occluder shells (excluded from atlas): "
+            << occluder_shells.size();
+
   // Generate Atlas
   LOG(INFO) << "Generating Lightmap UVs (xatlas)...";
   if (scene.geometries.empty()) {
@@ -131,6 +153,18 @@ int main(int argc, char* argv[]) {
                  << map_path2;
     }
   }
+
+  // Fold the occluder shells back in now that atlasing and rasterization (which
+  // produce the lightmap sensors) are done. The bake builds its BVH from
+  // scene.geometries, so the shells occlude transport; the saver then writes them
+  // back out material-less for the renderer's shadow maps. They are appended
+  // last, so existing geometry indices are undisturbed. Reserve first to avoid
+  // reallocating the (large) geometry vector as they are pushed.
+  scene.geometries.reserve(scene.geometries.size() + occluder_shells.size());
+  for (auto& shell : occluder_shells) {
+    scene.geometries.push_back(std::move(shell));
+  }
+  occluder_shells.clear();
 
   // Configure Baker
   sh_baker::BakeConfig config;

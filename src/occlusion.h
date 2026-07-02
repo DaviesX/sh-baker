@@ -19,6 +19,8 @@ struct Occlusion {
   Eigen::Vector3f position;
   Eigen::Vector2f uv;
   Eigen::Vector3f normal;
+  // < 0 means the hit is a material-less pure occluder (a solidified shell); the
+  // tracer blocks transport there without shading.
   int material_id;
 };
 

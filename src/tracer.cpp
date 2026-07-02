@@ -29,6 +29,12 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
     return Eigen::Vector3f::Zero();
   }
 
+  // A material-less hit is a pure occluder shell (a solidified thin wall): it
+  // blocks transport — the ray stops here — but has no surface to shade, so it
+  // contributes nothing. This both stops the light leak the shell exists to
+  // prevent and avoids indexing materials[-1] below.
+  if (occ->material_id < 0) return Eigen::Vector3f::Zero();
+
   // Hit surface
   const Material& mat = config.scene.materials[occ->material_id];
   float alpha = GetAlpha(mat, occ->uv);

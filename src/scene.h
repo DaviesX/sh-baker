@@ -82,7 +82,12 @@ struct Geometry {
 
   std::vector<uint32_t> indices;
 
-  int material_id = -1;  // Index into Scene::materials
+  // A material-less geometry (material_id < 0) is, by pipeline convention, a
+  // pure occluder: a solidified thin-wall shell that must occlude light in the
+  // path tracer and pass through to the output glTF (for the renderer's shadow
+  // maps), but must NEVER receive a lightmap chart or bake sensors. It carries
+  // no lightmap UVs and, in the tracer, blocks transport without shading.
+  int material_id = -1;  // Index into Scene::materials; < 0 means pure occluder.
   Eigen::Affine3f transform = Eigen::Affine3f::Identity();
 };
 
