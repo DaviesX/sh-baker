@@ -157,8 +157,10 @@ int main(int argc, char* argv[]) {
   // Fold the occluder shells back in now that atlasing and rasterization (which
   // produce the lightmap sensors) are done. The bake builds its BVH from
   // scene.geometries, so the shells occlude transport; the saver then writes them
-  // back out (tagged SH_occluder) for the renderer's shadow maps. They are
-  // appended last, so existing geometry indices are undisturbed.
+  // back out material-less for the renderer's shadow maps. They are appended
+  // last, so existing geometry indices are undisturbed. Reserve first to avoid
+  // reallocating the (large) geometry vector as they are pushed.
+  scene.geometries.reserve(scene.geometries.size() + occluder_shells.size());
   for (auto& shell : occluder_shells) {
     scene.geometries.push_back(std::move(shell));
   }
