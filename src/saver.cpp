@@ -608,8 +608,15 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
       gmat.pbrMetallicRoughness.metallicFactor = b / 255.0;
     }
 
+    // Emissive. Additive (flame/glow) materials carry a bake-only emissive: an
+    // in-memory composite that seeds area lights during the bake but is never
+    // exported (no file_path). Serializing its factor/strength here would make
+    // the renderer draw a uniform fullbright emitter (no texture to shape it),
+    // so skip all emissive output for them; the renderer reconstructs these
+    // from the SH_material_layers additive pass instead.
+
     // Emissive Factor
-    {
+    if (!mat.additive) {
       std::vector<double> emissive_factor = {double(mat.emissive_factor.x()),
                                              double(mat.emissive_factor.y()),
                                              double(mat.emissive_factor.z())};
@@ -627,7 +634,7 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
     }
 
     // Emissive Strength (Extension)
-    if (mat.emissive_strength != 1.0f) {
+    if (!mat.additive && mat.emissive_strength != 1.0f) {
       if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
                     "KHR_materials_emissive_strength") ==
           model.extensionsUsed.end()) {

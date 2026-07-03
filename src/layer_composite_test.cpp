@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "colorspace.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -182,6 +183,61 @@ TEST(LayerComposite, ResolutionFallsBackToBaseLayer) {
   Texture out = CompositeAlbedoCoverage(layers, 0, modern);
   EXPECT_EQ(out.width, 2u);
   EXPECT_EQ(out.height, 2u);
+}
+
+// --- CompositeEmissiveRadiance ---
+
+// Reads back the emissive texel and linearizes it (GetEmission does the same),
+// so assertions are in linear-radiance space.
+Eigen::Vector3f LinearTexel0(const Texture& t) {
+  return Eigen::Vector3f(SRGBToLinear(t.pixel_data[0]),
+                         SRGBToLinear(t.pixel_data[1]),
+                         SRGBToLinear(t.pixel_data[2]));
+}
+
+TEST(LayerComposite, EmissiveBlackAddsNothing) {
+  // A pure-additive black stage emits zero -- the "adding zero" property.
+  std::vector<CompositeLayer> layers = {
+      Layer(Tex(0, 0, 0), BlendFactor::kOne, BlendFactor::kOne)};
+  Texture out = CompositeEmissiveRadiance(layers);
+  ASSERT_EQ(out.channels, 4u);
+  EXPECT_TRUE(LinearTexel0(out).isApprox(Eigen::Vector3f::Zero(), 1e-4f));
+}
+
+TEST(LayerComposite, EmissiveAddsInLinearSpace) {
+  // Two identical additive gray stages sum in LINEAR space (not gamma).
+  const uint8_t g = 128;
+  float lin = SRGBToLinear(g);  // ~0.216, so 2*lin < 1 (no clamp)
+  std::vector<CompositeLayer> one = {
+      Layer(Tex(g, g, g), BlendFactor::kOne, BlendFactor::kOne)};
+  std::vector<CompositeLayer> two = {
+      Layer(Tex(g, g, g), BlendFactor::kOne, BlendFactor::kOne),
+      Layer(Tex(g, g, g), BlendFactor::kOne, BlendFactor::kOne)};
+
+  EXPECT_NEAR(LinearTexel0(CompositeEmissiveRadiance(one)).x(), lin, 6e-3f);
+  EXPECT_NEAR(LinearTexel0(CompositeEmissiveRadiance(two)).x(), 2.0f * lin,
+              6e-3f);
+}
+
+TEST(LayerComposite, EmissiveAveragesAnimFrames) {
+  // A stage with a black and a white animMap frame emits their linear mean.
+  CompositeLayer layer =
+      Layer(Tex(0, 0, 0), BlendFactor::kOne, BlendFactor::kOne);
+  layer.anim_frames = {Tex(0, 0, 0), Tex(255, 255, 255)};
+  Texture out = CompositeEmissiveRadiance({layer});
+  EXPECT_NEAR(LinearTexel0(out).x(), 0.5f, 6e-3f);
+}
+
+TEST(LayerComposite, EmissiveResolutionFollowsLargestStage) {
+  Texture big = Tex(255, 0, 0);
+  big.width = 4;
+  big.height = 4;
+  big.pixel_data.assign(4 * 4 * 3, 200);
+  std::vector<CompositeLayer> layers = {
+      Layer(big, BlendFactor::kOne, BlendFactor::kOne)};
+  Texture out = CompositeEmissiveRadiance(layers);
+  EXPECT_EQ(out.width, 4u);
+  EXPECT_EQ(out.height, 4u);
 }
 
 }  // namespace

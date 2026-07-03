@@ -74,6 +74,10 @@ struct CompositeLayer {
   // The layer's Quake 3 texture. For the base layer this is kept only for its
   // alpha (coverage); its colour is taken from the modern albedo.
   Texture texture;
+  // animMap frames (frame 0 == `texture`); empty for a static `map` stage. Only
+  // consumed by the emissive path, which averages the frames (a static SH bake
+  // has no time axis, so the mean is the representative glow).
+  std::vector<Texture> anim_frames;
   BlendFactor blend_src = BlendFactor::kOne;
   BlendFactor blend_dst = BlendFactor::kZero;
   RgbGen rgbgen;
@@ -97,6 +101,16 @@ Eigen::Vector3f EvalRgbGen(const RgbGen& gen);  // rgb multiplier in [0,1]
 // 1x1 placeholder.
 Texture CompositeAlbedoCoverage(const std::vector<CompositeLayer>& layers,
                                 int base_layer, const Texture& modern_albedo);
+
+// Composites an additive (order-independent) stack -- every stage blends with
+// dst factor GL_ONE (flames, glows, plasma) -- into an emitted-radiance texture
+// (RGBA8, sRGB-encoded so GetEmission's SRGBToLinear recovers linear radiance;
+// alpha unused, set to 255). Unlike CompositeAlbedoCoverage this blends in
+// LINEAR space (physical additive light), samples each stage's own texture
+// (no modern-albedo substitution), and averages each stage's animMap frames.
+// Output resolution follows the largest stage texture. Meant to drive the
+// area-light path (Material::emissive_texture) so flames light the scene.
+Texture CompositeEmissiveRadiance(const std::vector<CompositeLayer>& layers);
 
 }  // namespace sh_baker
 

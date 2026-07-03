@@ -406,6 +406,15 @@ RTCScene BuildBVH(const Scene& scene, RTCDevice device) {
   rtcSetSceneBuildQuality(rtc_scene, RTC_BUILD_QUALITY_HIGH);
 
   for (const auto& geo : scene.geometries) {
+    // Additive emitters (flames/glows) are transparent to light: keep them out
+    // of the occluder scene so they cast no shadow. Their emission reaches the
+    // bake through the area-light path (NEE) instead.
+    if (geo.material_id >= 0 &&
+        static_cast<size_t>(geo.material_id) < scene.materials.size() &&
+        scene.materials[geo.material_id].additive) {
+      continue;
+    }
+
     auto vertices = TransformedVertices(geo);
 
     RTCGeometry rtc_geo = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
