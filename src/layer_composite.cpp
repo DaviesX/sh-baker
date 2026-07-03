@@ -296,6 +296,14 @@ Texture CompositeEmissiveRadiance(const std::vector<CompositeLayer>& layers) {
   out.channels = 4;
   out.pixel_data.resize(static_cast<size_t>(out_w) * out_h * 4);
 
+  // rgbGen at t=0 is loop-invariant (per layer, not per texel) -- hoist it out
+  // of the pixel loops. tcMod/sampling stay inside as they depend on the UV.
+  std::vector<Eigen::Vector3f> layer_rgbgen;
+  layer_rgbgen.reserve(layers.size());
+  for (const auto& layer : layers) {
+    layer_rgbgen.push_back(EvalRgbGen(layer.rgbgen));
+  }
+
   for (uint32_t ty = 0; ty < out_h; ++ty) {
     for (uint32_t tx = 0; tx < out_w; ++tx) {
       Eigen::Vector2f uv((tx + 0.5f) / out_w, (ty + 0.5f) / out_h);
@@ -304,13 +312,14 @@ Texture CompositeEmissiveRadiance(const std::vector<CompositeLayer>& layers) {
       // layer / modern-albedo substitution: each stage emits its own colour.
       Eigen::Vector3f acc = Eigen::Vector3f::Zero();
       float acc_alpha = 1.0f;
-      for (const auto& layer : layers) {
+      for (size_t li = 0; li < layers.size(); ++li) {
+        const CompositeLayer& layer = layers[li];
         Eigen::Vector2f luv = ApplyTcMods(layer.tcmods, uv);
 
         Eigen::Vector3f src_rgb;
         float src_alpha;
         SampleLayerLinear(layer, luv, &src_rgb, &src_alpha);
-        src_rgb = src_rgb.cwiseProduct(EvalRgbGen(layer.rgbgen));
+        src_rgb = src_rgb.cwiseProduct(layer_rgbgen[li]);
 
         Eigen::Vector3f sf =
             BlendWeight(layer.blend_src, src_rgb, src_alpha, acc, acc_alpha);
