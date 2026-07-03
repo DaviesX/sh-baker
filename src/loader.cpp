@@ -1107,7 +1107,7 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // Process Area Lights (from emissive materials)
+  // Process Area Lights (from emissive materials).
   ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
 
   // Process Environment (IBL / Sun)

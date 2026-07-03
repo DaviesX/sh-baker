@@ -1,7 +1,5 @@
 #include "tracer.h"
 
-#include <cmath>
-
 #include "light.h"
 #include "material.h"
 #include "occlusion.h"
