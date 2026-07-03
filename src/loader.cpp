@@ -11,7 +11,6 @@
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include <Eigen/Geometry>
@@ -20,15 +19,6 @@
 #include "layer_composite.h"
 #include "mikktspace.h"
 #include "tiny_gltf.h"
-
-// Emitted radiance scale for additive SH_material_layers surfaces (flames,
-// glows). Quake 3's q3map_surfacelight would be the physical source but it does
-// not yet reach the baker (the exporter parses it but omits it from the glTF),
-// so the LDR composite is scaled by this knob. Tune per map; revisit once the
-// exporter forwards q3map_surfacelight.
-DEFINE_double(additive_emissive_strength, 15.0,
-              "Emitted-radiance multiplier for additive (flame/glow) "
-              "SH_material_layers surfaces baked as area lights.");
 
 namespace sh_baker {
 namespace {
@@ -666,8 +656,12 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
     mat->additive = true;
     mat->emissive_texture = CompositeEmissiveRadiance(layers);
     mat->emissive_factor = Eigen::Vector3f::Ones();
-    mat->emissive_strength =
-        static_cast<float>(FLAGS_additive_emissive_strength);
+    // emissive_strength keeps the value already loaded from
+    // KHR_materials_emissive_strength, which the exporter forwards from the Q3
+    // shader's q3map_surfacelight (scene.cpp emission_intensity *
+    // kAreaLightIntensityScale). A stack whose shader declares no
+    // q3map_surfacelight stays at 0, so ProcessAreaLights makes no area light
+    // for it -- an additive sprite with no surface light emits nothing.
     // Pure emitter: no diffuse reflectance (1x1 opaque black).
     mat->albedo.width = 1;
     mat->albedo.height = 1;
