@@ -349,8 +349,6 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
     if (!emission_cdf) {
       LOG(WARNING) << "Failed to compute emission CDF for light geometry "
                    << geo_idx;
-      result_lights.push_back(std::move(new_light));
-      continue;
     }
 
     new_light.emission_cdf = std::move(emission_cdf);
