@@ -87,7 +87,8 @@ struct Geometry {
   // path tracer and pass through to the output glTF (for the renderer's shadow
   // maps), but must NEVER receive a lightmap chart or bake sensors. It carries
   // no lightmap UVs and, in the tracer, blocks transport without shading.
-  int material_id = -1;  // Index into Scene::materials; < 0 means pure occluder.
+  int material_id =
+      -1;  // Index into Scene::materials; < 0 means pure occluder.
   Eigen::Affine3f transform = Eigen::Affine3f::Identity();
 };
 
@@ -141,6 +142,10 @@ struct Scene {
   std::vector<Light> lights;
   std::optional<Environment> environment;
 };
+
+// Logs summary statistics for the scene: geometry, material, and light counts,
+// plus the number of material-less occluder shells.
+void LogSceneStats(const Scene& scene);
 
 // Transforms the geometry by the transform matrix.
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
