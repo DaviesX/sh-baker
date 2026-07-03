@@ -94,14 +94,6 @@ int main(int argc, char* argv[]) {
   scene.geometries = std::move(atlas_result->geometries);
   scene.lights = std::move(atlas_result->lights);
 
-  // Geometry is now final; derive the area lights from it (their emission CDFs
-  // index triangles the atlas renumbers/drops). The emitter-geometry pointers
-  // stay valid through the bake because scene.geometries is not modified after.
-  size_t punctual_light_count = scene.lights.size();
-  sh_baker::CreateAreaLights(scene);
-  LOG(INFO) << "  Area lights (from emissive materials): "
-            << scene.lights.size() - punctual_light_count;
-
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;
   raster_config.width = atlas_result->width;
