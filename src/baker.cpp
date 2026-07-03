@@ -98,6 +98,22 @@ BakeResult BakeSHLightMap(const Scene& scene,
   LightTree light_tree;
   light_tree.Build(scene.lights);
 
+  // Area lights (flames, glows) have no real-time path in the renderer, so
+  // their DIRECT contribution is always baked -- even under indirect_only,
+  // which only strips the direct term of punctual lights (those are rendered in
+  // real time). The direct NEE below samples this area-only tree when
+  // indirect_only, and the full tree otherwise. (Kept alive for the tree, which
+  // stores pointers into it; the copies reference the same scene material and
+  // geometry.) Indirect bounces always use the full tree.
+  std::vector<Light> area_lights;
+  for (const auto& light : scene.lights) {
+    if (light.type == Light::Type::Area) area_lights.push_back(light);
+  }
+  LightTree area_light_tree;
+  area_light_tree.Build(area_lights);
+  const LightTree& direct_light_tree =
+      config.indirect_only ? area_light_tree : light_tree;
+
   float inv_pdf_uniform = 2.0f * M_PI;
 
   size_t total_pixels = surface_points.size();
@@ -143,13 +159,15 @@ BakeResult BakeSHLightMap(const Scene& scene,
               break;
             }
 
-            // Direct lighting (NEE).
+            // Direct lighting (NEE). `direct_light_tree` is the full light set
+            // for a normal bake, or area-lights-only under indirect_only (their
+            // direct term is always baked; punctual direct is real-time). Empty
+            // area set under indirect_only -> AccumulateIncomingLightSamples
+            // returns immediately.
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
-            if (!config.indirect_only) {
-              AccumulateIncomingLightSamples(
-                  &light_tree, rtc_scene, sp.position, sp.normal,
-                  config.num_light_samples, rng, &sample_sh_accum);
-            }
+            AccumulateIncomingLightSamples(
+                &direct_light_tree, rtc_scene, sp.position, sp.normal,
+                config.num_light_samples, rng, &sample_sh_accum);
 
             // Indirect lighting.
             TraceConfig trace_config(
