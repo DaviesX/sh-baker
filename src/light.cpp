@@ -179,7 +179,7 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
   CHECK_NOTNULL(light.geometry);
   CHECK_NOTNULL(light.material);
 
-  if (light.material->emissive_texture &&
+  if (light.emission_cdf && light.material->emissive_texture &&
       !light.geometry->texture_uvs.empty()) {
     AreaSample importance_sample = SampleAreaLightTextured(light, rng);
     if (importance_sample.pdf > 0.f) {

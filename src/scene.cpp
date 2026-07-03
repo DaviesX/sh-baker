@@ -182,6 +182,17 @@ SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
   }
 }
 
+void LogSceneStats(const Scene& scene) {
+  size_t shell_count = 0;
+  for (const auto& geo : scene.geometries) {
+    if (geo.material_id < 0) ++shell_count;
+  }
+  LOG(INFO) << "  Geometries: " << scene.geometries.size();
+  LOG(INFO) << "  Materials: " << scene.materials.size();
+  LOG(INFO) << "  Lights: " << scene.lights.size();
+  LOG(INFO) << "  Occluder shells (material-less): " << shell_count;
+}
+
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry) {
   std::vector<Eigen::Vector3f> vertices;
   vertices.reserve(geometry.vertices.size());

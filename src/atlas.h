@@ -28,6 +28,9 @@ struct AtlasResult {
   // Atlas geometries.
   std::vector<Geometry> geometries;
 
+  // Updated lights that reference the new geometries.
+  std::vector<Light> lights;
+
   // Required atlas width.
   int width;
 
