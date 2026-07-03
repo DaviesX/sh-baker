@@ -67,6 +67,12 @@ struct Material {
   float emissive_strength = 0.f;
   std::optional<Texture> emissive_texture;
 
+  // Additive (order-independent) transparency: every SH_material_layers stage
+  // blends with dst factor GL_ONE (flames, glows). Such a material is a
+  // non-occluding emitter in the bake -- excluded from the ray-traced occluder
+  // scene (BuildBVH) and routed through the area-light path via emissive_*.
+  bool additive = false;
+
   // Verbatim SH_material_layers extension, retained so the saver can re-emit it
   // for the renderer. Absent when the source material had no extension.
   std::optional<MaterialLayers> layers;

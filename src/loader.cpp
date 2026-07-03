@@ -610,6 +610,19 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
       int tex_idx = lo.Get("texture").Get("index").GetNumberAsInt();
       LoadTexture(model, tex_idx, base_path, &layer.texture, true);
     }
+    // animMap frames -- only the emissive (additive) compositor reads these
+    // (it averages them). Loaded here so an additive stack is frame-averaged;
+    // non-animated stages pay nothing.
+    if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
+      const auto& frames = lo.Get("animFrames");
+      layer.anim_frames.reserve(frames.ArrayLen());
+      for (size_t f = 0; f < frames.ArrayLen(); ++f) {
+        Texture frame;
+        LoadTexture(model, frames.Get(int(f)).GetNumberAsInt(), base_path,
+                    &frame, true);
+        layer.anim_frames.push_back(std::move(frame));
+      }
+    }
     if (lo.Has("blendSrc")) {
       layer.blend_src = ParseBlendFactor(lo.Get("blendSrc").Get<std::string>());
     }
@@ -623,6 +636,39 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
   if (layers.empty()) return;
   if (base_layer < 0 || base_layer >= static_cast<int>(layers.size())) {
     base_layer = 0;
+  }
+
+  // Additive (order-independent) transparency: every stage blends with dst
+  // factor GL_ONE (flames, glows). Such a surface has no diffuse base; in the
+  // bake it is a *non-occluding emitter*, not a reflector. Composite the stack
+  // into an emitted-radiance texture and route it through the area-light path
+  // (emissive_*), zero the diffuse albedo so it does not also reflect, and flag
+  // it so BuildBVH keeps it out of the occluder scene. (The renderer draws
+  // these via its own additive pass; this only governs their GI contribution.)
+  bool all_additive = true;
+  for (const auto& layer : layers) {
+    if (layer.blend_dst != BlendFactor::kOne) {
+      all_additive = false;
+      break;
+    }
+  }
+  if (all_additive) {
+    mat->additive = true;
+    mat->emissive_texture = CompositeEmissiveRadiance(layers);
+    mat->emissive_factor = Eigen::Vector3f::Ones();
+    // emissive_strength keeps the value already loaded from
+    // KHR_materials_emissive_strength, which the exporter forwards from the Q3
+    // shader's q3map_surfacelight (scene.cpp emission_intensity *
+    // kAreaLightIntensityScale). A stack whose shader declares no
+    // q3map_surfacelight stays at 0, so ProcessAreaLights makes no area light
+    // for it -- an additive sprite with no surface light emits nothing.
+    // Pure emitter: no diffuse reflectance (1x1 opaque black).
+    mat->albedo.width = 1;
+    mat->albedo.height = 1;
+    mat->albedo.channels = 4;
+    mat->albedo.pixel_data = {0, 0, 0, 255};
+    mat->albedo.file_path.reset();
+    return;
   }
 
   mat->albedo = CompositeAlbedoCoverage(layers, base_layer, mat->albedo);

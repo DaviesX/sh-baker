@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "colorspace.h"
+
 namespace sh_baker {
 namespace {
 
@@ -85,6 +87,54 @@ Eigen::Vector3f BlendWeight(BlendFactor factor, const Eigen::Vector3f& src_rgb,
       return (1.0f - dst_alpha) * one;
   }
   return one;
+}
+
+// Nearest-neighbour sample with UV wrap, returning LINEAR-space rgb in [0,1]
+// and alpha in [0,1]. An empty texture emits nothing (unlike SampleTexture's
+// opaque-white albedo default): the additive contribution of a missing stage
+// is zero.
+void SampleTextureLinear(const Texture& tex, const Eigen::Vector2f& uv,
+                         Eigen::Vector3f* rgb, float* alpha) {
+  if (tex.pixel_data.empty() || tex.width == 0 || tex.height == 0) {
+    *rgb = Eigen::Vector3f::Zero();
+    *alpha = 0.0f;
+    return;
+  }
+  CHECK_GE(tex.channels, 3u);
+  float u = uv.x() - std::floor(uv.x());
+  float v = uv.y() - std::floor(uv.y());
+  int tx = std::clamp(static_cast<int>(u * tex.width), 0,
+                      static_cast<int>(tex.width) - 1);
+  int ty = std::clamp(static_cast<int>(v * tex.height), 0,
+                      static_cast<int>(tex.height) - 1);
+  int idx = (ty * static_cast<int>(tex.width) + tx) *
+            static_cast<int>(tex.channels);
+  *rgb = Eigen::Vector3f(SRGBToLinear(tex.pixel_data[idx]),
+                         SRGBToLinear(tex.pixel_data[idx + 1]),
+                         SRGBToLinear(tex.pixel_data[idx + 2]));
+  *alpha = tex.channels >= 4 ? tex.pixel_data[idx + 3] / 255.0f : 1.0f;
+}
+
+// Linear sample of a stage, averaging its animMap frames when present (the mean
+// glow, since a static SH bake cannot animate).
+void SampleLayerLinear(const CompositeLayer& layer, const Eigen::Vector2f& uv,
+                       Eigen::Vector3f* rgb, float* alpha) {
+  if (layer.anim_frames.empty()) {
+    SampleTextureLinear(layer.texture, uv, rgb, alpha);
+    return;
+  }
+  Eigen::Vector3f rgb_sum = Eigen::Vector3f::Zero();
+  float alpha_sum = 0.0f;
+  for (const Texture& frame : layer.anim_frames) {
+    Eigen::Vector3f c;
+    float a;
+    SampleTextureLinear(frame, uv, &c, &a);
+    rgb_sum += c;
+    alpha_sum += a;
+  }
+  float inv = 1.0f / static_cast<float>(layer.anim_frames.size());
+  *rgb = rgb_sum * inv;
+  *alpha = alpha_sum * inv;
 }
 
 }  // namespace
@@ -224,6 +274,70 @@ Texture CompositeAlbedoCoverage(const std::vector<CompositeLayer>& layers,
   }
 
   out.file_path = modern_albedo.file_path;
+  return out;
+}
+
+Texture CompositeEmissiveRadiance(const std::vector<CompositeLayer>& layers) {
+  // Output resolution: the largest stage texture (animMap frames share a size).
+  uint32_t out_w = 1;
+  uint32_t out_h = 1;
+  for (const auto& layer : layers) {
+    out_w = std::max(out_w, layer.texture.width);
+    out_h = std::max(out_h, layer.texture.height);
+    for (const auto& frame : layer.anim_frames) {
+      out_w = std::max(out_w, frame.width);
+      out_h = std::max(out_h, frame.height);
+    }
+  }
+
+  Texture out;
+  out.width = out_w;
+  out.height = out_h;
+  out.channels = 4;
+  out.pixel_data.resize(static_cast<size_t>(out_w) * out_h * 4);
+
+  // rgbGen at t=0 is loop-invariant (per layer, not per texel) -- hoist it out
+  // of the pixel loops. tcMod/sampling stay inside as they depend on the UV.
+  std::vector<Eigen::Vector3f> layer_rgbgen;
+  layer_rgbgen.reserve(layers.size());
+  for (const auto& layer : layers) {
+    layer_rgbgen.push_back(EvalRgbGen(layer.rgbgen));
+  }
+
+  for (uint32_t ty = 0; ty < out_h; ++ty) {
+    for (uint32_t tx = 0; tx < out_w; ++tx) {
+      Eigen::Vector2f uv((tx + 0.5f) / out_w, (ty + 0.5f) / out_h);
+
+      // Blend every stage in LINEAR space (physical additive light). No base
+      // layer / modern-albedo substitution: each stage emits its own colour.
+      Eigen::Vector3f acc = Eigen::Vector3f::Zero();
+      float acc_alpha = 1.0f;
+      for (size_t li = 0; li < layers.size(); ++li) {
+        const CompositeLayer& layer = layers[li];
+        Eigen::Vector2f luv = ApplyTcMods(layer.tcmods, uv);
+
+        Eigen::Vector3f src_rgb;
+        float src_alpha;
+        SampleLayerLinear(layer, luv, &src_rgb, &src_alpha);
+        src_rgb = src_rgb.cwiseProduct(layer_rgbgen[li]);
+
+        Eigen::Vector3f sf =
+            BlendWeight(layer.blend_src, src_rgb, src_alpha, acc, acc_alpha);
+        Eigen::Vector3f df =
+            BlendWeight(layer.blend_dst, src_rgb, src_alpha, acc, acc_alpha);
+        acc = sf.cwiseProduct(src_rgb) + df.cwiseProduct(acc);
+      }
+
+      // Clamp to LDR and sRGB-encode; GetEmission re-linearizes and the
+      // emissive_strength knob provides the HDR range.
+      acc = acc.cwiseMax(0.0f).cwiseMin(1.0f);
+      size_t o = (static_cast<size_t>(ty) * out_w + tx) * 4;
+      out.pixel_data[o + 0] = LinearToSRGB(acc.x());
+      out.pixel_data[o + 1] = LinearToSRGB(acc.y());
+      out.pixel_data[o + 2] = LinearToSRGB(acc.z());
+      out.pixel_data[o + 3] = 255;
+    }
+  }
   return out;
 }
 
