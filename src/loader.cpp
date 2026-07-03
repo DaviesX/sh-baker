@@ -159,10 +159,11 @@ bool ProcessPrimitive(const tinygltf::Model& model,
                       const tinygltf::Primitive& primitive,
                       const Eigen::Affine3f& transform,
                       std::vector<Geometry>* result) {
-  // A material-less primitive is, by pipeline convention, a pure occluder shell:
-  // it occludes light and passes through to the output, but is never atlased or
-  // shaded with texture. It legitimately carries only POSITION/NORMAL, so the
-  // material and texture-UV preconditions below are relaxed for it.
+  // A material-less primitive is, by pipeline convention, a pure occluder
+  // shell: it occludes light and passes through to the output, but is never
+  // atlased or shaded with texture. It legitimately carries only
+  // POSITION/NORMAL, so the material and texture-UV preconditions below are
+  // relaxed for it.
   const bool is_occluder = primitive.material < 0;
 
   // Precondition.
@@ -564,9 +565,9 @@ std::vector<TcMod> ParseTcMods(const tinygltf::Value& arr) {
   return mods;
 }
 
-// If the material carries SH_material_layers, composite the Quake 3 stack at t=0
-// over the modern albedo and replace mat->albedo with the result (RGBA8: sRGB
-// colour + coverage in alpha). No-op when the extension is absent.
+// If the material carries SH_material_layers, composite the Quake 3 stack at
+// t=0 over the modern albedo and replace mat->albedo with the result (RGBA8:
+// sRGB colour + coverage in alpha). No-op when the extension is absent.
 void ApplyMaterialLayers(const tinygltf::Model& model,
                          const tinygltf::Material& gltf_mat,
                          const std::filesystem::path& base_path,
@@ -665,7 +666,8 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
     mat->additive = true;
     mat->emissive_texture = CompositeEmissiveRadiance(layers);
     mat->emissive_factor = Eigen::Vector3f::Ones();
-    mat->emissive_strength = static_cast<float>(FLAGS_additive_emissive_strength);
+    mat->emissive_strength =
+        static_cast<float>(FLAGS_additive_emissive_strength);
     // Pure emitter: no diffuse reflectance (1x1 opaque black).
     mat->albedo.width = 1;
     mat->albedo.height = 1;
@@ -1157,18 +1159,13 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // Area lights are created later, from the final geometry (see
-  // CreateAreaLights), because the atlas renumbers/drops triangles their
-  // emission CDFs index.
+  // Process Area Lights (from emissive materials).
+  ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
 
   // Process Environment (IBL / Sun)
   ProcessEnvironment(model, gltf_file, scene.lights, &scene.environment);
 
   return scene;
-}
-
-void CreateAreaLights(Scene& scene) {
-  ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
 }
 
 }  // namespace sh_baker
