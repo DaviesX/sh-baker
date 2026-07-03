@@ -142,6 +142,10 @@ struct Scene {
   std::optional<Environment> environment;
 };
 
+// Logs summary statistics for the scene: geometry, material, and light counts,
+// plus the number of material-less occluder shells.
+void LogSceneStats(const Scene& scene);
+
 // Transforms the geometry by the transform matrix.
 std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
 std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry);

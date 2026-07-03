@@ -222,6 +222,10 @@ std::vector<SurfacePoint> RasterizeScene(const Scene& scene,
 
   // Serial execution as requested for correctness priority
   for (const auto& geo : scene.geometries) {
+    // Occluder shells have no lightmap chart (empty lightmap_uvs); they occlude
+    // in the path tracer but produce no bake sensors.
+    if (geo.material_id < 0) continue;
+
     auto vertices = TransformedVertices(geo);
     auto normals = TransformedNormals(geo);
     auto tangents = TransformedTangents(geo);
@@ -379,6 +383,7 @@ Texture RasterizeSceneMaterial(const Scene& scene, const RasterConfig& config) {
   texture.pixel_data.resize(config.width * config.height * 3, 0);
 
   for (const auto& geo : scene.geometries) {
+    if (geo.material_id < 0) continue;  // occluder shells have no chart
     uint32_t id = geo.material_id;
     MaterialIdVertex vertex(id);
 

@@ -109,8 +109,16 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   xatlas::Atlas* atlas = xatlas::Create();
 
   // 2. Add Meshes
+  // Material-less occluder shells get no lightmap chart: skip them here and pass
+  // them through unchanged in the reconstruction below, so the output geometry
+  // list stays 1:1 (same size and order) with the input. That lets the caller
+  // update scene.geometries in place, keeping pointers into it (e.g. area-light
+  // emitter geometry) valid.
+  size_t lit_mesh_count = 0;
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
+    if (geo.material_id < 0) continue;
+    ++lit_mesh_count;
 
     if (skip_parameterization) {
       if (geo.texture_uvs.empty()) {
@@ -203,10 +211,19 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   std::vector<Geometry> result_geometries;
   result_geometries.reserve(geometries.size());
 
-  CHECK_EQ(atlas->meshCount, geometries.size());
+  CHECK_EQ(atlas->meshCount, lit_mesh_count);
+  size_t atlas_idx = 0;
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& src_geo = geometries[i];
-    const xatlas::Mesh& atlas_mesh = atlas->meshes[i];
+
+    // Occluder shells were not atlased: pass them through unchanged (no lightmap
+    // chart), preserving their index so the output is 1:1 with the input.
+    if (src_geo.material_id < 0) {
+      result_geometries.push_back(src_geo);
+      continue;
+    }
+
+    const xatlas::Mesh& atlas_mesh = atlas->meshes[atlas_idx++];
 
     Geometry new_geo;
     new_geo.material_id = src_geo.material_id;

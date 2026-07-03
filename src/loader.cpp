@@ -1106,13 +1106,18 @@ std::optional<Scene> LoadScene(const std::filesystem::path& gltf_file) {
     }
   }
 
-  // Process Area Lights (from emissive materials)
-  ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
+  // Area lights are created later, from the final geometry (see
+  // CreateAreaLights), because the atlas renumbers/drops triangles their
+  // emission CDFs index.
 
   // Process Environment (IBL / Sun)
   ProcessEnvironment(model, gltf_file, scene.lights, &scene.environment);
 
   return scene;
+}
+
+void CreateAreaLights(Scene& scene) {
+  ProcessAreaLights(scene.materials, scene.geometries, &scene.lights);
 }
 
 }  // namespace sh_baker
