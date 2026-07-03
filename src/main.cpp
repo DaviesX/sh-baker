@@ -17,8 +17,10 @@ DEFINE_int32(height, 2048, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
 DEFINE_bool(indirect_only, false,
-            "Remove direct contributions from the bake (useful for real-time "
-            "direct + baked indirect solution).");
+            "Remove PUNCTUAL direct contributions from the bake (for the "
+            "real-time punctual-direct + baked-indirect solution). Area lights "
+            "(flames/glows) have no real-time path, so their DIRECT term is "
+            "always baked regardless of this flag.");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");

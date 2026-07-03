@@ -5,6 +5,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <iostream>
@@ -95,8 +96,23 @@ BakeResult BakeSHLightMap(const Scene& scene,
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
+  // Full light tree (punctual + area).
   LightTree light_tree;
   light_tree.Build(scene.lights);
+
+  // Area lights only tree.
+  std::vector<Light> area_lights;
+  area_lights.reserve(scene.lights.size());
+  std::copy_if(
+      scene.lights.begin(), scene.lights.end(), std::back_inserter(area_lights),
+      [](const Light& light) { return light.type == Light::Type::Area; });
+  LightTree area_light_tree;
+  area_light_tree.Build(area_lights);
+
+  // Determine which light tree to use for direct lighting contribution based on
+  // the bake config.
+  const LightTree& direct_light_tree =
+      config.indirect_only ? area_light_tree : light_tree;
 
   float inv_pdf_uniform = 2.0f * M_PI;
 
@@ -143,13 +159,15 @@ BakeResult BakeSHLightMap(const Scene& scene,
               break;
             }
 
-            // Direct lighting (NEE).
+            // Direct lighting (NEE). `direct_light_tree` is the full light set
+            // for a normal bake, or area-lights-only under indirect_only (their
+            // direct term is always baked; punctual direct is real-time). Empty
+            // area set under indirect_only -> AccumulateIncomingLightSamples
+            // returns immediately.
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
-            if (!config.indirect_only) {
-              AccumulateIncomingLightSamples(
-                  &light_tree, rtc_scene, sp.position, sp.normal,
-                  config.num_light_samples, rng, &sample_sh_accum);
-            }
+            AccumulateIncomingLightSamples(
+                &direct_light_tree, rtc_scene, sp.position, sp.normal,
+                config.num_light_samples, rng, &sample_sh_accum);
 
             // Indirect lighting.
             TraceConfig trace_config(
