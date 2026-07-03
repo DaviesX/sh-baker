@@ -270,8 +270,8 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
-                                    unsigned num_samples, std::mt19937& rng,
-                                    SHCoeffs* accumulator) {
+                                    unsigned num_samples, bool area_only,
+                                    std::mt19937& rng, SHCoeffs* accumulator) {
   if (!light_tree || light_tree->Empty()) return;
 
   std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
@@ -288,6 +288,8 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
     if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
 
     const Light& light = *sampled_light->light;
+    if (area_only && light.type != Light::Type::Area) continue;
+
     Eigen::Vector3f radiance;
     Ray visibility_ray;
     float area_sample_pdf = 1.0f;

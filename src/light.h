@@ -235,12 +235,16 @@ Eigen::Vector3f EvaluateLightSamples(
 // cannot simply return a summed radiance covering multiple light sources.
 // Instead, we must project each light sample into the SH basis using its
 // specific incoming direction.
+//
+// When `area_only` is true, only area lights are accumulated (other sampled
+// light types are skipped); used to bake the area-light direct term under
+// indirect_only while a single full tree still serves the indirect bounces.
 void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     RTCScene rtc_scene,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
-                                    unsigned num_samples, std::mt19937& rng,
-                                    SHCoeffs* accumulator);
+                                    unsigned num_samples, bool area_only,
+                                    std::mt19937& rng, SHCoeffs* accumulator);
 
 }  // namespace sh_baker
 
