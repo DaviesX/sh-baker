@@ -86,19 +86,11 @@ int main(int argc, char* argv[]) {
     LOG(ERROR) << "Atlas generation failed (possibly could not fit charts).";
     return 1;
   }
-
-  scene.geometries = std::move(atlas_result->geometries);
   LOG(INFO) << "Atlas generation complete. New Geometries vertex counts "
                "adjusted. Resolution adjusted to: "
             << atlas_result->width << "x" << atlas_result->height;
-
-  // Geometry is now final; derive the area lights from it (their emission CDFs
-  // index triangles the atlas renumbers/drops). The emitter-geometry pointers
-  // stay valid through the bake because scene.geometries is not modified after.
-  size_t punctual_light_count = scene.lights.size();
-  sh_baker::CreateAreaLights(scene);
-  LOG(INFO) << "  Area lights (from emissive materials): "
-            << scene.lights.size() - punctual_light_count;
+  scene.geometries = std::move(atlas_result->geometries);
+  scene.lights = std::move(atlas_result->lights);
 
   // Configure Rasterizer
   sh_baker::RasterConfig raster_config;

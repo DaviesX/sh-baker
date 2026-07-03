@@ -7,6 +7,7 @@
 #include <cmath>
 #include <vector>
 
+#include "rasterizer.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -109,11 +110,11 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   xatlas::Atlas* atlas = xatlas::Create();
 
   // 2. Add Meshes
-  // Material-less occluder shells get no lightmap chart: skip them here and pass
-  // them through unchanged in the reconstruction below, so the output geometry
-  // list stays 1:1 (same size and order) with the input. That lets the caller
-  // update scene.geometries in place, keeping pointers into it (e.g. area-light
-  // emitter geometry) valid.
+  // Material-less occluder shells get no lightmap chart: skip them here and
+  // pass them through unchanged in the reconstruction below, so the output
+  // geometry list stays 1:1 (same size and order) with the input. That lets the
+  // caller update scene.geometries in place, keeping pointers into it (e.g.
+  // area-light emitter geometry) valid.
   size_t lit_mesh_count = 0;
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& geo = geometries[i];
@@ -216,8 +217,9 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
   for (size_t i = 0; i < geometries.size(); ++i) {
     const auto& src_geo = geometries[i];
 
-    // Occluder shells were not atlased: pass them through unchanged (no lightmap
-    // chart), preserving their index so the output is 1:1 with the input.
+    // Occluder shells were not atlased: pass them through unchanged (no
+    // lightmap chart), preserving their index so the output is 1:1 with the
+    // input.
     if (src_geo.material_id < 0) {
       result_geometries.push_back(src_geo);
       continue;
@@ -311,8 +313,53 @@ std::optional<AtlasResult> CreateAtlasGeometries(const Scene& scene,
     result_geometries.push_back(std::move(new_geo));
   }
 
+  // Update lights to point to new geometries and compute UV maps
+  const auto& lights = scene.lights;
+
+  std::vector<Light> result_lights;
+  result_lights.reserve(lights.size());
+  for (const auto& light : lights) {
+    if (!light.geometry) {
+      result_lights.push_back(light);
+      continue;
+    }
+
+    const size_t geo_idx = light.geometry - scene.geometries.data();
+    Light new_light = light;
+    new_light.geometry = &result_geometries[geo_idx];
+
+    if (!new_light.material || !new_light.material->emissive_texture) {
+      result_lights.push_back(std::move(new_light));
+      continue;
+    }
+
+    const Texture& emissive_tex = *new_light.material->emissive_texture;
+    RasterConfig raster_config;
+    raster_config.width = emissive_tex.width;
+    raster_config.height = emissive_tex.height;
+
+    GeometryUVMaps uv_maps =
+        RasterizeGeometryUVMaps(*new_light.geometry, raster_config);
+    new_light.uv_to_world_area_ratio =
+        std::move(uv_maps.uv_to_world_area_ratio);
+    new_light.prim_id_map = std::move(uv_maps.prim_id_map);
+
+    std::optional<EmissionCDF> emission_cdf = ComputeTextureEmissionCDF(
+        emissive_tex, *new_light.uv_to_world_area_ratio);
+    if (!emission_cdf) {
+      LOG(WARNING) << "Failed to compute emission CDF for light geometry "
+                   << geo_idx;
+      result_lights.push_back(std::move(new_light));
+      continue;
+    }
+
+    new_light.emission_cdf = std::move(emission_cdf);
+    result_lights.push_back(std::move(new_light));
+  }
+
   AtlasResult result;
   result.geometries = std::move(result_geometries);
+  result.lights = std::move(result_lights);
   result.width = atlas->width;
   result.height = atlas->height;
 
