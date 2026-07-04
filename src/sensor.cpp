@@ -52,22 +52,27 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
     return std::nullopt;
   }
 
-  // 2. Check convergence (Adaptive Sampling)
-  constexpr int kMinSamples = 32;
+  // 2. Check convergence (Adaptive Sampling).
+  //
+  // Estimate variance from more than a handful of samples: the integrand is
+  // heavy-tailed, so a small warm-up under-estimates variance and stops right
+  // before the tail appears. 64 gives the tail a chance to register.
+  constexpr int kMinSamples = 64;
   if (sensor.sample_count >= kMinSamples) {
-    // Calculate Standard Error of the Mean
-    if (sensor.mean_luminance > 1e-3f) {
-      float variance = sensor.m2_luminance / (sensor.sample_count - 1);
-      float std_dev = std::sqrt(variance);
-      float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
+    // 3-sigma standard error of the mean of the per-sample luminance.
+    float variance = sensor.m2_luminance / (sensor.sample_count - 1);
+    float std_dev = std::sqrt(variance);
+    float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
 
-      // Coefficient of Variation of the Mean = SEM / Mean
-      // If error is small enough relative to the signal, we stop.
-      if (sem < sensor.confidence_threshold * sensor.mean_luminance) {
-        return std::nullopt;
-      }
-    } else {
-      // If it's pitch black (or very close), we can stop early too.
+    // Relative test (SEM small vs. signal) for lit texels, with an absolute
+    // noise floor so genuinely black texels (mean and variance ~0) still
+    // terminate. This replaces the old `else return nullopt` dark branch, which
+    // force-stopped every dim indirect texel at kMinSamples *independent of the
+    // threshold* — the reason a smaller threshold never reduced the noise.
+    constexpr float kAbsNoiseFloor = 1e-4f;
+    float tolerance = std::max(
+        sensor.confidence_threshold * sensor.mean_luminance, kAbsNoiseFloor);
+    if (sem < tolerance) {
       return std::nullopt;
     }
   }

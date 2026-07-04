@@ -21,7 +21,6 @@
 
 namespace sh_baker {
 namespace {
-constexpr float kCVThreshold = 0.01f;
 
 template <typename T, typename ValidateFn>
 std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
@@ -149,7 +148,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
                            idx);  // Seeding RNG with index to make it
                                   // deterministic but different per pixel
 
-          Sensor sensor(sp, config.samples, kCVThreshold);
+          Sensor sensor(sp, config.samples, config.confidence_threshold);
 
           float visibility_accum = 0.0f;
 
@@ -175,7 +174,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
                 config.num_light_samples,
                 /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
                   visibility_accum += 1.0f;
-                });
+                },
+                config.firefly_clamp);
             Eigen::Vector3f Li_indirect =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
             AccumulateRadiance(Li_indirect, ray->direction, sp.normal,

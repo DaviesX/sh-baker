@@ -16,6 +16,13 @@ DEFINE_int32(width, 2048, "Width of the output image.");
 DEFINE_int32(height, 2048, "Height of the output image.");
 DEFINE_int32(samples, 128, "Number of samples per pixel.");
 DEFINE_int32(bounces, 3, "Number of bounces.");
+DEFINE_double(firefly_clamp, 0.0,
+              "Max per-sample indirect luminance; brighter samples are scaled "
+              "down to suppress fireflies. <= 0 disables (unbiased).");
+DEFINE_double(confidence_threshold, 0.01,
+              "Adaptive-sampling stop tolerance: a texel stops once its 3-sigma "
+              "SEM falls below this fraction of its mean luminance. Smaller = "
+              "more samples / less noise.");
 DEFINE_bool(indirect_only, false,
             "Remove PUNCTUAL direct contributions from the bake (for the "
             "real-time punctual-direct + baked-indirect solution). Area lights "
@@ -137,6 +144,8 @@ int main(int argc, char* argv[]) {
   config.samples = FLAGS_samples;
   config.bounces = FLAGS_bounces;
   config.indirect_only = FLAGS_indirect_only;
+  config.firefly_clamp = static_cast<float>(FLAGS_firefly_clamp);
+  config.confidence_threshold = static_cast<float>(FLAGS_confidence_threshold);
 
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";
