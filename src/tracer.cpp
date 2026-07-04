@@ -86,7 +86,10 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // multiplies all radiance gathered deeper in the path. brdf * cos / pdf is
   // the per-bounce factor (== surface albedo under cosine sampling), so this is
   // physically meaningful — unlike the raw single-bounce BRDF used previously.
-  float cosine_term = occ->normal.dot(sample.direction);
+  // Clamp to 0: hemisphere sampling should keep this positive, but float error
+  // or a perturbed shading normal can push it slightly negative, which would
+  // flip the throughput sign and corrupt RR / radiance.
+  float cosine_term = std::max(0.0f, occ->normal.dot(sample.direction));
   Eigen::Vector3f next_throughput =
       throughput.cwiseProduct(brdf) * (alpha * cosine_term / sample.pdf);
 

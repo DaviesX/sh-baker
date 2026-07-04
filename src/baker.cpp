@@ -152,6 +152,16 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
           float visibility_accum = 0.0f;
 
+          // Loop-invariant for this texel: build once, not per sample (the
+          // std::function makes per-iteration construction needlessly costly).
+          TraceConfig trace_config(
+              rtc_scene, scene, &light_tree, config.bounces,
+              config.num_light_samples,
+              /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
+                visibility_accum += 1.0f;
+              },
+              config.firefly_clamp);
+
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);
             if (!ray.has_value()) {
@@ -169,13 +179,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
                 config.num_light_samples, rng, &sample_sh_accum);
 
             // Indirect lighting.
-            TraceConfig trace_config(
-                rtc_scene, scene, &light_tree, config.bounces,
-                config.num_light_samples,
-                /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
-                  visibility_accum += 1.0f;
-                },
-                config.firefly_clamp);
             Eigen::Vector3f Li_indirect =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
             AccumulateRadiance(Li_indirect, ray->direction, sp.normal,

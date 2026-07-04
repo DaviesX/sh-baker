@@ -59,8 +59,11 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
   // before the tail appears. 64 gives the tail a chance to register.
   constexpr int kMinSamples = 64;
   if (sensor.sample_count >= kMinSamples) {
-    // 3-sigma standard error of the mean of the per-sample luminance.
-    float variance = sensor.m2_luminance / (sensor.sample_count - 1);
+    // 3-sigma standard error of the mean of the per-sample luminance. Guard
+    // against a slightly-negative m2 from Welford float error, which would make
+    // std::sqrt return NaN and stall convergence (NaN < tolerance is false).
+    float m2 = std::max(0.0f, sensor.m2_luminance);
+    float variance = m2 / (sensor.sample_count - 1);
     float std_dev = std::sqrt(variance);
     float sem = 3.f * std_dev / std::sqrt((float)sensor.sample_count);
 
