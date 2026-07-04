@@ -28,14 +28,15 @@ TEST(SensorTest, EstimationConvergence) {
 
   SHCoeffs const_val(1.0f);  // Bright constant value
 
-  // Feed constant values -> Variance = 0
-  for (int i = 0; i < 33; ++i) {
+  // Feed constant values -> Variance = 0. Must exceed the adaptive-sampling
+  // warm-up (kMinSamples) before convergence is evaluated.
+  for (int i = 0; i < 65; ++i) {
     AddSample(const_val, &sensor);
   }
 
   std::mt19937 rng(42);
   auto ray = SampleRay(sensor, rng);
-  // Should stop because variance is 0 (below threshold) and samples > 16.
+  // Should stop: variance is 0 (SEM below threshold) and samples > kMinSamples.
   EXPECT_FALSE(ray.has_value());
 
   SHCoeffs est = GetEstimation(sensor);
