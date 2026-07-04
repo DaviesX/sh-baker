@@ -123,10 +123,14 @@ AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   // 6. Emission at sampled UV.
   Eigen::Vector3f emission = GetEmission(*light.material, uv);
 
-  // 7. PDF: pdf_uv / jacobian.
+  // 7. PDF: pdf_uv / jacobian. A degenerate jacobian means this texel has no
+  // real world-space footprint; reject the sample rather than flooring the pdf
+  // to a tiny constant, which would turn radiance/pdf into a huge firefly.
   float jacobian = ratio_map.pixel_data[v_idx * tex_w + u_idx];
-  float pdf_area = (jacobian > 1e-12f) ? (pdf_uv / jacobian) : 1e-6f;
-  pdf_area = std::max(pdf_area, 1e-6f);
+  if (jacobian <= 1e-12f) {
+    return {};
+  }
+  float pdf_area = pdf_uv / jacobian;
 
   return AreaSample{p, emission, normal, pdf_area};
 }
@@ -171,7 +175,12 @@ AreaSample SampleAreaLightUniform(const Light& light, std::mt19937& rng) {
   Eigen::Vector3f normal = InterpolatedWorldNormal(geo, i0, i1, i2, w, u1, u2);
 
   float triangle_area = (v0 - v1).cross(v0 - v2).norm() / 2.f;
-  float pdf = std::max(1e-6f, 1.f / num_triangles * 1.f / triangle_area);
+  if (triangle_area <= 1e-12f) {
+    // Degenerate (zero-area) triangle: no valid area-measure pdf. Reject rather
+    // than floor the pdf, which would produce a firefly.
+    return {};
+  }
+  float pdf = 1.f / (num_triangles * triangle_area);
   return {p, emission, normal, pdf};
 }
 

@@ -12,6 +12,12 @@ struct BakeConfig {
   int bounces = 5;            // Max path depth
   int num_light_samples = 1;  // Number of light samples for NEE
   bool indirect_only = false;
+  // Max per-sample indirect luminance; over-bright samples are scaled down to
+  // suppress fireflies. <= 0 disables (unbiased).
+  float firefly_clamp = 0.0f;
+  // Adaptive-sampling stop tolerance: stop a texel once the 3-sigma SEM of its
+  // luminance falls below confidence_threshold * mean.
+  float confidence_threshold = 0.01f;
 };
 
 struct BakeResult {

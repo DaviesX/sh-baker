@@ -17,13 +17,15 @@ class LightTree;
 struct TraceConfig {
   TraceConfig(const RTCScene rtc_scene, const Scene& scene,
               const LightTree* light_tree, int max_depth, int num_light_samples,
-              std::function<void()> on_direct_hit_sky_fn)
+              std::function<void()> on_direct_hit_sky_fn,
+              float firefly_clamp = 0.0f)
       : rtc_scene(rtc_scene),
         scene(scene),
         light_tree(light_tree),
         max_depth(max_depth),
         num_light_samples(num_light_samples),
-        on_direct_hit_sky_fn(on_direct_hit_sky_fn) {}
+        on_direct_hit_sky_fn(on_direct_hit_sky_fn),
+        firefly_clamp(firefly_clamp) {}
 
   const RTCScene rtc_scene;
   const Scene& scene;
@@ -31,6 +33,10 @@ struct TraceConfig {
   const int max_depth;
   const int num_light_samples;
   const std::function<void()> on_direct_hit_sky_fn;
+  // Max per-sample indirect luminance. Values above this are scaled down to
+  // suppress fireflies. <= 0 disables clamping (unbiased). Safe to enable here
+  // because the output is low-frequency 3rd-order diffuse SH.
+  const float firefly_clamp;
 };
 
 // Computes a Monte Carlo path and return a radiance sample.
@@ -56,7 +62,8 @@ struct TraceConfig {
 //
 // This is also known as a technique called next event estimation (NEE).
 Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
-                      std::mt19937& rng);
+                      std::mt19937& rng,
+                      Eigen::Vector3f throughput = Eigen::Vector3f::Ones());
 
 }  // namespace sh_baker
 
