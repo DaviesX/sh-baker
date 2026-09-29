@@ -28,6 +28,10 @@ DEFINE_bool(indirect_only, false,
             "real-time punctual-direct + baked-indirect solution). Area lights "
             "(flames/glows) have no real-time path, so their DIRECT term is "
             "always baked regardless of this flag.");
+DEFINE_double(sky_scale, 0.0,
+              "If > 0, bake the skybox / Preetham sky into the SH (direct and "
+              "bounced) scaled by this factor. 0 leaves the sky to the "
+              "renderer (sky colour times the baked visibility).");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
@@ -146,6 +150,14 @@ int main(int argc, char* argv[]) {
   config.indirect_only = FLAGS_indirect_only;
   config.firefly_clamp = static_cast<float>(FLAGS_firefly_clamp);
   config.confidence_threshold = static_cast<float>(FLAGS_confidence_threshold);
+  config.sky_scale = static_cast<float>(FLAGS_sky_scale);
+  if (config.sky_scale > 0.0f) {
+    if (scene.environment) {
+      LOG(INFO) << "Baking the sky into the SH, scale " << config.sky_scale;
+    } else {
+      LOG(WARNING) << "--sky_scale set but the scene has no environment.";
+    }
+  }
 
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";

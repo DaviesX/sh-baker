@@ -18,14 +18,15 @@ struct TraceConfig {
   TraceConfig(const RTCScene rtc_scene, const Scene& scene,
               const LightTree* light_tree, int max_depth, int num_light_samples,
               std::function<void()> on_direct_hit_sky_fn,
-              float firefly_clamp = 0.0f)
+              float firefly_clamp = 0.0f, float sky_scale = 0.0f)
       : rtc_scene(rtc_scene),
         scene(scene),
         light_tree(light_tree),
         max_depth(max_depth),
         num_light_samples(num_light_samples),
         on_direct_hit_sky_fn(on_direct_hit_sky_fn),
-        firefly_clamp(firefly_clamp) {}
+        firefly_clamp(firefly_clamp),
+        sky_scale(sky_scale) {}
 
   const RTCScene rtc_scene;
   const Scene& scene;
@@ -37,6 +38,12 @@ struct TraceConfig {
   // suppress fireflies. <= 0 disables clamping (unbiased). Safe to enable here
   // because the output is low-frequency 3rd-order diffuse SH.
   const float firefly_clamp;
+  // > 0: a ray that escapes the scene returns the environment radiance
+  // (EnvironmentRadiance, i.e. the skybox or Preetham sky) times this factor,
+  // at every depth, so the sky's direct light and its bounces are baked into
+  // the SH. The visibility callback still fires. 0 (default): the sky is left
+  // to the renderer (sky colour times the baked visibility).
+  const float sky_scale;
 };
 
 // Computes a Monte Carlo path and return a radiance sample.

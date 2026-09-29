@@ -177,6 +177,13 @@ float Flux(const Light& light);
 // Projects the environment to SH coefficients.
 SHCoeffs ProjectEnvironmentToSH(const Environment& env);
 
+// Radiance arriving from the environment along `dir` (unit, pointing away from
+// the surface), times env.intensity_multiplier. Texture environments use the
+// same equirectangular mapping as ProjectEnvironmentToSH; Preetham the same
+// Perez model, black below the horizon.
+Eigen::Vector3f EnvironmentRadiance(const Environment& env,
+                                    const Eigen::Vector3f& dir);
+
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);
 

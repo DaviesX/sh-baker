@@ -160,7 +160,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
               /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
                 visibility_accum += 1.0f;
               },
-              config.firefly_clamp);
+              config.firefly_clamp, config.sky_scale);
 
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);

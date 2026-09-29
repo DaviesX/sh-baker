@@ -59,6 +59,7 @@ Arguments:
 - `--bounces`: Light bounces (default 3).
 - `--dilation`: Dilation passes (default 0).
 - `--split_channels`: If set, outputs 9 separate EXR files for SH coefficients (for Blender Viz).
+- `--sky_scale`: If > 0, bake the skybox (or the Preetham sky) into the SH, direct and bounced, scaled by this factor (pre-scale the HDR itself for per-scene levels). By default (0) rays that see the sky only feed the environment-visibility texture and the renderer adds sky colour times visibility.
 
 Scene conventions:
 - Lights come from `KHR_lights_punctual`. Intensities are divided by 200 on load (lux to the baker's radiance units), so a directional light of intensity 200 gives an irradiance of 1 at normal incidence; the diffuse BRDF is albedo / pi.

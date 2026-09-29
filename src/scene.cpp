@@ -174,6 +174,32 @@ float ComputeCDF(const std::vector<float>& weights, std::vector<float>* cdf) {
 
 }  // namespace
 
+Eigen::Vector3f EnvironmentRadiance(const Environment& env,
+                                    const Eigen::Vector3f& dir) {
+  if (env.type == Environment::Type::Texture) {
+    const Texture32F& tex = env.texture;
+    if (tex.width == 0 || tex.height == 0) return Eigen::Vector3f::Zero();
+    // Inverse of the ProjectLatLongMap mapping: y = cos(theta),
+    // x = sin(theta) sin(phi), z = sin(theta) cos(phi).
+    float theta = std::acos(std::clamp(dir.y(), -1.0f, 1.0f));
+    float phi = std::atan2(dir.x(), dir.z());
+    if (phi < 0.0f) phi += kTwoPi;
+    int x = std::clamp(int(phi / kTwoPi * tex.width), 0, int(tex.width) - 1);
+    int y = std::clamp(int(theta / kPi * tex.height), 0, int(tex.height) - 1);
+    return GetPixel(tex, x, y) * env.intensity_multiplier;
+  }
+  // Preetham: same evaluation as ProjectPreethamToSH.
+  if (dir.y() < 0.0f) return Eigen::Vector3f::Zero();
+  Eigen::Vector3f sun_dir = env.sun_direction.normalized();
+  Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
+  float zenith_val = EvaluatePerez(up, sun_dir);
+  if (zenith_val <= 1e-6f) zenith_val = 1.0f;
+  float luminance =
+      std::min(EvaluatePerez(dir, sun_dir), zenith_val * 30.0f);
+  return Eigen::Vector3f(0.2f, 0.5f, 0.9f) * (luminance / zenith_val) *
+         env.intensity_multiplier;
+}
+
 SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
   if (env.type == Environment::Type::Texture) {
     return ProjectLatLongMap(env.texture);

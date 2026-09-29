@@ -24,6 +24,10 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
     if (depth == 0) {
       config.on_direct_hit_sky_fn();
     }
+    if (config.sky_scale > 0.0f && config.scene.environment.has_value()) {
+      return EnvironmentRadiance(*config.scene.environment, ray.direction) *
+             config.sky_scale;
+    }
     return Eigen::Vector3f::Zero();
   }
 

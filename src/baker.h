@@ -18,6 +18,9 @@ struct BakeConfig {
   // Adaptive-sampling stop tolerance: stop a texel once the 3-sigma SEM of its
   // luminance falls below confidence_threshold * mean.
   float confidence_threshold = 0.01f;
+  // > 0: bake the environment (skybox / Preetham sky) into the SH, scaled by
+  // this factor. See TraceConfig::sky_scale.
+  float sky_scale = 0.0f;
 };
 
 struct BakeResult {
