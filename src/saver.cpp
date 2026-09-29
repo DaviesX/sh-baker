@@ -409,8 +409,15 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
         channels[c][p] = val;
       }
 
-      // Channel names: R, G, B, A
-      const char* names[] = {"R", "G", "B", "A"};
+    }
+
+    // OpenEXR requires the channel list sorted by name (A, B, G, R). Readers
+    // that trust the file order (FreeImage, and every engine loading through
+    // it) otherwise get the planes rotated; tinyexr matches by name either way.
+    const char* names[] = {"A", "B", "G", "R"};
+    const int source[] = {3, 2, 1, 0};  // channels[] index in RGBA order
+    for (int c = 0; c < 4; ++c) {
+      image_ptr[c] = channels[source[c]].data();
       strncpy(header.channels[c].name, names[c], 255);
 
       // Use HALF float for bandwidth optimization
@@ -472,7 +479,6 @@ bool SaveIrradianceMap(const SHTexture& sh_texture,
 
   for (int c = 0; c < 3; ++c) {
     channels[c].resize(num_pixels);
-    image_ptr[c] = channels[c].data();
 
     for (int p = 0; p < num_pixels; ++p) {
       if (c == 0)
@@ -482,10 +488,16 @@ bool SaveIrradianceMap(const SHTexture& sh_texture,
       else
         channels[c][p] = sh_texture.pixels[p].irradiance.z();
     }
+  }
 
+  // Channel list sorted by name (B, G, R), as OpenEXR requires; see the packed
+  // writer above.
+  const char* names[] = {"B", "G", "R"};
+  const int source[] = {2, 1, 0};
+  for (int c = 0; c < 3; ++c) {
+    image_ptr[c] = channels[source[c]].data();
     header.pixel_types[c] = TINYEXR_PIXELTYPE_FLOAT;
     header.requested_pixel_types[c] = TINYEXR_PIXELTYPE_HALF;
-    const char* names[] = {"R", "G", "B"};
     strncpy(header.channels[c].name, names[c], 255);
   }
 
