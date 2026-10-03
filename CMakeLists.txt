@@ -49,8 +49,13 @@ find_package(glog REQUIRED)
 # gflags
 find_package(gflags REQUIRED)
 
+option(SH_BAKER_BUILD_TESTS "Build the GoogleTest unit tests" ON)
+option(SH_BAKER_BUILD_VISUALIZER "Build the OpenGL visualizer (needs GLFW + OpenGL)" ON)
+
 # Googletest
-find_package(GTest REQUIRED)
+if(SH_BAKER_BUILD_TESTS)
+  find_package(GTest REQUIRED)
+endif()
 
 # stb_image
 find_path(STB_IMAGE_INCLUDE_DIR NAMES stb_image.h PATH_SUFFIXES stb)
@@ -77,11 +82,13 @@ add_library(tinygltf INTERFACE)
 target_include_directories(tinygltf INTERFACE ${TINYGLTF_INCLUDE_DIR})
 target_link_libraries(tinygltf INTERFACE gstb_image nlohmann_json)
 
-# GLFW
-find_package(glfw3 REQUIRED)
+if(SH_BAKER_BUILD_VISUALIZER)
+  # GLFW
+  find_package(glfw3 REQUIRED)
 
-# OpenGL
-find_package(OpenGL REQUIRED)
+  # OpenGL
+  find_package(OpenGL REQUIRED)
+endif()
 
 # Embree (Expected to be installed on system)
 find_package(embree 4 REQUIRED)
@@ -159,6 +166,7 @@ target_link_libraries(sh_baker_main PRIVATE sh_baker)
 
 # --- Tests ---
 
+if(SH_BAKER_BUILD_TESTS)
 enable_testing()
 
 add_executable(sh_baker_test
@@ -187,9 +195,11 @@ target_link_libraries(sh_baker_test PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)
+endif()
 
 # --- Visualizer ---
 
+if(SH_BAKER_BUILD_VISUALIZER)
 add_executable(visualizer 
     src/visualizer_main.cpp
     src/visualizer_camera.cpp
@@ -209,6 +219,7 @@ target_link_libraries(visualizer PRIVATE
     glfw
     OpenGL::GL
 )
+endif()
 
 # --- Converter Tool ---
 
