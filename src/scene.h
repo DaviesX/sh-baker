@@ -1,8 +1,6 @@
 #ifndef SH_BAKER_SRC_SCENE_H_
 #define SH_BAKER_SRC_SCENE_H_
 
-#include <embree4/rtcore.h>
-
 #include <Eigen/Dense>
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +10,11 @@
 
 #include "material_layers.h"
 #include "sh_coeffs.h"
+
+// Opaque Embree handles; translation units that call Embree include
+// <embree4/rtcore.h> themselves.
+typedef struct RTCDeviceTy* RTCDevice;
+typedef struct RTCSceneTy* RTCScene;
 
 namespace sh_baker {
 

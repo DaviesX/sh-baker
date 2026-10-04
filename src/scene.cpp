@@ -1,6 +1,7 @@
 #include "scene.h"
 
 #include <Eigen/src/Core/Matrix.h>
+#include <embree4/rtcore.h>
 #include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
 
