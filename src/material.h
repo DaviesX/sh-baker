@@ -2,11 +2,96 @@
 #define SH_BAKER_SRC_MATERIAL_H_
 
 #include <Eigen/Dense>
+#include <optional>
 #include <random>
+#include <string>
+#include <vector>
 
-#include "scene.h"
+#include "material_layers.h"
+#include "texture.h"
 
 namespace sh_baker {
+
+// GL blend factors (subset Quake 3 uses), matching the exporter's emitted names.
+enum class BlendFactor {
+  kZero,
+  kOne,
+  kSrcColor,
+  kOneMinusSrcColor,
+  kDstColor,
+  kOneMinusDstColor,
+  kSrcAlpha,
+  kOneMinusSrcAlpha,
+  kDstAlpha,
+  kOneMinusDstAlpha,
+};
+
+enum class RgbGenType {
+  kIdentity,
+  kIdentityLighting,
+  kVertex,
+  kExactVertex,
+  kWave,
+};
+
+enum class WaveType {
+  kSine,
+  kTriangle,
+  kSquare,
+  kSawtooth,
+  kInverseSawtooth,
+};
+
+struct RgbGen {
+  RgbGenType type = RgbGenType::kIdentity;
+  WaveType wave = WaveType::kSine;
+  float base = 0.0f;
+  float amplitude = 0.0f;
+  float phase = 0.0f;
+  float frequency = 0.0f;
+};
+
+enum class TcModType {
+  kNoOp,
+  kScale,
+  kScroll,
+  kRotate,
+  kTurb,
+  kStretch,
+  kTransform,
+};
+
+struct TcMod {
+  TcModType type = TcModType::kNoOp;
+  // SCALE: [s_scale, t_scale]; TRANSFORM: [m00,m01,m02,m10,m11,m12]. Unused for
+  // the time-varying types, which freeze to identity at t=0.
+  std::vector<float> values;
+};
+
+// --- Material ---
+struct Material {
+  std::string name;
+
+  // Albedo / Transparency
+  Texture albedo;
+  Texture normal_texture;
+  Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
+
+  // Emission (for Area Lights).
+  Eigen::Vector3f emissive_factor = Eigen::Vector3f::Zero();
+  float emissive_strength = 0.f;
+  std::optional<Texture> emissive_texture;
+
+  // Additive (order-independent) transparency: every SH_material_layers stage
+  // blends with dst factor GL_ONE (flames, glows). Such a material is a
+  // non-occluding emitter in the bake -- excluded from the ray-traced occluder
+  // scene (BuildBVH) and routed through the area-light path via emissive_*.
+  bool additive = false;
+
+  // Verbatim SH_material_layers extension, retained so the saver can re-emit it
+  // for the renderer. Absent when the source material had no extension.
+  std::optional<MaterialLayers> layers;
+};
 
 // Uniformly sample a direction on the hemisphere (Z-up local frame).
 // u1, u2 are uniform random numbers in [0, 1).
