@@ -39,10 +39,10 @@ Eigen::Vector3f EvalRgbGen(const RgbGen& gen);  // rgb multiplier in [0,1]
 
 // Composites the stack at t=0 into an RGBA8 texture (sRGB colour + coverage in
 // alpha) in TEXCOORD_0 space. `base_layer` indexes the layer whose colour comes
-// from `modern_albedo`; coverage is that layer's Q3 texture alpha, overridden by
-// the modern albedo's alpha when it is 4-channel. Output resolution follows the
-// modern albedo, falling back to the base Q3 layer when the modern albedo is a
-// 1x1 placeholder.
+// from `modern_albedo`; coverage is that layer's Q3 texture alpha, overridden
+// by the modern albedo's alpha when it is 4-channel. Output resolution follows
+// the modern albedo, falling back to the base Q3 layer when the modern albedo
+// is a 1x1 placeholder.
 Texture CompositeAlbedoCoverage(const std::vector<CompositeLayer>& layers,
                                 int base_layer, const Texture& modern_albedo);
 

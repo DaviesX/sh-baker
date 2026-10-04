@@ -12,7 +12,8 @@
 
 namespace sh_baker {
 
-// GL blend factors (subset Quake 3 uses), matching the exporter's emitted names.
+// GL blend factors (subset Quake 3 uses), matching the exporter's emitted
+// names.
 enum class BlendFactor {
   kZero,
   kOne,
