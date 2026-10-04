@@ -182,6 +182,7 @@ add_executable(sh_baker_test
     src/rasterizer_test.cpp
     src/dilation_test.cpp
     src/material_test.cpp
+    src/material_layers_test.cpp
     src/layer_composite_test.cpp
     src/atlas_test.cpp
     src/light_test.cpp

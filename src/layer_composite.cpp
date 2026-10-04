@@ -18,6 +18,7 @@ float WaveValue(WaveType type, float x) {
   float f = x - std::floor(x);  // fractional phase in [0, 1)
   switch (type) {
     case WaveType::kSine:
+    case WaveType::kNone:  // No function named; Quake 3 shaders default to SIN.
       return std::sin(f * 2.0f * kPi);
     case WaveType::kSquare:
       return f < 0.5f ? 1.0f : -1.0f;
@@ -50,8 +51,8 @@ void SampleTexture(const Texture& tex, const Eigen::Vector2f& uv,
                       static_cast<int>(tex.width) - 1);
   int ty = std::clamp(static_cast<int>(v * tex.height), 0,
                       static_cast<int>(tex.height) - 1);
-  int idx = (ty * static_cast<int>(tex.width) + tx) *
-            static_cast<int>(tex.channels);
+  int idx =
+      (ty * static_cast<int>(tex.width) + tx) * static_cast<int>(tex.channels);
   *rgb = Eigen::Vector3f(tex.pixel_data[idx] / 255.0f,
                          tex.pixel_data[idx + 1] / 255.0f,
                          tex.pixel_data[idx + 2] / 255.0f);
@@ -107,8 +108,8 @@ void SampleTextureLinear(const Texture& tex, const Eigen::Vector2f& uv,
                       static_cast<int>(tex.width) - 1);
   int ty = std::clamp(static_cast<int>(v * tex.height), 0,
                       static_cast<int>(tex.height) - 1);
-  int idx = (ty * static_cast<int>(tex.width) + tx) *
-            static_cast<int>(tex.channels);
+  int idx =
+      (ty * static_cast<int>(tex.width) + tx) * static_cast<int>(tex.channels);
   *rgb = Eigen::Vector3f(SRGBToLinear(tex.pixel_data[idx]),
                          SRGBToLinear(tex.pixel_data[idx + 1]),
                          SRGBToLinear(tex.pixel_data[idx + 2]));
@@ -195,7 +196,9 @@ Eigen::Vector3f EvalRgbGen(const RgbGen& gen) {
       return Eigen::Vector3f::Ones();
     case RgbGenType::kWave: {
       // At t=0 the wave argument is the phase. Quake 3 clamps rgbGen to [0,1].
-      float s = gen.base + gen.amplitude * WaveValue(gen.wave, gen.phase);
+      float s = gen.base +
+                gen.amplitude *
+                    WaveValue(gen.wave.value_or(WaveType::kSine), gen.phase);
       s = std::clamp(s, 0.0f, 1.0f);
       return Eigen::Vector3f(s, s, s);
     }
@@ -265,9 +268,12 @@ Texture CompositeAlbedoCoverage(const std::vector<CompositeLayer>& layers,
 
       acc = acc.cwiseMax(0.0f).cwiseMin(1.0f);
       size_t o = (static_cast<size_t>(ty) * out_w + tx) * 4;
-      out.pixel_data[o + 0] = static_cast<uint8_t>(std::lround(acc.x() * 255.0f));
-      out.pixel_data[o + 1] = static_cast<uint8_t>(std::lround(acc.y() * 255.0f));
-      out.pixel_data[o + 2] = static_cast<uint8_t>(std::lround(acc.z() * 255.0f));
+      out.pixel_data[o + 0] =
+          static_cast<uint8_t>(std::lround(acc.x() * 255.0f));
+      out.pixel_data[o + 1] =
+          static_cast<uint8_t>(std::lround(acc.y() * 255.0f));
+      out.pixel_data[o + 2] =
+          static_cast<uint8_t>(std::lround(acc.z() * 255.0f));
       out.pixel_data[o + 3] = static_cast<uint8_t>(
           std::lround(std::clamp(coverage, 0.0f, 1.0f) * 255.0f));
     }

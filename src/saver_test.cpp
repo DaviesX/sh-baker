@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
+#include <string>
 
 #include "loader.h"
 #include "scene.h"
@@ -223,8 +225,8 @@ TEST(SaverTest, OccluderShellRoundTripsMaterialLess) {
   tinygltf::Model model;
   tinygltf::TinyGLTF loader;
   std::string err, warn;
-  ASSERT_TRUE(loader.LoadASCIIFromFile(&model, &err, &warn,
-                                       output_gltf.string()))
+  ASSERT_TRUE(
+      loader.LoadASCIIFromFile(&model, &err, &warn, output_gltf.string()))
       << err;
 
   // No SH_occluder extension is used — material-less IS the occluder signal.
@@ -524,51 +526,25 @@ TEST(SaverTest, PassesMaterialLayersThrough) {
   write_png(layer1, 20);
   write_png(frame1, 30);
 
-  // Build a verbatim SH_material_layers Value with INPUT texture indices.
-  auto str = [](const char* s) { return tinygltf::Value(std::string(s)); };
-  tinygltf::Value::Object rgb_identity;
-  rgb_identity["type"] = str("IDENTITY");
-
-  tinygltf::Value::Object tex10;
-  tex10["index"] = tinygltf::Value(10);
-  tinygltf::Value::Object scale;
-  scale["type"] = str("SCALE");
-  scale["value"] = tinygltf::Value(tinygltf::Value::Array{tinygltf::Value(4.0),
-                                                          tinygltf::Value(4.0)});
-  tinygltf::Value::Object l0;
-  l0["texture"] = tinygltf::Value(tex10);
-  l0["blendSrc"] = str("ONE");
-  l0["blendDst"] = str("ZERO");
-  l0["rgbGen"] = tinygltf::Value(rgb_identity);
-  l0["tcMod"] = tinygltf::Value(tinygltf::Value::Array{tinygltf::Value(scale)});
-  l0["animFreq"] = tinygltf::Value(5.0);
-  l0["animFrames"] = tinygltf::Value(
-      tinygltf::Value::Array{tinygltf::Value(10), tinygltf::Value(15)});
-
-  tinygltf::Value::Object tex11;
-  tex11["index"] = tinygltf::Value(11);
-  tinygltf::Value::Object l1;
-  l1["texture"] = tinygltf::Value(tex11);
-  l1["blendSrc"] = str("SRC_ALPHA");
-  l1["blendDst"] = str("ONE_MINUS_SRC_ALPHA");
-  l1["rgbGen"] = tinygltf::Value(rgb_identity);
-
-  tinygltf::Value::Object ext;
-  ext["surfaceBlend"] = str("OPAQUE");
-  ext["cullMode"] = str("FRONT");
-  ext["baseLayer"] = tinygltf::Value(1);
-  ext["layers"] =
-      tinygltf::Value(tinygltf::Value::Array{tinygltf::Value(l0),
-                                             tinygltf::Value(l1)});
-
   Scene scene;
   Material mat;
   mat.name = "Layered";
   MaterialLayers ml;
-  ml.extension = tinygltf::Value(ext);
-  ml.texture_paths[10] = layer0;  // layer 0 + animFrames[0]
-  ml.texture_paths[11] = layer1;  // layer 1
-  ml.texture_paths[15] = frame1;  // animFrames[1]
+  ml.surface_blend = SurfaceBlend::kOpaque;
+  ml.cull_mode = CullMode::kFront;
+  ml.base_layer = 1;
+  MaterialLayer l0;
+  l0.texture_path = layer0;
+  l0.anim_freq = 5.0f;
+  l0.anim_frame_paths = {layer0, frame1};  // frame 0 is the layer's texture
+  l0.blend_src = BlendFactor::kOne;
+  l0.blend_dst = BlendFactor::kZero;
+  l0.tcmods = {TcMod{TcModType::kScale, {4.0f, 4.0f}}};
+  MaterialLayer l1;
+  l1.texture_path = layer1;
+  l1.blend_src = BlendFactor::kSrcAlpha;
+  l1.blend_dst = BlendFactor::kOneMinusSrcAlpha;
+  ml.layers = {l0, l1};
   mat.layers = ml;
   scene.materials.push_back(mat);
 
@@ -653,27 +629,6 @@ TEST(SaverTest, LoaderRetainsMaterialLayers) {
     stbi_write_png(layer1.string().c_str(), 1, 1, 3, px2, 3);
   }
 
-  auto str = [](const char* s) { return tinygltf::Value(std::string(s)); };
-  auto make_layer = [&](int idx, const char* src, const char* dst) {
-    tinygltf::Value::Object tex;
-    tex["index"] = tinygltf::Value(idx);
-    tinygltf::Value::Object rgb;
-    rgb["type"] = str("IDENTITY");
-    tinygltf::Value::Object lo;
-    lo["texture"] = tinygltf::Value(tex);
-    lo["blendSrc"] = str(src);
-    lo["blendDst"] = str(dst);
-    lo["rgbGen"] = tinygltf::Value(rgb);
-    return lo;
-  };
-  tinygltf::Value::Object ext;
-  ext["surfaceBlend"] = str("OPAQUE");
-  ext["cullMode"] = str("FRONT");
-  ext["baseLayer"] = tinygltf::Value(0);
-  ext["layers"] = tinygltf::Value(tinygltf::Value::Array{
-      tinygltf::Value(make_layer(7, "ONE", "ZERO")),
-      tinygltf::Value(make_layer(8, "SRC_ALPHA", "ONE_MINUS_SRC_ALPHA"))});
-
   Scene scene;
   Material mat;
   mat.name = "Layered";
@@ -681,9 +636,18 @@ TEST(SaverTest, LoaderRetainsMaterialLayers) {
   mat.albedo.width = 1;
   mat.albedo.height = 1;
   MaterialLayers ml;
-  ml.extension = tinygltf::Value(ext);
-  ml.texture_paths[7] = layer0;
-  ml.texture_paths[8] = layer1;
+  ml.base_layer = 0;
+  auto make_layer = [](const std::filesystem::path& texture, BlendFactor src,
+                       BlendFactor dst) {
+    MaterialLayer layer;
+    layer.texture_path = texture;
+    layer.blend_src = src;
+    layer.blend_dst = dst;
+    return layer;
+  };
+  ml.layers = {make_layer(layer0, BlendFactor::kOne, BlendFactor::kZero),
+               make_layer(layer1, BlendFactor::kSrcAlpha,
+                          BlendFactor::kOneMinusSrcAlpha)};
   mat.layers = ml;
   scene.materials.push_back(mat);
 
@@ -710,14 +674,205 @@ TEST(SaverTest, LoaderRetainsMaterialLayers) {
   ASSERT_TRUE(loaded->materials[0].layers.has_value());
 
   const MaterialLayers& rl = *loaded->materials[0].layers;
-  EXPECT_EQ(rl.extension.Get("baseLayer").GetNumberAsInt(), 0);
-  ASSERT_TRUE(rl.extension.Get("layers").IsArray());
-  EXPECT_EQ(rl.extension.Get("layers").ArrayLen(), 2u);
+  EXPECT_EQ(rl.base_layer, 0);
+  ASSERT_EQ(rl.layers.size(), 2u);
   // Both layer textures resolved to existing source files.
-  EXPECT_EQ(rl.texture_paths.size(), 2u);
-  for (const auto& [idx, p] : rl.texture_paths) {
-    EXPECT_TRUE(std::filesystem::exists(p)) << p;
+  for (const MaterialLayer& layer : rl.layers) {
+    ASSERT_TRUE(layer.texture_path.has_value());
+    EXPECT_TRUE(std::filesystem::exists(*layer.texture_path))
+        << *layer.texture_path;
   }
+  EXPECT_EQ(rl.layers[0].texture_path->filename(), "rt_layer0.png");
+  EXPECT_EQ(rl.layers[1].texture_path->filename(), "rt_layer1.png");
+  EXPECT_EQ(rl.layers[1].blend_src, BlendFactor::kSrcAlpha);
+
+  std::filesystem::remove_all(temp_dir);
+}
+
+namespace {
+
+// The source image file name of a glTF texture index.
+std::string ImageFileName(const tinygltf::Model& model, int tex_idx) {
+  if (tex_idx < 0 || tex_idx >= static_cast<int>(model.textures.size())) {
+    return "<invalid texture " + std::to_string(tex_idx) + ">";
+  }
+  int src = model.textures[tex_idx].source;
+  return std::filesystem::path(model.images[src].uri).filename().string();
+}
+
+// Expects two SH_material_layers Values to match key by key and by Value type.
+// Texture indices (`texture.index` and `animFrames[]`) belong to different
+// models, so they are compared by the image file each one names.
+void ExpectSameLayersValue(const tinygltf::Value& a, const tinygltf::Model& ma,
+                           const tinygltf::Value& b, const tinygltf::Model& mb,
+                           const std::string& where, bool texture_index) {
+  ASSERT_EQ(a.Type(), b.Type()) << where;
+  if (texture_index) {
+    EXPECT_EQ(ImageFileName(ma, a.GetNumberAsInt()),
+              ImageFileName(mb, b.GetNumberAsInt()))
+        << where;
+  } else if (a.IsObject()) {
+    ASSERT_EQ(a.Keys(), b.Keys()) << where;
+    for (const std::string& key : a.Keys()) {
+      bool index = key == "index" && where.size() >= 8 &&
+                   where.compare(where.size() - 8, 8, ".texture") == 0;
+      ExpectSameLayersValue(a.Get(key), ma, b.Get(key), mb, where + "." + key,
+                            index);
+    }
+  } else if (a.IsArray()) {
+    ASSERT_EQ(a.ArrayLen(), b.ArrayLen()) << where;
+    bool frames = where.size() >= 11 &&
+                  where.compare(where.size() - 11, 11, ".animFrames") == 0;
+    for (size_t i = 0; i < a.ArrayLen(); ++i) {
+      ExpectSameLayersValue(a.Get(int(i)), ma, b.Get(int(i)), mb,
+                            where + "[" + std::to_string(i) + "]", frames);
+    }
+  } else if (a.IsString()) {
+    EXPECT_EQ(a.Get<std::string>(), b.Get<std::string>()) << where;
+  } else if (a.IsInt()) {
+    EXPECT_EQ(a.GetNumberAsInt(), b.GetNumberAsInt()) << where;
+  } else if (a.IsReal()) {
+    EXPECT_EQ(a.GetNumberAsDouble(), b.GetNumberAsDouble()) << where;
+  } else if (a.IsBool()) {
+    EXPECT_EQ(a.Get<bool>(), b.Get<bool>()) << where;
+  }
+}
+
+// A one-triangle scene whose material carries `layers`, saved to
+// `<temp_dir>/output/scene.gltf` and reloaded into `model`.
+void SaveLayeredTriangle(const MaterialLayers& layers,
+                         const std::filesystem::path& temp_dir,
+                         tinygltf::Model* model) {
+  Scene scene;
+  Material mat;
+  mat.name = "Layered";
+  mat.layers = layers;
+  scene.materials.push_back(mat);
+  Geometry geo;
+  geo.vertices = {Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(1, 0, 0),
+                  Eigen::Vector3f(0, 1, 0)};
+  geo.indices = {0, 1, 2};
+  geo.material_id = 0;
+  scene.geometries.push_back(geo);
+
+  std::filesystem::path out = temp_dir / "output" / "scene.gltf";
+  std::filesystem::create_directories(out.parent_path());
+  ASSERT_TRUE(SaveScene(scene, out));
+  tinygltf::TinyGLTF gltf;
+  std::string err, warn;
+  ASSERT_TRUE(gltf.LoadASCIIFromFile(model, &err, &warn, out.string())) << err;
+}
+
+std::filesystem::path WriteOnePixelPng(const std::filesystem::path& path,
+                                       unsigned char r) {
+  unsigned char px[] = {r, 0, 0};
+  stbi_write_png(path.string().c_str(), 1, 1, 3, px, 3);
+  return path;
+}
+
+}  // namespace
+
+// Loading and saving an exporter-shaped SH_material_layers gives back the same
+// extension: every key and value, with texture indices naming copies of the
+// same images.
+TEST(SaverTest, RoundTripsMaterialLayers) {
+  std::filesystem::path input = "data/layers/scene.gltf";
+  if (!std::filesystem::exists(input)) input = "../data/layers/scene.gltf";
+  ASSERT_TRUE(std::filesystem::exists(input));
+
+  tinygltf::Model in_model;
+  tinygltf::TinyGLTF gltf;
+  std::string err, warn;
+  ASSERT_TRUE(gltf.LoadASCIIFromFile(&in_model, &err, &warn, input.string()))
+      << err;
+
+  std::optional<Scene> scene = LoadScene(input);
+  ASSERT_TRUE(scene.has_value());
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path() /
+                                   "sh_baker_test_layers_round_trip";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path out = temp_dir / "scene.gltf";
+  ASSERT_TRUE(SaveScene(*scene, out));
+
+  tinygltf::Model out_model;
+  ASSERT_TRUE(gltf.LoadASCIIFromFile(&out_model, &err, &warn, out.string()))
+      << err;
+  ASSERT_EQ(in_model.materials.size(), out_model.materials.size());
+  for (size_t i = 0; i < in_model.materials.size(); ++i) {
+    const auto& in_ext = in_model.materials[i].extensions;
+    const auto& out_ext = out_model.materials[i].extensions;
+    ASSERT_TRUE(in_ext.count("SH_material_layers"));
+    ASSERT_TRUE(out_ext.count("SH_material_layers"));
+    ExpectSameLayersValue(in_ext.at("SH_material_layers"), in_model,
+                          out_ext.at("SH_material_layers"), out_model,
+                          in_model.materials[i].name, false);
+  }
+
+  std::filesystem::remove_all(temp_dir);
+}
+
+// An animated layer whose first frame is its own texture writes the same
+// texture index for both.
+TEST(SaverTest, AnimFrameZeroSharesLayerTexture) {
+  std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() / "sh_baker_test_frame_zero";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path frame0 = WriteOnePixelPng(temp_dir / "frame0.png", 10);
+  std::filesystem::path frame1 = WriteOnePixelPng(temp_dir / "frame1.png", 20);
+
+  MaterialLayers layers;
+  MaterialLayer layer;
+  layer.texture_path = frame0;
+  layer.anim_freq = 2.0f;
+  layer.anim_frame_paths = {frame0, frame1};
+  layers.layers = {layer};
+  tinygltf::Model model;
+  SaveLayeredTriangle(layers, temp_dir, &model);
+
+  const tinygltf::Value& saved = model.materials[0]
+                                     .extensions.at("SH_material_layers")
+                                     .Get("layers")
+                                     .Get(0);
+  int texture_index = saved.Get("texture").Get("index").GetNumberAsInt();
+  ASSERT_EQ(saved.Get("animFrames").ArrayLen(), 2u);
+  EXPECT_EQ(saved.Get("animFrames").Get(0).GetNumberAsInt(), texture_index);
+  EXPECT_EQ(ImageFileName(model, texture_index), "frame0.png");
+  EXPECT_EQ(
+      ImageFileName(model, saved.Get("animFrames").Get(1).GetNumberAsInt()),
+      "frame1.png");
+
+  std::filesystem::remove_all(temp_dir);
+}
+
+// A layer texture or animMap frame without a known source is written as -1 and
+// keeps its position.
+TEST(SaverTest, LayerTextureWithoutSourceWritesMinusOne) {
+  std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() / "sh_baker_test_unknown_source";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path frame0 = WriteOnePixelPng(temp_dir / "frame0.png", 10);
+
+  MaterialLayers layers;
+  MaterialLayer layer;
+  layer.anim_freq = 2.0f;
+  layer.anim_frame_paths = {frame0, std::nullopt};
+  layers.layers = {layer};
+  tinygltf::Model model;
+  SaveLayeredTriangle(layers, temp_dir, &model);
+
+  const tinygltf::Value& saved = model.materials[0]
+                                     .extensions.at("SH_material_layers")
+                                     .Get("layers")
+                                     .Get(0);
+  EXPECT_EQ(saved.Get("texture").Get("index").GetNumberAsInt(), -1);
+  ASSERT_EQ(saved.Get("animFrames").ArrayLen(), 2u);
+  EXPECT_EQ(
+      ImageFileName(model, saved.Get("animFrames").Get(0).GetNumberAsInt()),
+      "frame0.png");
+  EXPECT_EQ(saved.Get("animFrames").Get(1).GetNumberAsInt(), -1);
 
   std::filesystem::remove_all(temp_dir);
 }
