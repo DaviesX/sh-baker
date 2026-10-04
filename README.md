@@ -116,3 +116,18 @@ Arguments:
 - `--reinhard`: Apply Reinhard tone mapping (`x / (1+x)`) to the output.
 
 This tool will process all `.exr` files in the directory and save `<filename>_L0.png`.
+
+## Library: q3map2 input
+
+q3map2 links `libsh_baker.so` and includes headers from `src/` to bake its own luxels. Its contract with the library:
+
+- **Materials.** `MaterialLayers` in `material.h` is sh-baker's own form of a Quake 3 stage stack. Its parts are the surface blend, the cull mode, the base layer and one `MaterialLayer` per stage, holding the texture and animMap frame sources, the blend factors, the rgbGen and the tcMods. The glTF loader and saver translate it to and from the `SH_material_layers` extension, and other loaders fill it directly.
+- **Surfaces.** `AddQ3Map2Surface` (`loader_q3map2.h`) appends one `Q3Map2Surface` (positions, normals, texture UVs, indices in q3map2's clockwise winding, and a material, negative for a pure occluder) as tracing geometry.
+  - It aborts with a `CHECK` on input only a caller bug can produce: missing positions, counts that do not match, indices or a material out of range, or non-finite values.
+  - It repairs what real content produces: it flips the winding to counter-clockwise, normalizes normals and rebuilds zero ones from the faces, and drops degenerate triangles.
+  - It generates tangents the way the glTF loader does.
+  - Add every surface before creating lights and building the BVH; a surface added after an area light aborts.
+- **Headers.** `loader_q3map2.h` and `baker.h` need only `src` and Eigen on the include path, and they compile under `-fno-exceptions -fno-rtti`. `scene.h` declares Embree's two handle types itself.
+- **Baking.** `BakeSHLightMap` bakes any list of points without rasterizing. Lay N points out as an N x 1 buffer (`RasterConfig` width N, height 1). Each point needs a position, a unit normal, a unit tangent perpendicular to it with `w` of +1 or -1, and `material_id >= 0`. Result i belongs to point i.
+
+None of this changes the CLI: on the same scene and arguments, `sh_baker_main` writes the same files, and the glTF files it reads and writes are unchanged.
