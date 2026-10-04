@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "scene.h"  // Texture
+#include "material.h"  // Texture and the layer enums
 
 // Self-contained (Eigen + Texture only; no Embree/GL/tinygltf) compositor for
 // the Quake 3 shader-stage stack carried by the `SH_material_layers` glTF
@@ -13,62 +13,6 @@
 // animMap are frozen. This is "the renderer's compositor at t=0" and is written
 // to be liftable verbatim into a shared sh-scene library later.
 namespace sh_baker {
-
-// GL blend factors (subset Quake 3 uses), matching the exporter's emitted names.
-enum class BlendFactor {
-  kZero,
-  kOne,
-  kSrcColor,
-  kOneMinusSrcColor,
-  kDstColor,
-  kOneMinusDstColor,
-  kSrcAlpha,
-  kOneMinusSrcAlpha,
-  kDstAlpha,
-  kOneMinusDstAlpha,
-};
-
-enum class RgbGenType {
-  kIdentity,
-  kIdentityLighting,
-  kVertex,
-  kExactVertex,
-  kWave,
-};
-
-enum class WaveType {
-  kSine,
-  kTriangle,
-  kSquare,
-  kSawtooth,
-  kInverseSawtooth,
-};
-
-struct RgbGen {
-  RgbGenType type = RgbGenType::kIdentity;
-  WaveType wave = WaveType::kSine;
-  float base = 0.0f;
-  float amplitude = 0.0f;
-  float phase = 0.0f;
-  float frequency = 0.0f;
-};
-
-enum class TcModType {
-  kNoOp,
-  kScale,
-  kScroll,
-  kRotate,
-  kTurb,
-  kStretch,
-  kTransform,
-};
-
-struct TcMod {
-  TcModType type = TcModType::kNoOp;
-  // SCALE: [s_scale, t_scale]; TRANSFORM: [m00,m01,m02,m10,m11,m12]. Unused for
-  // the time-varying types, which freeze to identity at t=0.
-  std::vector<float> values;
-};
 
 struct CompositeLayer {
   // The layer's Quake 3 texture. For the base layer this is kept only for its

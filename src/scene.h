@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "material_layers.h"
+#include "material.h"
 #include "sh_coeffs.h"
 
 // Opaque Embree handles; translation units that call Embree include
@@ -18,67 +18,10 @@ typedef struct RTCSceneTy* RTCScene;
 
 namespace sh_baker {
 
-// --- Texture ---
-struct Texture {
-  // If set, the texture is loaded from a file. This denotes the provenance of
-  // the texture.
-  std::optional<std::filesystem::path> file_path;
-
-  uint32_t width = 0;
-  uint32_t height = 0;
-  uint32_t channels = 0;
-  std::vector<uint8_t> pixel_data;
-};
-
-// --- Texture32F ---
-struct Texture32F {
-  // If set, the texture is loaded from a file. This denotes the provenance of
-  // the texture.
-  std::optional<std::filesystem::path> file_path;
-
-  uint32_t width = 0;
-  uint32_t height = 0;
-  uint32_t channels = 0;
-  std::vector<float> pixel_data;
-};
-
-// --- Texture32I ---
-struct Texture32I {
-  uint32_t width = 0;
-  uint32_t height = 0;
-  uint32_t channels = 0;
-  std::vector<int32_t> pixel_data;
-};
-
 // --- EmissionCDF ---
 struct EmissionCDF {
   std::vector<float> marginal_cdf;
   std::vector<std::vector<float>> conditional_cdf;
-};
-
-// --- Material ---
-struct Material {
-  std::string name;
-
-  // Albedo / Transparency
-  Texture albedo;
-  Texture normal_texture;
-  Texture metallic_roughness_texture;  // Metallic in B, Roughness in G
-
-  // Emission (for Area Lights).
-  Eigen::Vector3f emissive_factor = Eigen::Vector3f::Zero();
-  float emissive_strength = 0.f;
-  std::optional<Texture> emissive_texture;
-
-  // Additive (order-independent) transparency: every SH_material_layers stage
-  // blends with dst factor GL_ONE (flames, glows). Such a material is a
-  // non-occluding emitter in the bake -- excluded from the ray-traced occluder
-  // scene (BuildBVH) and routed through the area-light path via emissive_*.
-  bool additive = false;
-
-  // Verbatim SH_material_layers extension, retained so the saver can re-emit it
-  // for the renderer. Absent when the source material had no extension.
-  std::optional<MaterialLayers> layers;
 };
 
 // --- Geometry ---

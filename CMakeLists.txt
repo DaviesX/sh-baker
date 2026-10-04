@@ -127,6 +127,7 @@ set(LIB_SOURCES
 
 set(LIB_HEADERS
     src/colorspace.h
+    src/texture.h
     src/scene.h
     src/loader.h
     src/occlusion.h
