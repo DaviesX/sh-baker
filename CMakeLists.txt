@@ -103,6 +103,7 @@ find_package(TBB REQUIRED)
 
 set(LIB_SOURCES
     src/loader.cpp
+    src/loader_q3map2.cpp
     src/scene.cpp
     src/occlusion.cpp
     src/sh_coeffs.cpp
@@ -130,6 +131,7 @@ set(LIB_HEADERS
     src/texture.h
     src/scene.h
     src/loader.h
+    src/loader_q3map2.h
     src/occlusion.h
     src/sh_coeffs.h
     src/saver.h
@@ -174,6 +176,7 @@ enable_testing()
 
 add_executable(sh_baker_test
     src/loader_test.cpp
+    src/loader_q3map2_test.cpp
     src/scene_test.cpp
     src/occlusion_test.cpp
     src/sh_coeffs_test.cpp
