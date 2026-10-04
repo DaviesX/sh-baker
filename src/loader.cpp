@@ -366,6 +366,40 @@ std::optional<std::filesystem::path> ResolveTexturePath(
   return std::filesystem::absolute(base_path / uri_path);
 }
 
+// Parses a wave-function name of SH_material_layers. Unknown names warn and
+// default to SIN.
+WaveType ParseWaveType(const std::string& name) {
+  if (name == "SIN") return WaveType::kSine;
+  if (name == "TRIANGLE") return WaveType::kTriangle;
+  if (name == "SQUARE") return WaveType::kSquare;
+  if (name == "SAWTOOTH") return WaveType::kSawtooth;
+  if (name == "INVERSE_SAWTOOTH") return WaveType::kInverseSawtooth;
+  if (name == "NONE") return WaveType::kNone;
+  LOG(WARNING) << "Unknown wave function '" << name << "', defaulting to SIN.";
+  return WaveType::kSine;
+}
+
+// Parses the `surfaceBlend` of SH_material_layers. Unknown names warn and
+// default to OPAQUE.
+SurfaceBlend ParseSurfaceBlend(const std::string& name) {
+  if (name == "OPAQUE") return SurfaceBlend::kOpaque;
+  if (name == "BLEND") return SurfaceBlend::kBlend;
+  if (name == "ADD") return SurfaceBlend::kAdd;
+  LOG(WARNING) << "Unknown surfaceBlend '" << name
+               << "', defaulting to OPAQUE.";
+  return SurfaceBlend::kOpaque;
+}
+
+// Parses the `cullMode` of SH_material_layers. Unknown names warn and default
+// to FRONT.
+CullMode ParseCullMode(const std::string& name) {
+  if (name == "FRONT") return CullMode::kFront;
+  if (name == "BACK") return CullMode::kBack;
+  if (name == "NONE") return CullMode::kNone;
+  LOG(WARNING) << "Unknown cullMode '" << name << "', defaulting to FRONT.";
+  return CullMode::kFront;
+}
+
 // Parses the `rgbGen` object of an SH_material_layers layer.
 RgbGen ParseRgbGen(const tinygltf::Value& obj) {
   RgbGen gen;
@@ -381,18 +415,11 @@ RgbGen ParseRgbGen(const tinygltf::Value& obj) {
     gen.type = RgbGenType::kExactVertex;
   } else if (type == "WAVE") {
     gen.type = RgbGenType::kWave;
-    const std::string func =
-        obj.Has("func") ? obj.Get("func").Get<std::string>() : "SIN";
-    if (func == "TRIANGLE") {
-      gen.wave = WaveType::kTriangle;
-    } else if (func == "SQUARE") {
-      gen.wave = WaveType::kSquare;
-    } else if (func == "SAWTOOTH") {
-      gen.wave = WaveType::kSawtooth;
-    } else if (func == "INVERSE_SAWTOOTH") {
-      gen.wave = WaveType::kInverseSawtooth;
-    } else {
-      gen.wave = WaveType::kSine;
+    // The exporter omits `func` for noise and unknown waves. Keep it absent so
+    // the saver omits it again; compositing evaluates it as SIN.
+    gen.wave = std::nullopt;
+    if (obj.Has("func")) {
+      gen.wave = ParseWaveType(obj.Get("func").Get<std::string>());
     }
     auto num = [&](const char* k) -> float {
       return obj.Has(k) ? float(obj.Get(k).GetNumberAsDouble()) : 0.0f;
@@ -401,6 +428,9 @@ RgbGen ParseRgbGen(const tinygltf::Value& obj) {
     gen.amplitude = num("amplitude");
     gen.phase = num("phase");
     gen.frequency = num("frequency");
+  } else {
+    LOG(WARNING) << "Unknown rgbGen type '" << type
+                 << "', defaulting to IDENTITY.";
   }
   if (gen.type == RgbGenType::kVertex || gen.type == RgbGenType::kExactVertex) {
     LOG(WARNING) << "rgbGen vertex not supported (no COLOR_0); using identity.";
@@ -408,8 +438,10 @@ RgbGen ParseRgbGen(const tinygltf::Value& obj) {
   return gen;
 }
 
-// Parses the `tcMod` array of an SH_material_layers layer. Only SCALE and
-// TRANSFORM carry numeric values we use at t=0; the time-varying types freeze.
+// Parses the `tcMod` array of an SH_material_layers layer with all its
+// parameters: a scalar for ROTATE, [wave, base, amplitude, phase, frequency]
+// for TURB and STRETCH, and a number array for the rest. Unknown types warn
+// and are dropped.
 std::vector<TcMod> ParseTcMods(const tinygltf::Value& arr) {
   std::vector<TcMod> mods;
   if (!arr.IsArray()) return mods;
@@ -430,13 +462,23 @@ std::vector<TcMod> ParseTcMods(const tinygltf::Value& arr) {
       mod.type = TcModType::kTurb;
     } else if (type == "STRETCH") {
       mod.type = TcModType::kStretch;
+    } else {
+      LOG(WARNING) << "Unknown tcMod type '" << type << "', dropping it.";
+      continue;
     }
-    // Only SCALE/TRANSFORM have all-numeric `value` arrays we consume.
-    if ((mod.type == TcModType::kScale || mod.type == TcModType::kTransform) &&
-        m.Has("value") && m.Get("value").IsArray()) {
-      const auto& vals = m.Get("value");
-      for (size_t k = 0; k < vals.ArrayLen(); ++k) {
-        mod.values.push_back(float(vals.Get(int(k)).GetNumberAsDouble()));
+    if (m.Has("value")) {
+      const auto& value = m.Get("value");
+      if (value.IsNumber()) {
+        mod.values.push_back(float(value.GetNumberAsDouble()));
+      } else if (value.IsArray()) {
+        for (size_t k = 0; k < value.ArrayLen(); ++k) {
+          const auto& v = value.Get(int(k));
+          if (v.IsString()) {
+            mod.wave = ParseWaveType(v.Get<std::string>());
+          } else {
+            mod.values.push_back(float(v.GetNumberAsDouble()));
+          }
+        }
       }
     }
     mods.push_back(std::move(mod));
@@ -444,9 +486,11 @@ std::vector<TcMod> ParseTcMods(const tinygltf::Value& arr) {
   return mods;
 }
 
-// If the material carries SH_material_layers, composite the Quake 3 stack at
-// t=0 over the modern albedo and replace mat->albedo with the result (RGBA8:
-// sRGB colour + coverage in alpha). No-op when the extension is absent.
+// If the material carries SH_material_layers, translates it into the owned
+// model (mat->layers), resolving every layer and animMap-frame texture to its
+// source image, and composites the Quake 3 stack at t=0 over the modern albedo,
+// replacing mat->albedo with the result (RGBA8: sRGB colour + coverage in
+// alpha). No-op when the extension is absent.
 void ApplyMaterialLayers(const tinygltf::Model& model,
                          const tinygltf::Material& gltf_mat,
                          const std::filesystem::path& base_path,
@@ -456,73 +500,72 @@ void ApplyMaterialLayers(const tinygltf::Model& model,
   const tinygltf::Value& ext = it->second;
   if (!ext.Has("layers") || !ext.Get("layers").IsArray()) return;
 
-  int base_layer = 0;
+  MaterialLayers owned;
+  if (ext.Has("surfaceBlend")) {
+    owned.surface_blend =
+        ParseSurfaceBlend(ext.Get("surfaceBlend").Get<std::string>());
+  }
+  if (ext.Has("cullMode")) {
+    owned.cull_mode = ParseCullMode(ext.Get("cullMode").Get<std::string>());
+  }
   // GetNumberAsInt (not Get<int>) so a JSON integer parsed as a real by another
   // glTF producer doesn't throw bad_variant_access.
-  if (ext.Has("baseLayer")) base_layer = ext.Get("baseLayer").GetNumberAsInt();
-
-  const tinygltf::Value& larr = ext.Get("layers");
-
-  // Retain the extension verbatim so the saver can pass it through to the baked
-  // output, resolving every referenced texture index (layer textures + animMap
-  // frames) to its source file so the saver can re-copy and re-index them.
-  if (larr.ArrayLen() > 0) {
-    MaterialLayers passthrough;
-    passthrough.extension = ext;
-    auto remember = [&](int idx) {
-      if (passthrough.texture_paths.count(idx)) return;
-      if (auto p = ResolveTexturePath(model, idx, base_path)) {
-        passthrough.texture_paths[idx] = *p;
-      }
-    };
-    for (size_t i = 0; i < larr.ArrayLen(); ++i) {
-      const auto& lo = larr.Get(int(i));
-      if (lo.Has("texture") && lo.Get("texture").Has("index")) {
-        remember(lo.Get("texture").Get("index").GetNumberAsInt());
-      }
-      if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
-        const auto& frames = lo.Get("animFrames");
-        for (size_t f = 0; f < frames.ArrayLen(); ++f) {
-          remember(frames.Get(int(f)).GetNumberAsInt());
-        }
-      }
-    }
-    mat->layers = std::move(passthrough);
+  if (ext.Has("baseLayer")) {
+    owned.base_layer = ext.Get("baseLayer").GetNumberAsInt();
   }
 
+  const tinygltf::Value& larr = ext.Get("layers");
   std::vector<CompositeLayer> layers;
   layers.reserve(larr.ArrayLen());
+  owned.layers.reserve(larr.ArrayLen());
   for (size_t i = 0; i < larr.ArrayLen(); ++i) {
     const auto& lo = larr.Get(int(i));
+    MaterialLayer ml;
     CompositeLayer layer;
     if (lo.Has("texture") && lo.Get("texture").Has("index")) {
       int tex_idx = lo.Get("texture").Get("index").GetNumberAsInt();
+      ml.texture_path = ResolveTexturePath(model, tex_idx, base_path);
       LoadTexture(model, tex_idx, base_path, &layer.texture, true);
     }
-    // animMap frames -- only the emissive (additive) compositor reads these
-    // (it averages them). Loaded here so an additive stack is frame-averaged;
-    // non-animated stages pay nothing.
+    // animMap frames -- only the emissive (additive) compositor reads their
+    // pixels (it averages them). Loaded here so an additive stack is
+    // frame-averaged; non-animated stages pay nothing.
     if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
       const auto& frames = lo.Get("animFrames");
+      ml.anim_frame_paths.reserve(frames.ArrayLen());
       layer.anim_frames.reserve(frames.ArrayLen());
       for (size_t f = 0; f < frames.ArrayLen(); ++f) {
+        int frame_idx = frames.Get(int(f)).GetNumberAsInt();
+        ml.anim_frame_paths.push_back(
+            ResolveTexturePath(model, frame_idx, base_path));
         Texture frame;
-        LoadTexture(model, frames.Get(int(f)).GetNumberAsInt(), base_path,
-                    &frame, true);
+        LoadTexture(model, frame_idx, base_path, &frame, true);
         layer.anim_frames.push_back(std::move(frame));
       }
     }
+    if (lo.Has("animFreq")) {
+      ml.anim_freq = float(lo.Get("animFreq").GetNumberAsDouble());
+    }
     if (lo.Has("blendSrc")) {
-      layer.blend_src = ParseBlendFactor(lo.Get("blendSrc").Get<std::string>());
+      ml.blend_src = ParseBlendFactor(lo.Get("blendSrc").Get<std::string>());
     }
     if (lo.Has("blendDst")) {
-      layer.blend_dst = ParseBlendFactor(lo.Get("blendDst").Get<std::string>());
+      ml.blend_dst = ParseBlendFactor(lo.Get("blendDst").Get<std::string>());
     }
-    if (lo.Has("rgbGen")) layer.rgbgen = ParseRgbGen(lo.Get("rgbGen"));
-    if (lo.Has("tcMod")) layer.tcmods = ParseTcMods(lo.Get("tcMod"));
+    if (lo.Has("rgbGen")) ml.rgbgen = ParseRgbGen(lo.Get("rgbGen"));
+    if (lo.Has("tcMod")) ml.tcmods = ParseTcMods(lo.Get("tcMod"));
+
+    // The compositor reads the same stage plus its loaded pixels.
+    layer.blend_src = ml.blend_src;
+    layer.blend_dst = ml.blend_dst;
+    layer.rgbgen = ml.rgbgen;
+    layer.tcmods = ml.tcmods;
+    owned.layers.push_back(std::move(ml));
     layers.push_back(std::move(layer));
   }
   if (layers.empty()) return;
+  int base_layer = owned.base_layer;
+  mat->layers = std::move(owned);
   if (base_layer < 0 || base_layer >= static_cast<int>(layers.size())) {
     base_layer = 0;
   }

@@ -2,12 +2,12 @@
 #define SH_BAKER_SRC_MATERIAL_H_
 
 #include <Eigen/Dense>
+#include <filesystem>
 #include <optional>
 #include <random>
 #include <string>
 #include <vector>
 
-#include "material_layers.h"
 #include "texture.h"
 
 namespace sh_baker {
@@ -41,11 +41,15 @@ enum class WaveType {
   kSquare,
   kSawtooth,
   kInverseSawtooth,
+  // "NONE": the wave field of a TURB or STRETCH tcMod that names no function.
+  kNone,
 };
 
 struct RgbGen {
   RgbGenType type = RgbGenType::kIdentity;
-  WaveType wave = WaveType::kSine;
+  // The WAVE function. Absent when the source named none (the exporter omits
+  // `func` for noise and unknown waves); compositing evaluates that as SIN.
+  std::optional<WaveType> wave = WaveType::kSine;
   float base = 0.0f;
   float amplitude = 0.0f;
   float phase = 0.0f;
@@ -64,9 +68,54 @@ enum class TcModType {
 
 struct TcMod {
   TcModType type = TcModType::kNoOp;
-  // SCALE: [s_scale, t_scale]; TRANSFORM: [m00,m01,m02,m10,m11,m12]. Unused for
-  // the time-varying types, which freeze to identity at t=0.
+  // SCALE: [s_scale, t_scale]; SCROLL: [s_rate, t_rate]; ROTATE: [degrees per
+  // second]; TURB and STRETCH: [base, amplitude, phase, frequency];
+  // TRANSFORM: [m00,m01,m02,m10,m11,m12]. Compositing reads only SCALE and
+  // TRANSFORM: the time-varying types freeze to identity at t=0.
   std::vector<float> values;
+  // TURB and STRETCH only: the wave function, kNone when the source named none.
+  WaveType wave = WaveType::kNone;
+};
+
+// How the renderer blends a surface's composited stage stack.
+enum class SurfaceBlend {
+  kOpaque,
+  kBlend,
+  kAdd,
+};
+
+// Quake 3 face culling.
+enum class CullMode {
+  kFront,
+  kBack,
+  kNone,
+};
+
+// One Quake 3 shader stage.
+struct MaterialLayer {
+  // Source image of the stage's texture; absent when it has no known source.
+  std::optional<std::filesystem::path> texture_path;
+  // animMap frames' source images, in order (frame 0 is normally the stage's
+  // own texture); empty for a static stage. An absent entry is a frame without
+  // a known source, kept so the frames keep their positions.
+  std::vector<std::optional<std::filesystem::path>> anim_frame_paths;
+  float anim_freq = 0.0f;  // animMap frames per second.
+  BlendFactor blend_src = BlendFactor::kOne;
+  BlendFactor blend_dst = BlendFactor::kZero;
+  RgbGen rgbgen;
+  std::vector<TcMod> tcmods;
+};
+
+// A material's Quake 3 stage stack: sh-baker's own form of the
+// `SH_material_layers` glTF extension, which the glTF loader and saver
+// translate to and from. Other loaders, such as q3map2's, fill it directly.
+struct MaterialLayers {
+  SurfaceBlend surface_blend = SurfaceBlend::kOpaque;
+  CullMode cull_mode = CullMode::kFront;
+  // The stage whose texture is the albedo source; the modern albedo
+  // substitutes for it when compositing.
+  int base_layer = 0;
+  std::vector<MaterialLayer> layers;
 };
 
 // --- Material ---
@@ -89,8 +138,8 @@ struct Material {
   // scene (BuildBVH) and routed through the area-light path via emissive_*.
   bool additive = false;
 
-  // Verbatim SH_material_layers extension, retained so the saver can re-emit it
-  // for the renderer. Absent when the source material had no extension.
+  // The Quake 3 stage stack, kept so the saver can re-emit it for the renderer.
+  // Absent when the source material had none.
   std::optional<MaterialLayers> layers;
 };
 
