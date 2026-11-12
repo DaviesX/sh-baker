@@ -5,8 +5,6 @@
 #include <cstddef>
 #include <utility>
 
-#include "tangents.h"
-
 namespace sh_baker {
 namespace {
 
@@ -138,12 +136,12 @@ void AddQ3Map2Surface(const Q3Map2Surface& surface, Scene* scene) {
   }
 
   NormalizeAndRepairNormals(&geo);
+  DropDegenerateTriangles(&geo);
+  geo.tangents = ComputeTangents(geo);
   if (geo.texture_uvs.empty()) {
     // An occluder without texture UVs, as the glTF loader fills them.
     geo.texture_uvs.assign(geo.vertices.size(), Eigen::Vector2f::Zero());
   }
-  DropDegenerateTriangles(&geo);
-  GenerateTangents(&geo, !surface.texture_uvs.empty());
 
   scene->geometries.push_back(std::move(geo));
 }
