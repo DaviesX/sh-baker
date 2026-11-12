@@ -1,23 +1,21 @@
 #include "loader.h"
 
+#include <glog/logging.h>
+
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 
-#include "rasterizer.h"
-#include "scene.h"
-
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <glog/logging.h>
-
-#include <Eigen/Geometry>
 
 #include "colorspace.h"
 #include "layer_composite.h"
-#include "tangents.h"
+#include "rasterizer.h"
+#include "scene.h"
 #include "tiny_gltf.h"
 
 namespace sh_baker {
@@ -197,7 +195,9 @@ bool ProcessPrimitive(const tinygltf::Model& model,
   // Vertices
   geo.vertices.reserve(vertex_count);
   geo.normals.reserve(vertex_count);
-  geo.texture_uvs.reserve(vertex_count);
+  if (uv0_data) {
+    geo.texture_uvs.reserve(vertex_count);
+  }
   if (uv1_data) {
     geo.lightmap_uvs.reserve(vertex_count);
   }
@@ -232,8 +232,6 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     if (uv0_data) {
       geo.texture_uvs.emplace_back(uv0_data[i * uv0_stride + 0],
                                    uv0_data[i * uv0_stride + 1]);
-    } else {
-      geo.texture_uvs.emplace_back(0, 0);
     }
 
     if (uv1_data) {
@@ -281,8 +279,9 @@ bool ProcessPrimitive(const tinygltf::Model& model,
     }
   }
 
-  // Tangent Generation Logic
-  GenerateTangents(&geo, !geo.texture_uvs.empty() && uv0_data != nullptr);
+  if (geo.tangents.empty()) {
+    geo.tangents = ComputeTangents(geo);
+  }
 
   result->push_back(std::move(geo));
   return true;
