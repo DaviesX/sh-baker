@@ -37,6 +37,37 @@ Scene SceneWithMaterials(int count) {
   return scene;
 }
 
+TEST(LoaderQ3Map2InternalTest, CheckSurfaceAcceptsUvlessOccluder) {
+  Scene scene;
+  Q3Map2Surface surface = Quad(-1);
+  surface.texture_uvs.clear();
+
+  EXPECT_NO_FATAL_FAILURE(loader_q3map2_internal::CheckSurface(surface, scene));
+}
+
+TEST(LoaderQ3Map2InternalTest, NormalizeAndRepairNormals) {
+  Geometry geo;
+  geo.vertices = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+  geo.indices = {0, 1, 2};
+  geo.normals = {Eigen::Vector3f(0.0f, 0.0f, 2.0f), Eigen::Vector3f::Zero(),
+                 Eigen::Vector3f(0.0f, 0.0f, 1.0f)};
+
+  const auto normals = loader_q3map2_internal::NormalizeAndRepairNormals(geo);
+
+  ASSERT_EQ(normals.size(), 3u);
+  for (const Eigen::Vector3f& normal : normals) {
+    EXPECT_TRUE(normal.isApprox(Eigen::Vector3f(0.0f, 0.0f, 1.0f)));
+  }
+}
+
+TEST(LoaderQ3Map2InternalTest, DropDegenerateTriangles) {
+  Geometry geo;
+  geo.indices = {0, 1, 2, 2, 2, 3, 3, 1, 0};
+
+  EXPECT_EQ(loader_q3map2_internal::DropDegenerateTriangles(geo),
+            (std::vector<uint32_t>{0, 1, 2, 3, 1, 0}));
+}
+
 TEST(LoaderQ3Map2Test, ValidLitSurface) {
   Scene scene = SceneWithMaterials(1);
   Light point;
@@ -69,15 +100,30 @@ TEST(LoaderQ3Map2Test, FlipsTriangles) {
             (std::vector<uint32_t>{0, 2, 1, 2, 3, 1}));
 }
 
-TEST(LoaderQ3Map2Test, OccluderWithoutUvs) {
+TEST(LoaderQ3Map2Test, OccluderWithoutUvsGeneratesUvs) {
   Scene scene;
   Q3Map2Surface quad = Quad(-1);
   quad.texture_uvs.clear();
   AddQ3Map2Surface(quad, &scene);
   ASSERT_EQ(scene.geometries.size(), 1u);
-  EXPECT_EQ(scene.geometries[0].material_id, -1);
+  const Geometry& geo = scene.geometries[0];
+  EXPECT_EQ(geo.material_id, -1);
   EXPECT_EQ(scene.geometries[0].texture_uvs,
-            std::vector<Eigen::Vector2f>(4, Eigen::Vector2f::Zero()));
+            (std::vector<Eigen::Vector2f>{
+                {0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f}}));
+  ASSERT_EQ(geo.texture_uvs.size(), geo.vertices.size());
+  for (const Eigen::Vector2f& uv : geo.texture_uvs) {
+    EXPECT_TRUE(uv.allFinite());
+  }
+}
+
+TEST(LoaderQ3Map2Test, OccluderWithUvsCopiesUvs) {
+  Scene scene;
+  Q3Map2Surface quad = Quad(-1);
+  AddQ3Map2Surface(quad, &scene);
+
+  ASSERT_EQ(scene.geometries.size(), 1u);
+  EXPECT_EQ(scene.geometries[0].texture_uvs, quad.texture_uvs);
 }
 
 TEST(LoaderQ3Map2DeathTest, IndexOutOfRange) {
@@ -170,7 +216,7 @@ TEST(LoaderQ3Map2Test, TangentsFollowTextureU) {
   }
 }
 
-TEST(LoaderQ3Map2Test, FallbackTangentsForOccluder) {
+TEST(LoaderQ3Map2Test, TangentsForGeneratedOccluderUvs) {
   Scene scene;
   Q3Map2Surface quad = Quad(-1);
   quad.texture_uvs.clear();

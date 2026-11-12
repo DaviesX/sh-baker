@@ -13,10 +13,18 @@ namespace sh_baker {
 struct Q3Map2Surface {
   std::vector<Eigen::Vector3f> positions;    // world space
   std::vector<Eigen::Vector3f> normals;      // one per vertex
-  std::vector<Eigen::Vector2f> texture_uvs;  // may be empty for occluders
+  std::vector<Eigen::Vector2f> texture_uvs;  // optional for occluders
   std::vector<uint32_t> indices;  // q3map2 winding: front is clockwise
   int material_id = -1;           // < 0: pure occluder
 };
+
+namespace loader_q3map2_internal {
+
+void CheckSurface(const Q3Map2Surface& surface, const Scene& scene);
+std::vector<Eigen::Vector3f> NormalizeAndRepairNormals(const Geometry& geo);
+std::vector<uint32_t> DropDegenerateTriangles(const Geometry& geo);
+
+}  // namespace loader_q3map2_internal
 
 // Appends one Geometry for tracing to `scene`, with no lightmap UVs and an
 // identity transform. Nothing else in the scene changes.
@@ -31,7 +39,9 @@ struct Q3Map2Surface {
 //     vertex count;
 //   - a material index not below the scene's material count;
 //   - a non-finite position, normal or texture UV.
-// Texture UVs outside [0, 1] tile and are accepted.
+// Texture UVs outside [0, 1] tile and are accepted. Every output geometry has
+// one finite texture UV per vertex: supplied UVs are copied unchanged, while
+// a UV-less occluder gets UVs generated from its world-space XY coordinates.
 //
 // What real content produces is repaired:
 //   - each triangle's second and third index are swapped, from q3map2's
@@ -39,12 +49,12 @@ struct Q3Map2Surface {
 //   - every normal is normalized; one shorter than 1e-6 (degenerate patches
 //     and models make them) becomes the normalized sum of its triangles'
 //     front-face normals, or (0, 0, 1) if that sum is degenerate too;
-//   - an occluder without texture UVs gets (0, 0) for each vertex;
 //   - triangles that repeat an index are dropped.
-// Tangents come from MikkTSpace when texture UVs are given, and from the
-// fallback basis otherwise, as in the glTF loader. MikkTSpace writes one
-// tangent per vertex, so a vertex shared across a UV seam gets the tangent of
-// whichever face wrote it last; q3map2 splits its vertices where `st` differs.
+// Tangents use MikkTSpace after output texture UVs are available, with the
+// geometric fallback basis used if MikkTSpace cannot generate them. MikkTSpace
+// writes one tangent per vertex, so a vertex shared across a UV seam gets the
+// tangent of whichever face wrote it last; q3map2 splits its vertices where
+// `st` differs.
 //
 // Assembly order: add every surface first, then create the lights, then build
 // the BVH. Lights and the BVH hold raw pointers into scene->geometries, which

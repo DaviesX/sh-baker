@@ -115,7 +115,6 @@ set(LIB_SOURCES
     src/rasterizer.cpp
     src/material.cpp
     src/layer_composite.cpp
-    src/tangents.cpp
     src/dilation.cpp
     src/tinyexr_impl.cpp
     src/miniz.c
@@ -141,7 +140,6 @@ set(LIB_HEADERS
     src/material.h
     src/atlas.h
     src/sensor.h
-    src/tangents.h
     src/tracer.h
 )
 
@@ -185,7 +183,6 @@ add_executable(sh_baker_test
     src/rasterizer_test.cpp
     src/dilation_test.cpp
     src/material_test.cpp
-    src/material_layers_test.cpp
     src/layer_composite_test.cpp
     src/atlas_test.cpp
     src/light_test.cpp
