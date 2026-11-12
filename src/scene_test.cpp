@@ -95,6 +95,31 @@ TEST_F(SceneTest, TransformedTangents) {
   EXPECT_EQ(transformed[0].w(), 1.0f);
 }
 
+TEST_F(SceneTest, ComputeTangents) {
+  Geometry geo;
+  geo.vertices = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+  geo.normals.assign(3, Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+  geo.texture_uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
+  geo.indices = {0, 1, 2};
+
+  const auto textured_tangents = ComputeTangents(geo);
+  ASSERT_EQ(textured_tangents.size(), 3u);
+  for (const Eigen::Vector4f& tangent : textured_tangents) {
+    EXPECT_TRUE(
+        tangent.head<3>().isApprox(Eigen::Vector3f(1.0f, 0.0f, 0.0f), 1e-4f));
+    EXPECT_NEAR(tangent.w(), 1.0f, 1e-4f);
+  }
+
+  geo.texture_uvs.clear();
+  const auto fallback_tangents = ComputeTangents(geo);
+  ASSERT_EQ(fallback_tangents.size(), 3u);
+  for (const Eigen::Vector4f& tangent : fallback_tangents) {
+    EXPECT_TRUE(
+        tangent.head<3>().isApprox(Eigen::Vector3f(1.0f, 0.0f, 0.0f), 1e-4f));
+    EXPECT_NEAR(tangent.w(), 1.0f, 1e-4f);
+  }
+}
+
 TEST_F(SceneTest, ProjectEnvironmentUniformWhite) {
   // Create a 64x32 uniform white texture
   Texture32F tex;
