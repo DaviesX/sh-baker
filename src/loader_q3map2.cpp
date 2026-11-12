@@ -11,6 +11,19 @@ namespace {
 // Normals shorter than this are degenerate and repaired.
 constexpr float kMinNormalLength = 1e-6f;
 
+std::vector<Eigen::Vector2f> GenerateOccluderTextureUvs(const Geometry& geo) {
+  std::vector<Eigen::Vector2f> result;
+  result.reserve(geo.vertices.size());
+  for (const Eigen::Vector3f& position : geo.vertices) {
+    result.emplace_back(position.x(), position.y());
+  }
+  return result;
+}
+
+}  // namespace
+
+namespace loader_q3map2_internal {
+
 // CHECKs every case of malformed input; see the header.
 void CheckSurface(const Q3Map2Surface& surface, const Scene& scene) {
   for (size_t l = 0; l < scene.lights.size(); ++l) {
@@ -56,72 +69,70 @@ void CheckSurface(const Q3Map2Surface& surface, const Scene& scene) {
   }
 }
 
-// Normalizes every normal, replacing a degenerate one with the normalized sum
-// of the unnormalized front-face normals of the (counter-clockwise) triangles
-// that use its vertex, or with (0, 0, 1) if that sum is degenerate too.
-void NormalizeAndRepairNormals(Geometry* geo) {
-  std::vector<bool> degenerate(geo->normals.size(), false);
-  bool any_degenerate = false;
-  for (size_t v = 0; v < geo->normals.size(); ++v) {
-    Eigen::Vector3f& n = geo->normals[v];
-    if (n.norm() >= kMinNormalLength) {
-      n.normalize();
+std::vector<Eigen::Vector3f> NormalizeAndRepairNormals(const Geometry& geo) {
+  // Find the general direction of every vertex as fallback.
+  std::vector<Eigen::Vector3f> vertex_outward_sum(geo.normals.size(),
+                                                  Eigen::Vector3f::Zero());
+  for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
+    const uint32_t i0 = geo.indices[t + 0];
+    const uint32_t i1 = geo.indices[t + 1];
+    const uint32_t i2 = geo.indices[t + 2];
+    const Eigen::Vector3f outward =
+        (geo.vertices[i1] - geo.vertices[i0])
+            .cross(geo.vertices[i2] - geo.vertices[i0]);
+    vertex_outward_sum[i0] += outward;
+    vertex_outward_sum[i1] += outward;
+    vertex_outward_sum[i2] += outward;
+  }
+
+  // Normalize or fix degeneracy.
+  std::vector<Eigen::Vector3f> result;
+  result.reserve(geo.vertices.size());
+  int num_normal_repaired = 0;
+  for (size_t i = 0; i < geo.normals.size(); ++i) {
+    if (geo.normals[i].norm() >= kMinNormalLength) {
+      result.emplace_back(geo.normals[i].normalized());
+    } else if (vertex_outward_sum[i].norm() >= kMinNormalLength) {
+      result.emplace_back(vertex_outward_sum[i].normalized());
+      ++num_normal_repaired;
     } else {
-      degenerate[v] = true;
-      any_degenerate = true;
+      result.emplace_back(0.f, 0.f, 1.f);
+      ++num_normal_repaired;
     }
   }
-  if (!any_degenerate) return;
 
-  std::vector<Eigen::Vector3f> face_sum(geo->normals.size(),
-                                        Eigen::Vector3f::Zero());
-  for (size_t t = 0; t + 2 < geo->indices.size(); t += 3) {
-    const uint32_t i0 = geo->indices[t];
-    const uint32_t i1 = geo->indices[t + 1];
-    const uint32_t i2 = geo->indices[t + 2];
-    const Eigen::Vector3f face =
-        (geo->vertices[i1] - geo->vertices[i0])
-            .cross(geo->vertices[i2] - geo->vertices[i0]);
-    face_sum[i0] += face;
-    face_sum[i1] += face;
-    face_sum[i2] += face;
-  }
-  int repaired = 0;
-  for (size_t v = 0; v < geo->normals.size(); ++v) {
-    if (!degenerate[v]) continue;
-    // A vertex only on zero-area triangles is never hit by a ray.
-    geo->normals[v] = face_sum[v].norm() >= kMinNormalLength
-                          ? face_sum[v].normalized()
-                          : Eigen::Vector3f(0, 0, 1);
-    ++repaired;
-  }
-  VLOG(1) << "Repaired " << repaired << " degenerate normals.";
+  VLOG(1) << "Repaired " << num_normal_repaired << " degenerate normals.";
+  return result;
 }
 
-// Drops triangles that repeat a vertex index, as the glTF loader does.
-void DropDegenerateTriangles(Geometry* geo) {
-  std::vector<uint32_t> valid;
-  valid.reserve(geo->indices.size());
-  for (size_t t = 0; t + 2 < geo->indices.size(); t += 3) {
-    const uint32_t i0 = geo->indices[t];
-    const uint32_t i1 = geo->indices[t + 1];
-    const uint32_t i2 = geo->indices[t + 2];
-    if (i0 == i1 || i0 == i2 || i1 == i2) continue;
-    valid.push_back(i0);
-    valid.push_back(i1);
-    valid.push_back(i2);
+std::vector<uint32_t> DropDegenerateTriangles(const Geometry& geo) {
+  std::vector<uint32_t> result;
+  result.reserve(geo.indices.size());
+
+  for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
+    const uint32_t i0 = geo.indices[t];
+    const uint32_t i1 = geo.indices[t + 1];
+    const uint32_t i2 = geo.indices[t + 2];
+    if (i0 == i1 || i0 == i2 || i1 == i2) {
+      continue;
+    }
+    result.push_back(i0);
+    result.push_back(i1);
+    result.push_back(i2);
   }
-  if (valid.size() != geo->indices.size()) {
-    VLOG(1) << "Removed " << (geo->indices.size() - valid.size()) / 3
+
+  if (result.size() != geo.indices.size()) {
+    VLOG(1) << "Removed " << (geo.indices.size() - result.size()) / 3
             << " degenerate triangles from a q3map2 surface.";
-    geo->indices = std::move(valid);
   }
+
+  return result;
 }
 
-}  // namespace
+}  // namespace loader_q3map2_internal
 
 void AddQ3Map2Surface(const Q3Map2Surface& surface, Scene* scene) {
-  CheckSurface(surface, *scene);
+  loader_q3map2_internal::CheckSurface(surface, *scene);
 
   Geometry geo;
   geo.material_id = surface.material_id;
@@ -135,15 +146,14 @@ void AddQ3Map2Surface(const Q3Map2Surface& surface, Scene* scene) {
     std::swap(geo.indices[t + 1], geo.indices[t + 2]);
   }
 
-  NormalizeAndRepairNormals(&geo);
-  DropDegenerateTriangles(&geo);
-  geo.tangents = ComputeTangents(geo);
+  geo.normals = loader_q3map2_internal::NormalizeAndRepairNormals(geo);
+  geo.indices = loader_q3map2_internal::DropDegenerateTriangles(geo);
   if (geo.texture_uvs.empty()) {
-    // An occluder without texture UVs, as the glTF loader fills them.
-    geo.texture_uvs.assign(geo.vertices.size(), Eigen::Vector2f::Zero());
+    geo.texture_uvs = GenerateOccluderTextureUvs(geo);
   }
+  geo.tangents = ComputeTangents(geo);
 
-  scene->geometries.push_back(std::move(geo));
+  scene->geometries.emplace_back(std::move(geo));
 }
 
 }  // namespace sh_baker
