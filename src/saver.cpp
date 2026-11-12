@@ -102,46 +102,188 @@ std::optional<int> AddOrReuseTexture(
   return texture_index_it->second;
 }
 
-// Rebuilds an SH_material_layers extension Value with every layer/animMap texture
-// index passed through `remap` (old input index -> new output index). All other
-// fields (surfaceBlend, cullMode, baseLayer, blendSrc/Dst, rgbGen, tcMod,
-// animFreq) are copied verbatim. tinygltf::Value is immutable, so we reconstruct.
-template <typename RemapFn>
-tinygltf::Value RemapLayerTextureIndices(const tinygltf::Value& ext,
-                                         RemapFn remap) {
-  tinygltf::Value::Object out;
-  for (const std::string& key : ext.Keys()) {
-    if (key != "layers") out[key] = ext.Get(key);
+const char* BlendFactorName(BlendFactor factor) {
+  switch (factor) {
+    case BlendFactor::kZero:
+      return "ZERO";
+    case BlendFactor::kOne:
+      return "ONE";
+    case BlendFactor::kSrcColor:
+      return "SRC_COLOR";
+    case BlendFactor::kOneMinusSrcColor:
+      return "ONE_MINUS_SRC_COLOR";
+    case BlendFactor::kDstColor:
+      return "DST_COLOR";
+    case BlendFactor::kOneMinusDstColor:
+      return "ONE_MINUS_DST_COLOR";
+    case BlendFactor::kSrcAlpha:
+      return "SRC_ALPHA";
+    case BlendFactor::kOneMinusSrcAlpha:
+      return "ONE_MINUS_SRC_ALPHA";
+    case BlendFactor::kDstAlpha:
+      return "DST_ALPHA";
+    case BlendFactor::kOneMinusDstAlpha:
+      return "ONE_MINUS_DST_ALPHA";
   }
+  return "ONE";
+}
 
-  tinygltf::Value::Array new_layers;
-  const tinygltf::Value& larr = ext.Get("layers");
-  for (size_t i = 0; i < larr.ArrayLen(); ++i) {
-    const tinygltf::Value& lo = larr.Get(static_cast<int>(i));
-    tinygltf::Value::Object new_lo;
-    for (const std::string& key : lo.Keys()) {
-      if (key != "texture" && key != "animFrames") new_lo[key] = lo.Get(key);
-    }
-    if (lo.Has("texture") && lo.Get("texture").Has("index")) {
-      tinygltf::Value::Object tex_obj;
-      tex_obj["index"] =
-          tinygltf::Value(remap(lo.Get("texture").Get("index").GetNumberAsInt()));
-      new_lo["texture"] = tinygltf::Value(tex_obj);
-    } else if (lo.Has("texture")) {
-      new_lo["texture"] = lo.Get("texture");
-    }
-    if (lo.Has("animFrames") && lo.Get("animFrames").IsArray()) {
-      const tinygltf::Value& frames = lo.Get("animFrames");
-      tinygltf::Value::Array new_frames;
-      for (size_t f = 0; f < frames.ArrayLen(); ++f) {
-        new_frames.push_back(
-            tinygltf::Value(remap(frames.Get(static_cast<int>(f)).GetNumberAsInt())));
-      }
-      new_lo["animFrames"] = tinygltf::Value(new_frames);
-    }
-    new_layers.push_back(tinygltf::Value(new_lo));
+const char* RgbGenTypeName(RgbGenType type) {
+  switch (type) {
+    case RgbGenType::kIdentity:
+      return "IDENTITY";
+    case RgbGenType::kIdentityLighting:
+      return "IDENTITY_LIGHTING";
+    case RgbGenType::kVertex:
+      return "VERTEX";
+    case RgbGenType::kExactVertex:
+      return "EXACT_VERTEX";
+    case RgbGenType::kWave:
+      return "WAVE";
   }
-  out["layers"] = tinygltf::Value(new_layers);
+  return "IDENTITY";
+}
+
+const char* WaveTypeName(WaveType wave) {
+  switch (wave) {
+    case WaveType::kSine:
+      return "SIN";
+    case WaveType::kTriangle:
+      return "TRIANGLE";
+    case WaveType::kSquare:
+      return "SQUARE";
+    case WaveType::kSawtooth:
+      return "SAWTOOTH";
+    case WaveType::kInverseSawtooth:
+      return "INVERSE_SAWTOOTH";
+    case WaveType::kNone:
+      return "NONE";
+  }
+  return "SIN";
+}
+
+// Returns nullptr for kNoOp, which has no name in the schema.
+const char* TcModTypeName(TcModType type) {
+  switch (type) {
+    case TcModType::kNoOp:
+      return nullptr;
+    case TcModType::kScale:
+      return "SCALE";
+    case TcModType::kScroll:
+      return "SCROLL";
+    case TcModType::kRotate:
+      return "ROTATE";
+    case TcModType::kTurb:
+      return "TURB";
+    case TcModType::kStretch:
+      return "STRETCH";
+    case TcModType::kTransform:
+      return "TRANSFORM";
+  }
+  return nullptr;
+}
+
+const char* SurfaceBlendName(SurfaceBlend blend) {
+  switch (blend) {
+    case SurfaceBlend::kOpaque:
+      return "OPAQUE";
+    case SurfaceBlend::kBlend:
+      return "BLEND";
+    case SurfaceBlend::kAdd:
+      return "ADD";
+  }
+  return "OPAQUE";
+}
+
+const char* CullModeName(CullMode cull) {
+  switch (cull) {
+    case CullMode::kFront:
+      return "FRONT";
+    case CullMode::kBack:
+      return "BACK";
+    case CullMode::kNone:
+      return "NONE";
+  }
+  return "FRONT";
+}
+
+// Serializes a tcMod's parameters as the exporter writes `value`: a scalar for
+// ROTATE, [wave, base, amplitude, phase, frequency] for TURB and STRETCH, and
+// a number array for the rest.
+tinygltf::Value TcModValue(const TcMod& mod) {
+  if (mod.type == TcModType::kRotate) {
+    return tinygltf::Value(double(mod.values[0]));
+  }
+  tinygltf::Value::Array arr;
+  if (mod.type == TcModType::kTurb || mod.type == TcModType::kStretch) {
+    arr.push_back(tinygltf::Value(std::string(WaveTypeName(mod.wave))));
+  }
+  for (float v : mod.values) arr.push_back(tinygltf::Value(double(v)));
+  return tinygltf::Value(arr);
+}
+
+// Serializes a material's stage stack as the exporter writes the
+// SH_material_layers extension: the same keys and conditional keys, integer
+// texture indices and baseLayer, and every other number a double converted
+// from a float. `texture_index` maps each layer texture, then each of its
+// animMap frames, to an output texture index (-1 for one without a source).
+template <typename TextureIndexFn>
+tinygltf::Value SerializeMaterialLayers(const MaterialLayers& ml,
+                                        TextureIndexFn texture_index) {
+  tinygltf::Value::Object out;
+  out["surfaceBlend"] =
+      tinygltf::Value(std::string(SurfaceBlendName(ml.surface_blend)));
+  out["cullMode"] = tinygltf::Value(std::string(CullModeName(ml.cull_mode)));
+  out["baseLayer"] = tinygltf::Value(ml.base_layer);
+
+  tinygltf::Value::Array layers;
+  for (const MaterialLayer& layer : ml.layers) {
+    tinygltf::Value::Object lo;
+    tinygltf::Value::Object tex;
+    tex["index"] = tinygltf::Value(texture_index(layer.texture_path));
+    lo["texture"] = tinygltf::Value(tex);
+    if (!layer.anim_frame_paths.empty()) {
+      lo["animFreq"] = tinygltf::Value(double(layer.anim_freq));
+      tinygltf::Value::Array frames;
+      for (const auto& frame : layer.anim_frame_paths) {
+        frames.push_back(tinygltf::Value(texture_index(frame)));
+      }
+      lo["animFrames"] = tinygltf::Value(frames);
+    }
+    lo["blendSrc"] =
+        tinygltf::Value(std::string(BlendFactorName(layer.blend_src)));
+    lo["blendDst"] =
+        tinygltf::Value(std::string(BlendFactorName(layer.blend_dst)));
+
+    tinygltf::Value::Object rgbgen;
+    rgbgen["type"] =
+        tinygltf::Value(std::string(RgbGenTypeName(layer.rgbgen.type)));
+    if (layer.rgbgen.type == RgbGenType::kWave) {
+      if (layer.rgbgen.wave) {
+        rgbgen["func"] =
+            tinygltf::Value(std::string(WaveTypeName(*layer.rgbgen.wave)));
+      }
+      rgbgen["base"] = tinygltf::Value(double(layer.rgbgen.base));
+      rgbgen["amplitude"] = tinygltf::Value(double(layer.rgbgen.amplitude));
+      rgbgen["phase"] = tinygltf::Value(double(layer.rgbgen.phase));
+      rgbgen["frequency"] = tinygltf::Value(double(layer.rgbgen.frequency));
+    }
+    lo["rgbGen"] = tinygltf::Value(rgbgen);
+
+    tinygltf::Value::Array tcmods;
+    for (const TcMod& mod : layer.tcmods) {
+      const char* name = TcModTypeName(mod.type);
+      if (name == nullptr) continue;
+      tinygltf::Value::Object t;
+      t["type"] = tinygltf::Value(std::string(name));
+      if (!mod.values.empty()) t["value"] = TcModValue(mod);
+      tcmods.push_back(tinygltf::Value(t));
+    }
+    if (!tcmods.empty()) lo["tcMod"] = tinygltf::Value(tcmods);
+
+    layers.push_back(tinygltf::Value(lo));
+  }
+  out["layers"] = tinygltf::Value(layers);
   return tinygltf::Value(out);
 }
 
@@ -408,7 +550,6 @@ bool SavePackedLuminance(const SHTexture& sh_texture,
         }
         channels[c][p] = val;
       }
-
     }
 
     // OpenEXR requires the channel list sorted by name (A, B, G, R). Readers
@@ -660,26 +801,25 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
           tinygltf::Value(ext_obj);
     }
 
-    // SH_material_layers: pass the Quake 3 layer stack through verbatim, copying
-    // each layer/animMap texture into the output and remapping its index. The
+    // SH_material_layers: write the Quake 3 layer stack, copying each
+    // layer/animMap texture into the output and assigning its index. The
     // renderer composites these over the (modern) baseColorTexture itself.
     if (mat.layers) {
-      auto remap = [&](int old_idx) -> int {
-        // The output model has its own texture index space built from scratch,
-        // so an input-space index is meaningless here. Fall back to -1 (glTF's
-        // invalid-texture sentinel) rather than an index from the wrong space.
-        auto pit = mat.layers->texture_paths.find(old_idx);
-        if (pit == mat.layers->texture_paths.end()) {
-          LOG(WARNING) << "SH_material_layers: no source path for texture index "
-                       << old_idx << " in material " << mat.name;
+      auto texture_index =
+          [&](const std::optional<std::filesystem::path>& source) -> int {
+        // A texture without a known source has no output image. Write -1
+        // (glTF's invalid-texture sentinel) so the frames keep their positions.
+        if (!source) {
+          LOG(WARNING) << "SH_material_layers: a layer texture of material "
+                       << mat.name << " has no source path; writing -1";
           return -1;
         }
-        auto new_idx = AddOrReuseTexture(pit->second, path.parent_path(), &model,
+        auto new_idx = AddOrReuseTexture(*source, path.parent_path(), &model,
                                          &texture_allocations);
         return new_idx.value_or(-1);
       };
       gmat.extensions["SH_material_layers"] =
-          RemapLayerTextureIndices(mat.layers->extension, remap);
+          SerializeMaterialLayers(*mat.layers, texture_index);
       if (std::find(model.extensionsUsed.begin(), model.extensionsUsed.end(),
                     "SH_material_layers") == model.extensionsUsed.end()) {
         model.extensionsUsed.push_back("SH_material_layers");
@@ -806,9 +946,9 @@ bool SaveScene(const Scene& scene, const std::filesystem::path& path) {
 
     // Material-less pure occluders (solidified shells) round-trip naturally:
     // prim.material was set to geo.material_id (< 0), which tinygltf omits, so
-    // the primitive stays material-less — the convention the renderer keys on to
-    // apply it during shadow mapping but not the color pass. They also carry no
-    // lightmap UVs, so no TEXCOORD_1 was emitted above.
+    // the primitive stays material-less — the convention the renderer keys on
+    // to apply it during shadow mapping but not the color pass. They also carry
+    // no lightmap UVs, so no TEXCOORD_1 was emitted above.
 
     mesh.primitives.push_back(prim);
     model.meshes.push_back(mesh);
