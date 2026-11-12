@@ -158,6 +158,9 @@ std::vector<Eigen::Vector3f> TransformedVertices(const Geometry& geometry);
 std::vector<Eigen::Vector3f> TransformedNormals(const Geometry& geometry);
 std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry);
 
+// Compute tangent vectors for the geometry.
+std::vector<Eigen::Vector4f> ComputeTangents(const Geometry& geometry);
+
 // Returns the surface area of the geometry.
 float SurfaceArea(const Geometry& geometry);
 
