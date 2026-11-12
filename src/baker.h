@@ -25,10 +25,18 @@ struct BakeResult {
   Texture32F environment_visibility_texture;
 };
 
-// Bakes the SH Lightmap for the given scene.
-// Returns an SHTexture containing the baked coefficients.
-// Bakes SH lighting for the given surface points (rasterized geometry).
-// Returns a texture of size width * height (from RasterConfig).
+// Bakes SH lighting at the given surface points, one result per point.
+// `surface_points` holds width * height points, where width and height are
+// raster_config's times its supersample_scale; RasterizeScene() makes such a
+// buffer from the scene's lightmap UVs. Any list of points bakes the same way,
+// with no lightmap UVs and no rasterization: lay N points out as N x 1 (width
+// N, height 1, supersample_scale 1). Each point supplies its position, a unit
+// normal, a unit tangent perpendicular to the normal with w of +1 or -1 (the
+// tangent only orients the sampling hemisphere, and w = 0 would flatten it),
+// and material_id >= 0; a point with material_id < 0 is skipped. Result i
+// belongs to point i, and a skipped point keeps the not-baked marker
+// (SHCoeffs(-1), environment visibility -1). One call builds the BVH and the
+// light trees once for all its points.
 BakeResult BakeSHLightMap(const Scene& scene,
                           const std::vector<SurfacePoint>& surface_points,
                           const RasterConfig& raster_config,

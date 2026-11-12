@@ -110,7 +110,7 @@ std::vector<uint32_t> DropDegenerateTriangles(const Geometry& geo) {
   result.reserve(geo.indices.size());
 
   for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
-    const uint32_t i0 = geo.indices[t];
+    const uint32_t i0 = geo.indices[t + 0];
     const uint32_t i1 = geo.indices[t + 1];
     const uint32_t i2 = geo.indices[t + 2];
     if (i0 == i1 || i0 == i2 || i1 == i2) {
