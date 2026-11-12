@@ -1,5 +1,6 @@
 #include "scene.h"
 
+#include <embree4/rtcore.h>
 #include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
 #include <mikktspace.h>
