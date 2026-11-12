@@ -1,8 +1,12 @@
 #include "scene.h"
 
-#include <Eigen/src/Core/Matrix.h>
 #include <embree4/rtcore_geometry.h>
 #include <glog/logging.h>
+#include <mikktspace.h>
+
+#include <Eigen/Dense>
+#include <cmath>
+#include <cstdint>
 
 #include "colorspace.h"
 #include "sh_coeffs.h"
@@ -19,6 +23,103 @@ const float perez_B = -0.32f;  // Luminance gradient near horizon
 const float perez_C = 10.0f;   // Relative intensity of circumsolar region
 const float perez_D = -3.0f;   // Width of circumsolar region
 const float perez_E = 0.45f;   // Relative backscatter
+
+// MikkTSpace Interface
+struct MikkTSpaceUserData {
+  const Geometry* geometry;
+  std::vector<Eigen::Vector4f>* tangents_out;
+};
+
+int GetNumFaces(const SMikkTSpaceContext* pContext) {
+  auto* data = static_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+  return static_cast<int>(data->geometry->indices.size() / 3);
+}
+
+int GetNumVerticesOfFace(const SMikkTSpaceContext* ctx, const int iFace) {
+  return 3;
+}
+
+void GetPosition(const SMikkTSpaceContext* pContext, float fvPosOut[],
+                 const int iFace, const int iVert) {
+  auto* data = static_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+  uint32_t idx = data->geometry->indices[iFace * 3 + iVert];
+  const auto& v = data->geometry->vertices[idx];
+  fvPosOut[0] = v.x();
+  fvPosOut[1] = v.y();
+  fvPosOut[2] = v.z();
+}
+
+void GetNormal(const SMikkTSpaceContext* pContext, float fvNormOut[],
+               const int iFace, const int iVert) {
+  auto* data = static_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+  uint32_t idx = data->geometry->indices[iFace * 3 + iVert];
+  const auto& n = data->geometry->normals[idx];
+  fvNormOut[0] = n.x();
+  fvNormOut[1] = n.y();
+  fvNormOut[2] = n.z();
+}
+
+void GetTexCoord(const SMikkTSpaceContext* pContext, float fvTexcOut[],
+                 const int iFace, const int iVert) {
+  auto* data = static_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+  uint32_t idx = data->geometry->indices[iFace * 3 + iVert];
+
+  CHECK(!data->geometry->texture_uvs.empty())
+      << "MikkTSpace requires texture UVs.";
+  const auto& uv = data->geometry->texture_uvs[idx];
+  fvTexcOut[0] = uv.x();
+  fvTexcOut[1] = uv.y();
+}
+
+void SetTSpaceBasic(const SMikkTSpaceContext* pContext, const float fvTangent[],
+                    const float fSign, const int iFace, const int iVert) {
+  auto* data = static_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+  uint32_t idx = data->geometry->indices[iFace * 3 + iVert];
+  // Since we might share vertices, this simple assignment might overwrite
+  // if vertices are shared but have different tangent spaces (UV seams/hard
+  // edges). However, tinygltf usually duplicates vertices for split attributes.
+  // We assume vertices are already split correctly for UVs/Normals.
+  if (idx >= data->tangents_out->size()) {
+    data->tangents_out->resize(data->geometry->vertices.size());
+  }
+  (*data->tangents_out)[idx] =
+      Eigen::Vector4f(fvTangent[0], fvTangent[1], fvTangent[2], fSign);
+}
+
+std::vector<Eigen::Vector4f> GenerateMikkTSpaceTangents(const Geometry& geo) {
+  if (!geo.tangents.empty()) {
+    return geo.tangents;
+  }
+
+  if (geo.texture_uvs.empty()) {
+    // Can't generate without UVs.
+    return {};
+  }
+
+  // Resize to match vertices, initial zero
+  std::vector<Eigen::Vector4f> result(geo.vertices.size());
+  MikkTSpaceUserData data;
+  data.geometry = &geo;
+  data.tangents_out = &result;
+
+  SMikkTSpaceInterface iface = {};
+  iface.m_getNumFaces = GetNumFaces;
+  iface.m_getNumVerticesOfFace = GetNumVerticesOfFace;
+  iface.m_getPosition = GetPosition;
+  iface.m_getNormal = GetNormal;
+  iface.m_getTexCoord = GetTexCoord;
+  iface.m_setTSpaceBasic = SetTSpaceBasic;
+
+  SMikkTSpaceContext context = {};
+  context.m_pInterface = &iface;
+  context.m_pUserData = &data;
+
+  if (!genTangSpaceDefault(&context)) {
+    return {};
+  }
+
+  return result;
+}
 
 Eigen::Vector3f GetPixel(const Texture32F& tex, int x, int y) {
   int idx = (y * tex.width + x) * tex.channels;
@@ -226,6 +327,33 @@ std::vector<Eigen::Vector4f> TransformedTangents(const Geometry& geometry) {
     tangents.push_back(transformed_tangent);
   }
   return tangents;
+}
+
+std::vector<Eigen::Vector4f> ComputeTangents(const Geometry& geo) {
+  std::vector<Eigen::Vector4f> mkts_result = GenerateMikkTSpaceTangents(geo);
+  if (!mkts_result.empty()) {
+    return mkts_result;
+  }
+
+  // Fallbacks to geometric tangents.
+  std::vector<Eigen::Vector4f> result;
+  const size_t vertex_count = geo.vertices.size();
+  result.reserve(vertex_count);
+
+  for (size_t i = 0; i < vertex_count; ++i) {
+    const Eigen::Vector3f& n = geo.normals[i];
+    // Arbitrary tangent basis
+    Eigen::Vector3f t;
+    if (std::abs(n.x()) < 0.9f) {
+      t = Eigen::Vector3f(1, 0, 0);
+    } else {
+      t = Eigen::Vector3f(0, 1, 0);
+    }
+    Eigen::Vector3f tangent = (t - n * n.dot(t)).normalized();
+    result.emplace_back(tangent.x(), tangent.y(), tangent.z(), 1.0f);
+  }
+
+  return result;
 }
 
 float SurfaceArea(const Geometry& geometry) {
