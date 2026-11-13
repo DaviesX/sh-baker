@@ -120,6 +120,23 @@ TEST_F(SceneTest, ComputeTangents) {
   }
 }
 
+// MikkTSpace writes only the vertices a triangle uses; any other vertex gets
+// a zero tangent rather than uninitialized memory.
+TEST_F(SceneTest, ComputeTangentsZeroesUnusedVertex) {
+  Geometry geo;
+  geo.vertices = {{0.0f, 0.0f, 0.0f},
+                  {1.0f, 0.0f, 0.0f},
+                  {0.0f, 1.0f, 0.0f},
+                  {5.0f, 5.0f, 5.0f}};
+  geo.normals.assign(4, Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+  geo.texture_uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {0.5f, 0.5f}};
+  geo.indices = {0, 1, 2};
+
+  const auto tangents = ComputeTangents(geo);
+  ASSERT_EQ(tangents.size(), 4u);
+  EXPECT_EQ(tangents[3], Eigen::Vector4f::Zero());
+}
+
 TEST_F(SceneTest, ProjectEnvironmentUniformWhite) {
   // Create a 64x32 uniform white texture
   Texture32F tex;

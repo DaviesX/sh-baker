@@ -231,5 +231,32 @@ TEST(LoaderQ3Map2Test, TangentsForGeneratedOccluderUvs) {
   }
 }
 
+// A wall facing +X has generated XY UVs with no area, so its tangents must
+// come from the fallback basis rather than MikkTSpace's default.
+TEST(LoaderQ3Map2Test, OccluderWallTangentsUseFallbackBasis) {
+  const Eigen::Vector3f normals[] = {Eigen::Vector3f(1, 0, 0),
+                                     Eigen::Vector3f(1, 1, 0).normalized()};
+  for (const Eigen::Vector3f& n : normals) {
+    Scene scene;
+    Q3Map2Surface wall;
+    // Two edges perpendicular to n: +Z and n x +Z.
+    const Eigen::Vector3f u = n.cross(Eigen::Vector3f(0, 0, 1));
+    const Eigen::Vector3f w(0, 0, 1);
+    wall.positions = {Eigen::Vector3f::Zero(), u, w, u + w};
+    wall.normals.assign(4, n);
+    wall.indices = {0, 1, 2, 1, 3, 2};
+    AddQ3Map2Surface(wall, &scene);
+    const Geometry& geo = scene.geometries[0];
+    ASSERT_EQ(geo.tangents.size(), 4u);
+    for (size_t v = 0; v < geo.tangents.size(); ++v) {
+      const Eigen::Vector3f t = geo.tangents[v].head<3>();
+      EXPECT_NEAR(t.norm(), 1.0f, 1e-4f) << "normal " << n.transpose();
+      EXPECT_NEAR(t.dot(geo.normals[v]), 0.0f, 1e-4f)
+          << "normal " << n.transpose() << ", tangent " << t.transpose();
+      EXPECT_EQ(geo.tangents[v].w(), 1.0f);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace sh_baker

@@ -148,10 +148,12 @@ void AddQ3Map2Surface(const Q3Map2Surface& surface, Scene* scene) {
 
   geo.normals = loader_q3map2_internal::NormalizeAndRepairNormals(geo);
   geo.indices = loader_q3map2_internal::DropDegenerateTriangles(geo);
+  // Tangents come first: an occluder without texture UVs takes the fallback
+  // basis, since its generated XY UVs have no area on walls facing +-X.
+  geo.tangents = ComputeTangents(geo);
   if (geo.texture_uvs.empty()) {
     geo.texture_uvs = GenerateOccluderTextureUvs(geo);
   }
-  geo.tangents = ComputeTangents(geo);
 
   scene->geometries.emplace_back(std::move(geo));
 }
