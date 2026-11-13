@@ -125,9 +125,10 @@ q3map2 links `libsh_baker.so` and includes headers from `src/` to bake its own l
 - **Surfaces.** `AddQ3Map2Surface` (`loader_q3map2.h`) appends one `Q3Map2Surface` (positions, normals, texture UVs, indices in q3map2's clockwise winding, and a material, negative for a pure occluder) as tracing geometry.
   - It aborts with a `CHECK` on input only a caller bug can produce: missing positions, counts that do not match, indices or a material out of range, or non-finite values.
   - It repairs what real content produces: it flips the winding to counter-clockwise, normalizes normals and rebuilds zero ones from the faces, and drops degenerate triangles.
-  - It generates tangents the way the glTF loader does.
+  - It gives a pure occluder without texture UVs UVs from its world-space XY.
+  - It generates tangents the way the glTF loader does: MikkTSpace from the given texture UVs, and the geometric fallback basis for a surface without them.
   - Add every surface before creating lights and building the BVH; a surface added after an area light aborts.
 - **Headers.** `loader_q3map2.h` and `baker.h` need only `src` and Eigen on the include path, and they compile under `-fno-exceptions -fno-rtti`. `scene.h` declares Embree's two handle types itself.
 - **Baking.** `BakeSHLightMap` bakes any list of points without rasterizing. Lay N points out as an N x 1 buffer (`RasterConfig` width N, height 1). Each point needs a position, a unit normal, a unit tangent perpendicular to it with `w` of +1 or -1, and `material_id >= 0`. Result i belongs to point i.
 
-None of this changes the CLI: on the same scene and arguments, `sh_baker_main` writes the same files, and the glTF files it reads and writes are unchanged.
+None of this changes the baked output: on the same scene and arguments, `sh_baker_main` writes the same lightmaps. The saved glTF differs in one case: a material-less primitive read without `TEXCOORD_0` keeps no texture UVs, so it is written without `TEXCOORD_0` instead of with zero UVs.

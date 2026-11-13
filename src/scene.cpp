@@ -97,8 +97,10 @@ std::vector<Eigen::Vector4f> GenerateMikkTSpaceTangents(const Geometry& geo) {
     return {};
   }
 
-  // Resize to match vertices, initial zero
-  std::vector<Eigen::Vector4f> result(geo.vertices.size());
+  // One zero tangent per vertex: MikkTSpace writes only the vertices that a
+  // triangle uses, and Eigen leaves default-constructed vectors uninitialized.
+  std::vector<Eigen::Vector4f> result(geo.vertices.size(),
+                                      Eigen::Vector4f::Zero());
   MikkTSpaceUserData data;
   data.geometry = &geo;
   data.tangents_out = &result;

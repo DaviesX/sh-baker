@@ -50,8 +50,9 @@ std::vector<uint32_t> DropDegenerateTriangles(const Geometry& geo);
 //     and models make them) becomes the normalized sum of its triangles'
 //     front-face normals, or (0, 0, 1) if that sum is degenerate too;
 //   - triangles that repeat an index are dropped.
-// Tangents use MikkTSpace after output texture UVs are available, with the
-// geometric fallback basis used if MikkTSpace cannot generate them. MikkTSpace
+// Tangents come from MikkTSpace when texture UVs are given, and from the
+// geometric fallback basis otherwise (computed before an occluder's UVs are
+// generated) or if MikkTSpace cannot generate them. MikkTSpace
 // writes one tangent per vertex, so a vertex shared across a UV seam gets the
 // tangent of whichever face wrote it last; q3map2 splits its vertices where
 // `st` differs.
