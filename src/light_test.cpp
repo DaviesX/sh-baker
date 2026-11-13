@@ -65,8 +65,8 @@ TEST_F(LightTest, EvaluatePointLight) {
   // BRDF = 1/PI.
   // Result = 1/PI.
 
-  Eigen::Vector3f result =
-      EvaluateLightSamples(&light_tree, rtc_scene, P, N, wo, mat_, uv, 1, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(&light_tree, rtc_scene, {}, P,
+                                                N, wo, mat_, uv, 1, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -125,8 +125,8 @@ TEST_F(LightTest, EvaluateAreaLight) {
   RTCScene rtc_scene = rtcNewScene(device_);
 
   // Eval 100 samples
-  Eigen::Vector3f result = EvaluateLightSamples(&test_light_tree, rtc_scene, P,
-                                                N, wo, mat_, uv, 100, rng_);
+  Eigen::Vector3f result = EvaluateLightSamples(&test_light_tree, rtc_scene, {},
+                                                P, N, wo, mat_, uv, 100, rng_);
 
   rtcReleaseScene(rtc_scene);
 
@@ -294,6 +294,185 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   // Mat intensity = 10. Factor = 1.
   // Radiance = 10 * 1 = 10.
   EXPECT_NEAR(sample.radiance.x(), 10.0f, 1e-4f);
+}
+
+// A 1x1 RGBA albedo with the given alpha (channels 3 when `rgb` is set).
+Material CardMaterial(uint8_t alpha, bool rgb = false) {
+  Material mat;
+  mat.albedo.width = 1;
+  mat.albedo.height = 1;
+  mat.albedo.channels = rgb ? 3 : 4;
+  mat.albedo.pixel_data.assign(mat.albedo.channels, 128);
+  if (!rgb) mat.albedo.pixel_data[3] = alpha;
+  return mat;
+}
+
+// A horizontal quad covering [-3, 3]^2 in X/Z at height y.
+Geometry HorizontalCard(float y, int material_id) {
+  Geometry geo;
+  geo.vertices = {
+      {-3.0f, y, -3.0f}, {3.0f, y, -3.0f}, {3.0f, y, 3.0f}, {-3.0f, y, 3.0f}};
+  geo.indices = {0, 2, 1, 0, 3, 2};
+  geo.material_id = material_id;
+  return geo;
+}
+
+// A closed, material-less box [lo, hi]: a pure occluder, as q3map2 passes a
+// solid brush hull. Embree hits both sides, so winding does not matter here.
+Geometry HullBox(const Eigen::Vector3f& lo, const Eigen::Vector3f& hi) {
+  Geometry geo;
+  for (int i = 0; i < 8; ++i) {
+    geo.vertices.push_back(Eigen::Vector3f((i & 1) ? hi.x() : lo.x(),
+                                           (i & 2) ? hi.y() : lo.y(),
+                                           (i & 4) ? hi.z() : lo.z()));
+  }
+  // Two triangles per face; corner index bits are (x, y, z).
+  geo.indices = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
+                 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
+  geo.material_id = -1;
+  return geo;
+}
+
+constexpr float kHalfPass = 1.0f - 128.0f / 255.0f;
+
+// Direct light at the origin (normal up) from one light above, through the
+// given cards, relative to the same light with no cards.
+class LightTransmittanceTest : public LightTest {
+ protected:
+  void SetUp() override {
+    LightTest::SetUp();
+    // Material 0 is the receiver's; cards use the others.
+    materials_ = {mat_, CardMaterial(128), CardMaterial(0), CardMaterial(255),
+                  CardMaterial(0, /*rgb=*/true)};
+
+    // An emissive triangle at y = 10 facing down, for the area-light case. It
+    // is not in the BVH: shadow rays end just short of it (tfar).
+    emitter_material_.name = "emit";
+    emitter_material_.emissive_strength = 10.0f;
+    emitter_material_.emissive_factor = Eigen::Vector3f::Ones();
+    emitter_.vertices = {Eigen::Vector3f(-1, 10, 1), Eigen::Vector3f(1, 10, 1),
+                         Eigen::Vector3f(0, 10, -1)};
+    emitter_.normals.assign(3, Eigen::Vector3f(0, -1, 0));
+    emitter_.indices = {0, 2, 1};
+    emitter_.material_id = 0;
+  }
+
+  // Samples on the emitter are drawn from the same seeded generator with and
+  // without cards, so the ratio is exact.
+  Light AreaAbove() const {
+    Light area;
+    area.type = Light::Type::Area;
+    area.geometry = &emitter_;
+    area.material = &emitter_material_;
+    area.intensity = 10.0f;
+    area.flux = 20.0f;
+    area.area = 2.0f;
+    return area;
+  }
+
+  struct Result {
+    Eigen::Vector3f evaluated;  // EvaluateLightSamples (bounce vertices).
+    Eigen::Vector3f sh_l0;      // AccumulateIncomingLightSamples (bake points).
+  };
+
+  Result Direct(const Light& light, const std::vector<Geometry>& cards) {
+    Scene scene;
+    scene.geometries = cards;
+    scene.materials = materials_;
+    RTCScene rtc_scene = BuildBVH(scene, device_);
+    std::vector<Light> lights{light};
+    LightTree tree;
+    tree.Build(lights);
+
+    const Eigen::Vector3f P(0, 0, 0), N(0, 1, 0), wo(0, 1, 0);
+    const Eigen::Vector2f uv(0, 0);
+    Result r;
+    std::mt19937 rng_a(7);
+    r.evaluated = EvaluateLightSamples(&tree, rtc_scene, scene.materials, P, N,
+                                       wo, mat_, uv, 4, rng_a);
+    SHCoeffs sh;
+    std::mt19937 rng_b(7);
+    AccumulateIncomingLightSamples(&tree, rtc_scene, scene.materials, P, N, 4,
+                                   rng_b, &sh);
+    r.sh_l0 = sh.coeffs[0];
+    rtcReleaseScene(rtc_scene);
+    return r;
+  }
+
+  void ExpectRatio(const Light& light, const std::vector<Geometry>& cards,
+                   float ratio) {
+    Result open = Direct(light, {});
+    Result covered = Direct(light, cards);
+    ASSERT_GT(open.evaluated.x(), 0.0f);
+    ASSERT_GT(open.sh_l0.x(), 0.0f);
+    EXPECT_NEAR(covered.evaluated.x(), ratio * open.evaluated.x(),
+                0.01f * open.evaluated.x());
+    EXPECT_NEAR(covered.sh_l0.x(), ratio * open.sh_l0.x(),
+                0.01f * open.sh_l0.x());
+  }
+
+  static Light PointAbove() {
+    Light point;
+    point.type = Light::Type::Point;
+    point.position = Eigen::Vector3f(0, 10, 0);
+    point.color = Eigen::Vector3f(1, 1, 1);
+    point.intensity = 100.0f;
+    point.flux = 1000.0f;
+    return point;
+  }
+
+  static Light SpotAbove() {
+    Light spot = PointAbove();
+    spot.type = Light::Type::Spot;
+    spot.direction = Eigen::Vector3f(0, -1, 0);
+    return spot;
+  }
+
+  static Light SunAbove() {
+    Light sun;
+    sun.type = Light::Type::Directional;
+    sun.direction = Eigen::Vector3f(0, -1, 0);
+    sun.color = Eigen::Vector3f(1, 1, 1);
+    sun.intensity = 2.0f;
+    sun.flux = 1000.0f;
+    return sun;
+  }
+
+  static constexpr int kHalf = 1, kCutOut = 2, kOpaque = 3, kRgb = 4;
+  std::vector<Material> materials_;
+  Geometry emitter_;
+  Material emitter_material_;
+};
+
+TEST_F(LightTransmittanceTest, HalfCoveredCardAttenuatesDirectLight) {
+  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kHalf)}, kHalfPass);
+  ExpectRatio(SpotAbove(), {HorizontalCard(5.0f, kHalf)}, kHalfPass);
+  ExpectRatio(SunAbove(), {HorizontalCard(5.0f, kHalf)}, kHalfPass);
+  ExpectRatio(AreaAbove(), {HorizontalCard(5.0f, kHalf)}, kHalfPass);
+}
+
+TEST_F(LightTransmittanceTest, TwoCardsMultiply) {
+  ExpectRatio(PointAbove(),
+              {HorizontalCard(3.0f, kHalf), HorizontalCard(6.0f, kHalf)},
+              kHalfPass * kHalfPass);
+}
+
+TEST_F(LightTransmittanceTest, CutOutCardPassesEverything) {
+  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kCutOut)}, 1.0f);
+  ExpectRatio(SunAbove(), {HorizontalCard(5.0f, kCutOut)}, 1.0f);
+}
+
+TEST_F(LightTransmittanceTest, OpaqueCardsBlock) {
+  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kOpaque)}, 0.0f);
+  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kRgb)}, 0.0f);
+  ExpectRatio(PointAbove(),
+              {HorizontalCard(7.0f, kCutOut),
+               HullBox(Eigen::Vector3f(-1, 4, -1), Eigen::Vector3f(1, 6, 1))},
+              0.0f);
+}
+
+TEST_F(LightTransmittanceTest, CardBeyondLightIgnored) {
+  ExpectRatio(PointAbove(), {HorizontalCard(12.0f, kOpaque)}, 1.0f);
 }
 
 }  // namespace

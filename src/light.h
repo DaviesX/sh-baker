@@ -222,11 +222,17 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
 // Evaluates `num_samples` lights based on the importance-weighted distribution
 // in the light tree. Returns the estimated radiance combined with the geometric
 // visibility term.
+//
+// Visibility is FindTransmittance() along each shadow ray: surfaces with alpha
+// below 1 attenuate the sample by (1 - alpha), opaque surfaces and
+// material-less occluders block it. `materials` is the scene's material list,
+// indexed by Geometry::material_id.
 Eigen::Vector3f EvaluateLightSamples(
     const LightTree* light_tree, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    const Eigen::Vector3f& reflected, const Material& mat,
-    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng);
+    const std::vector<Material>& materials, const Eigen::Vector3f& hit_point,
+    const Eigen::Vector3f& hit_point_normal, const Eigen::Vector3f& reflected,
+    const Material& mat, const Eigen::Vector2f& uv, unsigned num_samples,
+    std::mt19937& rng);
 
 // Computes the direct lighting (Next Event Estimation) and accumulates the
 // projected SH coefficients into the accumulator.
@@ -235,8 +241,11 @@ Eigen::Vector3f EvaluateLightSamples(
 // cannot simply return a summed radiance covering multiple light sources.
 // Instead, we must project each light sample into the SH basis using its
 // specific incoming direction.
+//
+// Visibility is as in EvaluateLightSamples().
 void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     RTCScene rtc_scene,
+                                    const std::vector<Material>& materials,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,

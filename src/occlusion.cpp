@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include "material.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -40,7 +41,8 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
     Occlusion occ;
 
     // Position: origin + dir * t
-    occ.position = ray.origin + ray.direction * rtc_ray_hit.ray.tfar;
+    occ.t = rtc_ray_hit.ray.tfar;
+    occ.position = ray.origin + ray.direction * occ.t;
 
     // Retrieve Geometry
     RTCGeometry geometry_handle = rtcGetGeometry(scene, rtc_ray_hit.hit.geomID);
@@ -104,6 +106,28 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
   }
 
   return std::nullopt;
+}
+
+float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
+                        const Ray& ray) {
+  // Step past each hit along the same ray (origin, direction and tfar kept),
+  // by the tracer's transmission offset.
+  constexpr float kStep = 0.005f;
+
+  Ray walk = ray;
+  float transmittance = 1.0f;
+  for (int crossings = 0;; ++crossings) {
+    std::optional<Occlusion> occ = FindOcclusion(scene, walk);
+    if (!occ.has_value()) return transmittance;
+    if (occ->material_id < 0) return 0.0f;
+    CHECK_LT(static_cast<size_t>(occ->material_id), materials.size());
+    float alpha = GetAlpha(materials[occ->material_id], occ->uv);
+    if (alpha >= 1.0f) return 0.0f;
+    if (crossings >= kMaxTransmittanceCrossings) return 0.0f;
+    transmittance *= 1.0f - alpha;
+    walk.tnear = occ->t + kStep;
+    if (walk.tnear >= walk.tfar) return transmittance;
+  }
 }
 
 }  // namespace sh_baker

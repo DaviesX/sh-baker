@@ -203,9 +203,10 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
 
 Eigen::Vector3f EvaluateLightSamples(
     const LightTree* light_tree, RTCScene rtc_scene,
-    const Eigen::Vector3f& hit_point, const Eigen::Vector3f& hit_point_normal,
-    const Eigen::Vector3f& reflected, const Material& mat,
-    const Eigen::Vector2f& uv, unsigned num_samples, std::mt19937& rng) {
+    const std::vector<Material>& materials, const Eigen::Vector3f& hit_point,
+    const Eigen::Vector3f& hit_point_normal, const Eigen::Vector3f& reflected,
+    const Material& mat, const Eigen::Vector2f& uv, unsigned num_samples,
+    std::mt19937& rng) {
   Eigen::Vector3f result = Eigen::Vector3f::Zero();
 
   if (!light_tree || light_tree->Empty()) return result;
@@ -262,9 +263,11 @@ Eigen::Vector3f EvaluateLightSamples(
 
     if (radiance.isZero()) continue;
 
-    if (FindOcclusion(rtc_scene, visibility_ray)) {
-      continue;
-    }
+    // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
+    // 1.0f exactly and its result is unchanged.
+    float visibility = FindTransmittance(rtc_scene, materials, visibility_ray);
+    if (visibility <= 0.0f) continue;
+    radiance *= visibility;
 
     float joint_pdf = sampled_light->pdf * area_sample_pdf;
     if (joint_pdf > 1e-8f) {
@@ -277,6 +280,7 @@ Eigen::Vector3f EvaluateLightSamples(
 
 void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     RTCScene rtc_scene,
+                                    const std::vector<Material>& materials,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,
@@ -336,9 +340,11 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
 
     if (radiance.isZero()) continue;
 
-    if (FindOcclusion(rtc_scene, visibility_ray)) {
-      continue;
-    }
+    // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
+    // 1.0f exactly and its result is unchanged.
+    float visibility = FindTransmittance(rtc_scene, materials, visibility_ray);
+    if (visibility <= 0.0f) continue;
+    radiance *= visibility;
 
     float joint_pdf = sampled_light->pdf * area_sample_pdf;
     if (joint_pdf > 1e-8f) {
