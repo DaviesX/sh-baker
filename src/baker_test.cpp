@@ -262,4 +262,99 @@ TEST(BakerTest, HullBehindCrackBlocksLight) {
   EXPECT_LT(hulled, 0.05f * open) << "open " << open << ", hulled " << hulled;
 }
 
+// A fence over a floor, lit straight down by the sun: its RGBA albedo has
+// alternating opaque (alpha 255) and cut-out (alpha 0) stripes, each 0.5 units
+// wide. Floor points behind the open stripes get the full direct light, points
+// behind the opaque stripes get none. The fence faces down, away from the sun,
+// so it adds no light of its own.
+TEST(BakerTest, CutOutFenceCastsStripedShadow) {
+  constexpr int kStripes = 8;
+  auto build_scene = [](bool with_fence) {
+    Scene scene;
+    scene.materials.push_back(WhiteMaterial());
+    Material fence = WhiteMaterial();
+    fence.name = "fence";
+    fence.albedo.width = kStripes;
+    fence.albedo.height = 1;
+    fence.albedo.channels = 4;
+    fence.albedo.pixel_data.clear();
+    for (int i = 0; i < kStripes; ++i) {
+      const uint8_t alpha = (i % 2 == 0) ? 255 : 0;
+      fence.albedo.pixel_data.insert(fence.albedo.pixel_data.end(),
+                                     {200, 200, 200, alpha});
+    }
+    scene.materials.push_back(fence);
+    AddQ3Map2Surface(RectXY(-3, 3, -3, 3, 0, /*faces_up=*/true, 0), &scene);
+    if (with_fence) {
+      // u = (x + 2) / 4, so stripe i covers x in [-2 + 0.5 i, -1.5 + 0.5 i].
+      AddQ3Map2Surface(RectXY(-2, 2, -2, 2, 1, /*faces_up=*/false, 1), &scene);
+    }
+    scene.lights.push_back(SunFromAbove());
+    return scene;
+  };
+  std::vector<SurfacePoint> points;
+  for (int i = 0; i < kStripes; ++i) {
+    points.push_back(PointAt(Eigen::Vector3f(-1.75f + 0.5f * i, 0.0f, 0.0f),
+                             Eigen::Vector3f(0, 0, 1), 0));
+  }
+
+  const BakeResult open = BakePoints(build_scene(false), points);
+  const BakeResult fenced = BakePoints(build_scene(true), points);
+  for (int i = 0; i < kStripes; ++i) {
+    const float lit = open.sh_texture.pixels[i].coeffs[0].x();
+    const float got = fenced.sh_texture.pixels[i].coeffs[0].x();
+    ASSERT_GT(lit, 0.1f);
+    if (i % 2 == 0) {
+      EXPECT_LT(got, 0.01f * lit) << "opaque stripe " << i;
+    } else {
+      EXPECT_NEAR(got, lit, 0.01f * lit) << "open stripe " << i;
+    }
+  }
+}
+
+// A bake point behind a card of uniform alpha 128/255 keeps 1 - 128/255 of its
+// direct light, from a point light and from the sun. The card faces down, away
+// from the light, so it receives no direct light and adds none of its own to
+// the receiver's first-hit term.
+TEST(BakerTest, HalfCoveredCardAttenuatesBakedDirectLight) {
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = Eigen::Vector3f(0, 0, 4);
+  point.color = Eigen::Vector3f(1, 1, 1);
+  point.intensity = 16.0f;
+  point.flux = 200.0f;
+  for (const Light& light : {point, SunFromAbove()}) {
+    auto build_scene = [&light](bool with_card) {
+      Scene scene;
+      scene.materials.push_back(WhiteMaterial());
+      Material card = WhiteMaterial();
+      card.name = "card";
+      card.albedo.pixel_data = {200, 200, 200, 128};
+      scene.materials.push_back(card);
+      AddQ3Map2Surface(RectXY(-2, 2, -2, 2, 0, /*faces_up=*/true, 0), &scene);
+      if (with_card) {
+        AddQ3Map2Surface(RectXY(-1, 1, -1, 1, 1, /*faces_up=*/false, 1),
+                         &scene);
+      }
+      scene.lights.push_back(light);
+      return scene;
+    };
+    const std::vector<SurfacePoint> points = {
+        PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0)};
+
+    const float open = BakePoints(build_scene(false), points)
+                           .sh_texture.pixels[0]
+                           .coeffs[0]
+                           .x();
+    const float covered = BakePoints(build_scene(true), points)
+                              .sh_texture.pixels[0]
+                              .coeffs[0]
+                              .x();
+    ASSERT_GT(open, 0.1f);
+    EXPECT_NEAR(covered, (1.0f - 128.0f / 255.0f) * open, 0.02f * open)
+        << "light type " << static_cast<int>(light.type) << ": open " << open
+        << ", covered " << covered;
+  }
+}
+
 }  // namespace sh_baker

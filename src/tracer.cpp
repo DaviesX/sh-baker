@@ -47,9 +47,8 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
     transmission_ray.tfar = 1e10f;
     transmission_ray.origin = occ->position;
     transmission_ray.direction = ray.direction;
-    Eigen::Vector3f transmission =
-        Trace(config, transmission_ray, depth + 1, rng,
-              throughput * (1.0f - alpha));
+    Eigen::Vector3f transmission = Trace(config, transmission_ray, depth + 1,
+                                         rng, throughput * (1.0f - alpha));
 
     color += (1.0f - alpha) * transmission;
     if (alpha < 0.1f) {
@@ -61,8 +60,9 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
   Eigen::Vector3f L_direct = EvaluateLightSamples(
-      config.light_tree, config.rtc_scene, occ->position, occ->normal,
-      -ray.direction, mat, occ->uv, config.num_light_samples, rng);
+      config.light_tree, config.rtc_scene, config.scene.materials,
+      occ->position, occ->normal, -ray.direction, mat, occ->uv,
+      config.num_light_samples, rng);
 
   color += alpha * L_direct;
 
