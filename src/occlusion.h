@@ -47,6 +47,9 @@ std::optional<OcclusionWithAlpha> FindOcclusion(
 // Continue along the same ray just beyond the hit, retaining its far bound.
 Ray ContinuePastOcclusion(const Ray& ray, const Occlusion& hit);
 
+// Start a new ray at the hit, continuing in the same direction.
+Ray NewPastOcclusion(const Ray& ray, const Occlusion& hit);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_OCCLUSION_H_

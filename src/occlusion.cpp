@@ -131,4 +131,13 @@ Ray ContinuePastOcclusion(const Ray& ray, const Occlusion& hit) {
   return continued;
 }
 
+Ray NewPastOcclusion(const Ray& ray, const Occlusion& hit) {
+  Ray continued;
+  continued.origin = hit.position;
+  continued.direction = ray.direction;
+  continued.tnear = 0.005f;
+  continued.tfar = 1e10f;
+  return continued;
+}
+
 }  // namespace sh_baker

@@ -40,11 +40,7 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // If alpha < 1.0, continue ray
   if (surface->alpha < 1.0f) {
     // Transmission
-    Ray transmission_ray;
-    transmission_ray.origin = surface->hit.position;
-    transmission_ray.direction = ray.direction;
-    transmission_ray.tnear = 0.005f;
-    transmission_ray.tfar = 1e10f;
+    Ray transmission_ray = NewPastOcclusion(ray, surface->hit);
     Eigen::Vector3f transmission =
         Trace(config, transmission_ray, depth + 1, rng,
               throughput * (1.0f - surface->alpha));
