@@ -157,9 +157,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
           TraceConfig trace_config(
               rtc_scene, scene, &light_tree, config.bounces,
               config.num_light_samples,
-              /*on_direct_hit_sky_fn=*/[&visibility_accum]() {
-                visibility_accum += 1.0f;
-              },
+              /*on_direct_hit_sky_fn=*/
+              [&visibility_accum]() { visibility_accum += 1.0f; },
               config.firefly_clamp);
 
           while (true) {
@@ -175,8 +174,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
             // returns immediately.
             SHCoeffs sample_sh_accum;  // Accumulate for this sample only
             AccumulateIncomingLightSamples(
-                &direct_light_tree, rtc_scene, sp.position, sp.normal,
-                config.num_light_samples, rng, &sample_sh_accum);
+                &direct_light_tree, rtc_scene, scene.materials, sp.position,
+                sp.normal, config.num_light_samples, rng, &sample_sh_accum);
 
             // Indirect lighting.
             Eigen::Vector3f Li_indirect =

@@ -227,4 +227,22 @@ TEST_F(OcclusionTest, ReportsMaterialLessOccluder) {
   rtcReleaseScene(rtc_scene);
 }
 
+TEST_F(OcclusionTest, ReportsHitDistance) {
+  Scene scene;
+  Geometry geo;
+  geo.vertices = {{-2, -2, 3}, {2, -2, 3}, {0, 2, 3}};
+  geo.indices = {0, 1, 2};
+  geo.material_id = -1;
+  scene.geometries.push_back(geo);
+  RTCScene rtc_scene = BuildBVH(scene, device);
+  ASSERT_NE(rtc_scene, nullptr);
+  Ray ray;
+  ray.origin = Eigen::Vector3f(0, 0, 10);
+  ray.direction = Eigen::Vector3f(0, 0, -1);
+  auto hit = FindOcclusion(rtc_scene, ray);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_NEAR(hit->t, 7.0f, 1e-4f);
+  rtcReleaseScene(rtc_scene);
+}
+
 }  // namespace sh_baker
