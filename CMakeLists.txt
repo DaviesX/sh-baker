@@ -199,6 +199,14 @@ target_link_libraries(sh_baker_test PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)
+
+# A caller built the way q3map2 is (no exceptions, no RTTI), linked against the
+# shared library, exercising the bake callbacks across that boundary.
+add_executable(sh_baker_no_rtti_caller_test src/no_rtti_caller_test.cpp)
+target_compile_options(sh_baker_no_rtti_caller_test PRIVATE
+    -fno-exceptions -fno-rtti)
+target_link_libraries(sh_baker_no_rtti_caller_test PRIVATE sh_baker)
+add_test(NAME NoRttiCallerTest COMMAND sh_baker_no_rtti_caller_test)
 endif()
 
 # --- Visualizer ---

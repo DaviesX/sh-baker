@@ -1,12 +1,18 @@
 #ifndef SH_BAKER_SRC_BAKER_H_
 #define SH_BAKER_SRC_BAKER_H_
 
+#include <cstddef>
+#include <functional>
+
 #include "rasterizer.h"
 #include "saver.h"
 #include "scene.h"
 
 namespace sh_baker {
 
+// BakeConfig and BakeResult are shared with callers by layout, with no ABI
+// versioning: callers (q3map2) must be rebuilt against these headers whenever
+// libsh_baker.so moves to a new commit.
 struct BakeConfig {
   int samples = 128;          // Rays per texel
   int bounces = 5;            // Max path depth
@@ -18,11 +24,34 @@ struct BakeConfig {
   // Adaptive-sampling stop tolerance: stop a texel once the 3-sigma SEM of its
   // luminance falls below confidence_threshold * mean.
   float confidence_threshold = 0.01f;
+
+  // Optional progress report: called with (points finished, total points),
+  // where finished counts points baked or skipped as invalid. Calls come from
+  // bake worker threads but never overlap; `done` strictly increases, at most
+  // once per whole percent of done / total. A bake of at least one point that
+  // is not cancelled ends with (total, total). Not called for zero points.
+  std::function<void(size_t done, size_t total)> progress_fn;
+
+  // Optional cancel poll: called before any ray-tracing setup, after the BVH
+  // build, and before each point. Polls never overlap, but may come from
+  // different worker threads, so the callback need not be thread-safe. Once a
+  // poll returns true there are no more: no further point starts, points in
+  // progress finish, and the bake returns with BakeResult::cancelled set.
+  std::function<bool()> cancel_fn;
+
+  // Both callbacks must be short, and must not call back into sh-baker, run
+  // TBB work, or block waiting on the bake: they run on bake worker threads,
+  // and the progress callback runs under the bake's reporting lock. Either may
+  // be left empty.
 };
 
 struct BakeResult {
   SHTexture sh_texture;
   Texture32F environment_visibility_texture;
+  // True when cancel_fn returned true, even if every point had already
+  // started. Points that were not baked keep the not-baked marker, as invalid
+  // points do; every baked point holds the result a full bake gives it.
+  bool cancelled = false;
 };
 
 // Bakes SH lighting at the given surface points, one result per point.
