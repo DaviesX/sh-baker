@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include "material.h"
 #include "scene.h"
 
 namespace sh_baker {
@@ -40,7 +41,8 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
     Occlusion occ;
 
     // Position: origin + dir * t
-    occ.position = ray.origin + ray.direction * rtc_ray_hit.ray.tfar;
+    occ.t = rtc_ray_hit.ray.tfar;
+    occ.position = ray.origin + ray.direction * occ.t;
 
     // Retrieve Geometry
     RTCGeometry geometry_handle = rtcGetGeometry(scene, rtc_ray_hit.hit.geomID);
@@ -104,6 +106,38 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
   }
 
   return std::nullopt;
+}
+
+std::optional<OcclusionWithAlpha> FindOcclusion(
+    RTCScene scene, const std::vector<Material>& scene_materials,
+    const Ray& ray) {
+  auto hit = FindOcclusion(scene, ray);
+  if (!hit) {
+    return std::nullopt;
+  }
+
+  if (hit->material_id < 0) {
+    return OcclusionWithAlpha{*hit, 1.0f};
+  }
+  CHECK_LT(static_cast<size_t>(hit->material_id), scene_materials.size());
+  return OcclusionWithAlpha{
+      *hit, GetAlpha(scene_materials[hit->material_id], hit->uv)};
+}
+
+Ray ContinuePastOcclusion(const Ray& ray, const Occlusion& hit) {
+  Ray continued = ray;
+  continued.tnear =
+      std::nextafter(hit.t, std::numeric_limits<float>::infinity());
+  return continued;
+}
+
+Ray NewPastOcclusion(const Ray& ray, const Occlusion& hit) {
+  Ray continued;
+  continued.origin = hit.position;
+  continued.direction = ray.direction;
+  continued.tnear = 0.005f;
+  continued.tfar = 1e10f;
+  return continued;
 }
 
 }  // namespace sh_baker

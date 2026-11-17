@@ -64,6 +64,7 @@ Scene conventions:
 - Lights come from `KHR_lights_punctual`. Intensities are divided by 200 on load (lux to the baker's radiance units), so a directional light of intensity 200 gives an irradiance of 1 at normal incidence; the diffuse BRDF is albedo / pi.
 - The sky is an equirectangular image named by the glTF's top-level `extras.skybox` (`.hdr` for HDR, otherwise 8-bit), resolved relative to the glTF. Direction `(sin t sin p, cos t, sin t cos p)` maps to `u = p / 2pi` (u = 0 is +Z, u = 0.25 is +X) and `v = t / pi` from the top. Without one, a Preetham sky is built from the brightest directional light. Rays that see the sky only feed the environment-visibility texture; the sky term is applied at render time as sky colour times visibility.
 - A primitive without a material is a pure occluder: it blocks light but receives no lightmap chart.
+- Alpha is coverage: the alpha channel of the material's albedo, which is the base colour texture or, with `SH_material_layers`, the stack's composited coverage (nearest texel; opaque without an alpha channel). Indirect rays and direct-light shadow rays both pass through a surface with weight 1 - alpha, so fences and leaf cards cast shadows with holes. A shadow ray's light is scaled by the product of 1 - alpha over the surfaces between the point and the light. Opaque surfaces and pure occluders block it, as do more than 64 partially covered crossings. `alphaMode` and `alphaCutoff` are ignored.
 
 ### Blender Visualization
 
