@@ -475,5 +475,133 @@ TEST_F(LightTransmittanceTest, CardBeyondLightIgnored) {
   ExpectRatio(PointAbove(), {HorizontalCard(12.0f, kOpaque)}, 1.0f);
 }
 
+// A 1x1 albedo texture. channels 4 carries `alpha` (0..255); channels 3 has
+// no alpha channel.
+Material SolidAlbedo(int channels, uint8_t alpha) {
+  Material mat;
+  mat.albedo.width = 1;
+  mat.albedo.height = 1;
+  mat.albedo.channels = channels;
+  mat.albedo.pixel_data.assign(channels, 200);
+  if (channels == 4) mat.albedo.pixel_data[3] = alpha;
+  return mat;
+}
+
+// An axis-aligned quad covering [-2, 2]^2 in the plane Z = z.
+Geometry QuadAtZ(float z, int material_id) {
+  Geometry geo;
+  geo.vertices = {
+      {-2.0f, -2.0f, z}, {2.0f, -2.0f, z}, {2.0f, 2.0f, z}, {-2.0f, 2.0f, z}};
+  geo.indices = {0, 1, 2, 0, 2, 3};
+  geo.material_id = material_id;
+  return geo;
+}
+
+// A ray from (0, 0, 10) straight down to Z = 0.
+Ray DownRay() {
+  Ray ray;
+  ray.origin = Eigen::Vector3f(0.0f, 0.0f, 10.0f);
+  ray.direction = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+  ray.tnear = 0.005f;
+  ray.tfar = 10.0f - 0.005f;
+  return ray;
+}
+
+constexpr float kHalf = 1.0f - 128.0f / 255.0f;
+
+class TransmittanceTest : public LightTest {
+ protected:
+  void SetUp() override {
+    LightTest::SetUp();
+    materials_ = {SolidAlbedo(4, 128), SolidAlbedo(4, 0), SolidAlbedo(4, 255),
+                  SolidAlbedo(3, 0)};
+  }
+
+  float Transmittance(const std::vector<Geometry>& geometries, const Ray& ray) {
+    Scene scene;
+    scene.geometries = geometries;
+    scene.materials = materials_;
+    RTCScene rtc_scene = BuildBVH(scene, device_);
+    EXPECT_NE(rtc_scene, nullptr);
+    float t =
+        light_internal::FindTransmittance(rtc_scene, scene.materials, ray);
+    rtcReleaseScene(rtc_scene);
+    return t;
+  }
+
+  static constexpr int kHalfAlpha = 0;
+  static constexpr int kCutOut = 1;
+  static constexpr int kOpaqueRgba = 2;
+  static constexpr int kRgb = 3;
+  std::vector<Material> materials_;
+};
+
+TEST_F(TransmittanceTest, MissIsFullyVisible) {
+  EXPECT_EQ(Transmittance({}, DownRay()), 1.0f);
+  EXPECT_EQ(Transmittance({QuadAtZ(-1.0f, kOpaqueRgba)}, DownRay()), 1.0f);
+}
+
+TEST_F(TransmittanceTest, HalfCoveredCard) {
+  EXPECT_NEAR(Transmittance({QuadAtZ(5.0f, kHalfAlpha)}, DownRay()), kHalf,
+              1e-6f);
+}
+
+TEST_F(TransmittanceTest, CloselySpacedOpaqueSurfaceBlocks) {
+  EXPECT_EQ(
+      Transmittance({QuadAtZ(5.0f, kCutOut), QuadAtZ(4.9995f, kOpaqueRgba)},
+                    DownRay()),
+      0.0f);
+}
+
+TEST_F(TransmittanceTest, TwoCardsMultiply) {
+  EXPECT_NEAR(
+      Transmittance({QuadAtZ(3.0f, kHalfAlpha), QuadAtZ(6.0f, kHalfAlpha)},
+                    DownRay()),
+      kHalf * kHalf, 1e-6f);
+}
+
+TEST_F(TransmittanceTest, CutOutCardPassesEverything) {
+  EXPECT_EQ(Transmittance({QuadAtZ(5.0f, kCutOut)}, DownRay()), 1.0f);
+}
+
+TEST_F(TransmittanceTest, OpaqueCardsBlock) {
+  EXPECT_EQ(Transmittance({QuadAtZ(5.0f, kOpaqueRgba)}, DownRay()), 0.0f);
+  EXPECT_EQ(Transmittance({QuadAtZ(5.0f, kRgb)}, DownRay()), 0.0f);
+  // An opaque card behind translucent ones still blocks.
+  EXPECT_EQ(Transmittance({QuadAtZ(7.0f, kHalfAlpha), QuadAtZ(6.0f, kCutOut),
+                           QuadAtZ(2.0f, kOpaqueRgba)},
+                          DownRay()),
+            0.0f);
+}
+
+TEST_F(TransmittanceTest, MaterialLessOccluderBehindCutOutBlocks) {
+  EXPECT_EQ(
+      Transmittance({QuadAtZ(7.0f, kCutOut), HullBox(Eigen::Vector3f(-1, -1, 2),
+                                                     Eigen::Vector3f(1, 1, 4))},
+                    DownRay()),
+      0.0f);
+}
+
+TEST_F(TransmittanceTest, IgnoresSurfacesBeyondTfar) {
+  Ray ray = DownRay();
+  ray.tfar = 4.0f;  // Ends at Z = 6.
+  EXPECT_EQ(Transmittance({QuadAtZ(5.0f, kOpaqueRgba)}, ray), 1.0f);
+  EXPECT_NEAR(Transmittance(
+                  {QuadAtZ(8.0f, kHalfAlpha), QuadAtZ(5.0f, kOpaqueRgba)}, ray),
+              kHalf, 1e-6f);
+}
+
+TEST_F(TransmittanceTest, ManyCrossingsCountAsBlocked) {
+  std::vector<Geometry> cards;
+  for (int i = 0; i < 100; ++i) {
+    cards.push_back(QuadAtZ(0.5f + 0.09f * i, kCutOut));
+  }
+  EXPECT_EQ(Transmittance(cards, DownRay()), 0.0f);
+
+  // At the limit the walk still passes.
+  cards.resize(light_internal::kMaxTransmittanceCrossings);
+  EXPECT_EQ(Transmittance(cards, DownRay()), 1.0f);
+}
+
 }  // namespace
 }  // namespace sh_baker

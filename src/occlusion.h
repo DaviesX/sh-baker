@@ -7,6 +7,8 @@
 #include <optional>
 #include <vector>
 
+#include "material.h"
+
 namespace sh_baker {
 
 struct Ray {
@@ -27,26 +29,23 @@ struct Occlusion {
   float t;
 };
 
-struct Material;
+// A material-aware surface hit. Material-less occluders have alpha 1.
+struct OcclusionWithAlpha {
+  Occlusion hit;
+  float alpha;
+};
 
 // Returns occlusion information if the ray hits the scene.
 // "scene" must be a committed RTCScene.
 std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray);
 
-// The most surface crossings with alpha below 1 that FindTransmittance walks
-// before it counts the ray as blocked.
-inline constexpr int kMaxTransmittanceCrossings = 64;
+// Like the above, but it attaches the alpha transparency on to the hit.
+std::optional<OcclusionWithAlpha> FindOcclusion(
+    RTCScene scene, const std::vector<Material>& scene_materials,
+    const Ray& ray);
 
-// Returns the fraction of light that passes along `ray` between its tnear and
-// tfar: the product of (1 - alpha) over every surface it crosses, where alpha
-// is GetAlpha() at the hit, the coverage the path tracer's indirect rays read.
-// A material-less hit (a pure occluder), a hit with alpha 1, or more than
-// kMaxTransmittanceCrossings partially covered crossings give 0. The walk is
-// deterministic (no random numbers) and, for a ray that hits only opaque
-// geometry or nothing, makes exactly one intersection query and returns
-// exactly 0 or 1. `materials` is indexed by Geometry::material_id.
-float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
-                        const Ray& ray);
+// Continue along the same ray just beyond the hit, retaining its far bound.
+Ray ContinuePastOcclusion(const Ray& ray, const Occlusion& hit);
 
 }  // namespace sh_baker
 

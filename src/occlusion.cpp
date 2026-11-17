@@ -108,26 +108,27 @@ std::optional<Occlusion> FindOcclusion(RTCScene scene, const Ray& ray) {
   return std::nullopt;
 }
 
-float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
-                        const Ray& ray) {
-  // Step past each hit along the same ray (origin, direction and tfar kept),
-  // by the tracer's transmission offset.
-  constexpr float kStep = 0.005f;
-
-  Ray walk = ray;
-  float transmittance = 1.0f;
-  for (int crossings = 0;; ++crossings) {
-    std::optional<Occlusion> occ = FindOcclusion(scene, walk);
-    if (!occ.has_value()) return transmittance;
-    if (occ->material_id < 0) return 0.0f;
-    CHECK_LT(static_cast<size_t>(occ->material_id), materials.size());
-    float alpha = GetAlpha(materials[occ->material_id], occ->uv);
-    if (alpha >= 1.0f) return 0.0f;
-    if (crossings >= kMaxTransmittanceCrossings) return 0.0f;
-    transmittance *= 1.0f - alpha;
-    walk.tnear = occ->t + kStep;
-    if (walk.tnear >= walk.tfar) return transmittance;
+std::optional<OcclusionWithAlpha> FindOcclusion(
+    RTCScene scene, const std::vector<Material>& scene_materials,
+    const Ray& ray) {
+  auto hit = FindOcclusion(scene, ray);
+  if (!hit) {
+    return std::nullopt;
   }
+
+  if (hit->material_id < 0) {
+    return OcclusionWithAlpha{*hit, 1.0f};
+  }
+  CHECK_LT(static_cast<size_t>(hit->material_id), scene_materials.size());
+  return OcclusionWithAlpha{
+      *hit, GetAlpha(scene_materials[hit->material_id], hit->uv)};
+}
+
+Ray ContinuePastOcclusion(const Ray& ray, const Occlusion& hit) {
+  Ray continued = ray;
+  continued.tnear =
+      std::nextafter(hit.t, std::numeric_limits<float>::infinity());
+  return continued;
 }
 
 }  // namespace sh_baker

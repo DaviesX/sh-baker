@@ -14,10 +14,10 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
 
   Ray visibility_ray = ray;
   visibility_ray.tnear = 0.001f;
-  std::optional<Occlusion> occ =
-      FindOcclusion(config.rtc_scene, visibility_ray);
+  std::optional<OcclusionWithAlpha> surface =
+      FindOcclusion(config.rtc_scene, config.scene.materials, visibility_ray);
 
-  if (!occ.has_value()) {
+  if (!surface.has_value()) {
     // Sky is handled by NEE (EvaluateLights() and
     // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
     // counting.
@@ -31,27 +31,23 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // blocks transport — the ray stops here — but has no surface to shade, so it
   // contributes nothing. This both stops the light leak the shell exists to
   // prevent and avoids indexing materials[-1] below.
-  if (occ->material_id < 0) return Eigen::Vector3f::Zero();
-
-  // Hit surface
-  const Material& mat = config.scene.materials[occ->material_id];
-  float alpha = GetAlpha(mat, occ->uv);
+  if (surface->hit.material_id < 0) {
+    return Eigen::Vector3f::Zero();
+  }
 
   Eigen::Vector3f color = Eigen::Vector3f::Zero();
 
   // If alpha < 1.0, continue ray
-  if (alpha < 1.0f) {
+  if (surface->alpha < 1.0f) {
     // Transmission
-    Ray transmission_ray;
-    transmission_ray.tnear = 0.005f;
-    transmission_ray.tfar = 1e10f;
-    transmission_ray.origin = occ->position;
-    transmission_ray.direction = ray.direction;
-    Eigen::Vector3f transmission = Trace(config, transmission_ray, depth + 1,
-                                         rng, throughput * (1.0f - alpha));
+    Ray transmission_ray = ContinuePastOcclusion(visibility_ray, surface->hit);
+    transmission_ray.tfar = surface->hit.t + 1e10f;
+    Eigen::Vector3f transmission =
+        Trace(config, transmission_ray, depth + 1, rng,
+              throughput * (1.0f - surface->alpha));
 
-    color += (1.0f - alpha) * transmission;
-    if (alpha < 0.1f) {
+    color += (1.0f - surface->alpha) * transmission;
+    if (surface->alpha < 0.1f) {
       // If alpha is very small, we can skip the rest of the trace.
       return color;
     }
@@ -59,28 +55,32 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
 
   // Direct Lighting (NEE)
   // EvaluateLights returns L_e(x, x')
+  const Material& surface_mat =
+      config.scene.materials[surface->hit.material_id];
+
   Eigen::Vector3f L_direct = EvaluateLightSamples(
       config.light_tree, config.rtc_scene, config.scene.materials,
-      occ->position, occ->normal, -ray.direction, mat, occ->uv,
-      config.num_light_samples, rng);
+      surface->hit.position, surface->hit.normal, -ray.direction, surface_mat,
+      surface->hit.uv, config.num_light_samples, rng);
 
-  color += alpha * L_direct;
+  color += surface->alpha * L_direct;
 
   // Indirect Lighting (Recursive)
-  ReflectionSample sample =
-      SampleMaterial(mat, occ->uv, occ->normal, -ray.direction, rng);
+  ReflectionSample sample = SampleMaterial(
+      surface_mat, surface->hit.uv, surface->hit.normal, -ray.direction, rng);
   if (sample.pdf < 1e-3f) {
     // Internal reflection.
     return color;
   }
   Ray next_ray;
-  next_ray.origin = occ->position;
+  next_ray.origin = surface->hit.position;
   next_ray.tnear = 0.005f;
   next_ray.tfar = 1e10f;
   next_ray.direction = sample.direction;
 
   Eigen::Vector3f brdf =
-      EvalMaterial(mat, occ->uv, occ->normal, sample.direction, -ray.direction);
+      EvalMaterial(surface_mat, surface->hit.uv, surface->hit.normal,
+                   sample.direction, -ray.direction);
 
   // Accumulated path throughput after taking this bounce: the coefficient that
   // multiplies all radiance gathered deeper in the path. brdf * cos / pdf is
@@ -89,9 +89,9 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   // Clamp to 0: hemisphere sampling should keep this positive, but float error
   // or a perturbed shading normal can push it slightly negative, which would
   // flip the throughput sign and corrupt RR / radiance.
-  float cosine_term = std::max(0.0f, occ->normal.dot(sample.direction));
-  Eigen::Vector3f next_throughput =
-      throughput.cwiseProduct(brdf) * (alpha * cosine_term / sample.pdf);
+  float cosine_term = std::max(0.0f, surface->hit.normal.dot(sample.direction));
+  Eigen::Vector3f next_throughput = throughput.cwiseProduct(brdf) *
+                                    (surface->alpha * cosine_term / sample.pdf);
 
   if (depth > 2) {
     // Russian Roulette on the *accumulated throughput* (reflectance-based). The
@@ -125,7 +125,7 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
       L_indirect *= config.firefly_clamp / m;
     }
   }
-  color += alpha * L_indirect;
+  color += surface->alpha * L_indirect;
 
   return color;
 }

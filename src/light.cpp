@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <random>
 
 #include "material.h"
@@ -13,9 +14,6 @@
 // #define USE_UNIFORM_SAMPLING 1
 
 namespace sh_baker {
-
-namespace light_internal {
-
 namespace {
 
 // World-space surface normal at a barycentric point on a triangle. Uses the
@@ -43,6 +41,8 @@ Eigen::Vector3f InterpolatedWorldNormal(const Geometry& geo, uint32_t i0,
 }
 
 }  // namespace
+
+namespace light_internal {
 
 AreaSample SampleAreaLightTextured(const Light& light, std::mt19937& rng) {
   CHECK(light.emission_cdf);
@@ -199,6 +199,33 @@ AreaSample SampleAreaLight(const Light& light, std::mt19937& rng) {
   return SampleAreaLightUniform(light, rng);
 }
 
+float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
+                        const Ray& ray) {
+  Ray walk = ray;
+  float result = 1.0f;
+
+  for (int crossings = 0;; ++crossings) {
+    std::optional<OcclusionWithAlpha> occ =
+        FindOcclusion(scene, materials, walk);
+    if (!occ) {
+      return result;
+    }
+    if (occ->alpha >= 1.0f) {
+      return 0.0f;
+    }
+    if (crossings >= kMaxTransmittanceCrossings) {
+      return 0.0f;
+    }
+
+    result *= 1.0f - occ->alpha;
+
+    walk = ContinuePastOcclusion(walk, occ->hit);
+    if (walk.tnear >= walk.tfar) {
+      return result;
+    }
+  }
+}
+
 }  // namespace light_internal
 
 Eigen::Vector3f EvaluateLightSamples(
@@ -265,7 +292,8 @@ Eigen::Vector3f EvaluateLightSamples(
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
     // 1.0f exactly and its result is unchanged.
-    float visibility = FindTransmittance(rtc_scene, materials, visibility_ray);
+    float visibility =
+        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 
@@ -342,7 +370,8 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
     // 1.0f exactly and its result is unchanged.
-    float visibility = FindTransmittance(rtc_scene, materials, visibility_ray);
+    float visibility =
+        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 

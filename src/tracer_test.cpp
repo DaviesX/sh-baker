@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "light.h"
 #include "occlusion.h"
 #include "scene.h"
 

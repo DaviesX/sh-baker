@@ -213,6 +213,13 @@ Eigen::Vector3f AreaLightRadiance(const AreaSample& sample,
   return incoming.radiance.cwiseProduct(cos_brdf);
 }
 
+inline constexpr int kMaxTransmittanceCrossings = 64;
+
+// Product of (1 - alpha) along the ray. Opaque and material-less surfaces
+// block light, as do more than kMaxTransmittanceCrossings transparent hits.
+float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
+                        const Ray& ray);
+
 }  // namespace light_internal
 
 // Samples lights from the light tree and evaluates the radiance contribution.
