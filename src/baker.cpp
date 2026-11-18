@@ -104,6 +104,12 @@ class BakeObserver {
     return cancelled_.load(std::memory_order_acquire);
   }
 
+  void Done() {
+    if (config_.done_fn) {
+      config_.done_fn();
+    }
+  }
+
  private:
   const BakeConfig& config_;
   const size_t total_tasks_;
@@ -247,6 +253,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
 #if USE_TBB
       });
 #endif
+
+  bake_observer.Done();
 
   // Clean up
   ReleaseBVH(rtc_scene);

@@ -38,10 +38,14 @@ struct BakeConfig {
   // progress finish, and the bake returns with BakeResult::cancelled set.
   std::function<bool()> cancel_fn;
 
-  // Both callbacks must be short, and must not call back into sh-baker, run
+  // Called once on the calling thread after the bake finishes, including for
+  // empty or cancelled bakes, before BakeSHLightMap returns.
+  std::function<void()> done_fn;
+
+  // The progress and cancel callbacks must be short, and must not call back into sh-baker, run
   // TBB work, or block waiting on the bake: they run on bake worker threads,
   // and the progress callback runs under the bake's reporting lock. Either may
-  // be left empty.
+  // be left empty. done_fn may also be left empty.
 };
 
 struct BakeResult {

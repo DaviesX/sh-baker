@@ -149,13 +149,13 @@ int main(int argc, char* argv[]) {
   config.progress_fn = [](size_t done, size_t total) {
     std::cout << "\r[Baking] " << (done * 100) / total << "%" << std::flush;
   };
+  config.done_fn = [] { std::cout << std::endl; };
 
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";
   auto start_time = std::chrono::high_resolution_clock::now();
   sh_baker::BakeResult result =
       sh_baker::BakeSHLightMap(scene, surface_points, raster_config, config);
-  std::cout << std::endl;
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
   LOG(INFO) << "Bake complete in " << elapsed.count() << " seconds.";
