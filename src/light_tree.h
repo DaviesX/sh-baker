@@ -138,13 +138,13 @@ class LightTree {
   }
 
  private:
-  // Recursively builds the BVH.
-  // Returns (node_index, LightBounds).
   // The probability of choosing the directional set at (p, n), by the rule in
   // Sample(). 0 with no directional lights.
   float DirectionalShare(const Eigen::Vector3f& p,
                          const Eigen::Vector3f& n) const;
 
+  // Recursively builds the BVH.
+  // Returns (node_index, LightBounds).
   std::pair<int, light_tree_internal::LightBounds> BuildBVH(
       std::vector<std::pair<const Light*, light_tree_internal::LightBounds>>&
           bvh_lights,

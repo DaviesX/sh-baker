@@ -4,6 +4,8 @@
 
 #include <random>
 
+#include "light.h"
+
 namespace sh_baker {
 namespace {
 
@@ -635,6 +637,45 @@ TEST(LightTreeInternalTest, ImportanceZeroBeyondRange) {
   // Range is measured from the bounds, not their centre.
   EXPECT_GT(light_tree_internal::Importance(lb, near_end, n), 0.0f);
   EXPECT_EQ(light_tree_internal::Importance(lb, far_end, n), 0.0f);
+}
+
+// At the range boundary, a light that still lights the point (by the
+// incoming-radiance functions' own range test) must keep nonzero importance,
+// or it would be sampled with probability 0 and its light lost.
+TEST(LightTreeInternalTest, ImportanceKeepsLightsLitAtTheRangeBoundary) {
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+  std::uniform_real_distribution<float> range_dist(1.0f, 500.0f);
+  int lit = 0;
+  for (int i = 0; i < 200000; ++i) {
+    Light light;
+    light.type = (i % 2) ? Light::Type::Point : Light::Type::Spot;
+    light.position = 1000.0f * Eigen::Vector3f(u(rng), u(rng), u(rng));
+    light.range = range_dist(rng);
+    Eigen::Vector3f d(u(rng), u(rng), u(rng));
+    if (d.norm() < 1e-3f) continue;
+    d.normalize();
+    light.direction = d;  // The spot points at the shaded point.
+    light.intensity = 1.0f;
+    light.flux = Flux(light);
+    const Eigen::Vector3f p = light.position + light.range * d;
+    const Eigen::Vector3f n = -d;
+    Ray ray;
+    const Eigen::Vector3f radiance =
+        light.type == Light::Type::Point
+            ? light_internal::PointLightIncomingRadiance(light, p, n, &ray)
+                  .radiance
+            : light_internal::SpotLightIncomingRadiance(light, p, n, &ray)
+                  .radiance;
+    if (radiance.isZero()) continue;
+    ++lit;
+    EXPECT_GT(light_tree_internal::Importance(
+                  light_tree_internal::ComputeLightBounds(light), p, n),
+              0.0f)
+        << "range " << light.range << " distance "
+        << (light.position - p).norm();
+  }
+  EXPECT_GT(lit, 1000);
 }
 
 // One point light of range 64 and a sun.

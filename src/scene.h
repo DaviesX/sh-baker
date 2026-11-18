@@ -70,9 +70,10 @@ struct Light {
   ConeFalloff cone_falloff = ConeFalloff::kLinear;
 
   // Point and spot lights: a shaded point farther than `range` from the light
-  // gets nothing from it, at the baked point and at every bounce, and the light
-  // tree never picks the light there. 0 means no cutoff. Ignored for
-  // directional and area lights.
+  // gets nothing from it, at the baked point and at every bounce. The light
+  // tree culls nodes whose bounds are out of their largest range (see
+  // LightBounds::max_range), so a light alone in its node is not picked there.
+  // 0 means no cutoff. Ignored for directional and area lights.
   float range = 0.0f;
 
   // False: the light reaches every point with no visibility test (no shadow

@@ -121,9 +121,13 @@ LightBounds Union(const LightBounds& a, const LightBounds& b) {
 
 float Importance(const LightBounds& lb, const Eigen::Vector3f& p,
                  const Eigen::Vector3f& n) {
-  // Beyond the range of every light in the node.
-  if (lb.max_range > 0.0f &&
-      lb.bounds.squaredExteriorDistance(p) > lb.max_range * lb.max_range) {
+  // Beyond the range of every light in the node. The test is slightly
+  // conservative: OutOfRange() compares sqrt(|L|^2) with the range, and a
+  // squared comparison here could round the other way at the boundary, giving
+  // a light that still lights p zero probability (a biased estimate). A light
+  // within the slack is picked and then contributes nothing.
+  if (lb.max_range > 0.0f && std::sqrt(lb.bounds.squaredExteriorDistance(p)) >
+                                 lb.max_range * (1.0f + 1e-5f)) {
     return 0.0f;
   }
 
