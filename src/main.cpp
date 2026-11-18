@@ -146,12 +146,16 @@ int main(int argc, char* argv[]) {
   config.indirect_only = FLAGS_indirect_only;
   config.firefly_clamp = static_cast<float>(FLAGS_firefly_clamp);
   config.confidence_threshold = static_cast<float>(FLAGS_confidence_threshold);
+  config.progress_fn = [](size_t done, size_t total) {
+    std::cout << "\r[Baking] " << (done * 100) / total << "%" << std::flush;
+  };
 
   // Bake
   LOG(INFO) << "Starting Bake (" << FLAGS_samples << " samples)...";
   auto start_time = std::chrono::high_resolution_clock::now();
   sh_baker::BakeResult result =
       sh_baker::BakeSHLightMap(scene, surface_points, raster_config, config);
+  std::cout << std::endl;
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
   LOG(INFO) << "Bake complete in " << elapsed.count() << " seconds.";

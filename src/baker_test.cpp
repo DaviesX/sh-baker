@@ -2,6 +2,12 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <functional>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "loader_q3map2.h"
@@ -260,6 +266,297 @@ TEST(BakerTest, HullBehindCrackBlocksLight) {
   EXPECT_GT(open, 0.1f);
   EXPECT_GE(hulled, 0.0f);
   EXPECT_LT(hulled, 0.05f * open) << "open " << open << ", hulled " << hulled;
+}
+
+namespace {
+
+// A lit floor and `n` points on it, every `invalid_every`-th one invalid
+// (0: none).
+struct ProgressFixture {
+  Scene scene;
+  std::vector<SurfacePoint> points;
+};
+
+ProgressFixture FloorPoints(size_t n, size_t invalid_every = 0,
+                            bool lit = true) {
+  ProgressFixture f;
+  f.scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-2, 2, -2, 2, 0, /*faces_up=*/true, 0), &f.scene);
+  if (lit) f.scene.lights.push_back(SunFromAbove());
+  f.points.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    const float x = -1.5f + 3.0f * float(i % 64) / 63.0f;
+    const float y = -1.5f + 3.0f * float((i / 64) % 64) / 63.0f;
+    const bool invalid = invalid_every > 0 && i % invalid_every == 0;
+    f.points.push_back(PointAt(Eigen::Vector3f(x, y, 0),
+                               Eigen::Vector3f(0, 0, 1), invalid ? -1 : 0));
+  }
+  return f;
+}
+
+// Bakes `points` as an N x 1 buffer with `config`.
+BakeResult BakeWith(const Scene& scene, const std::vector<SurfacePoint>& points,
+                    const BakeConfig& config) {
+  RasterConfig raster_config;
+  raster_config.width = static_cast<int>(points.size());
+  raster_config.height = 1;
+  raster_config.supersample_scale = 1;
+  return BakeSHLightMap(scene, points, raster_config, config);
+}
+
+BakeConfig SmallBake() {
+  BakeConfig config;
+  config.samples = 16;
+  config.bounces = 1;
+  return config;
+}
+
+// Records progress reports and whether two calls ever overlapped.
+struct ProgressLog {
+  std::vector<std::pair<size_t, size_t>> reports;
+  std::atomic<int> inside{0};
+  std::atomic<bool> overlapped{false};
+
+  std::function<void(size_t, size_t)> Callback() {
+    return [this](size_t done, size_t total) {
+      if (inside.fetch_add(1) != 0) overlapped = true;
+      reports.emplace_back(done, total);
+      inside.fetch_sub(1);
+    };
+  }
+};
+
+void ExpectBitIdentical(const BakeResult& a, const BakeResult& b) {
+  ASSERT_EQ(a.sh_texture.pixels.size(), b.sh_texture.pixels.size());
+  for (size_t i = 0; i < a.sh_texture.pixels.size(); ++i) {
+    for (int k = 0; k < 9; ++k) {
+      for (int c = 0; c < 3; ++c) {
+        // Compare bit patterns, so -1 markers and any NaN compare too.
+        uint32_t x, y;
+        float fx = a.sh_texture.pixels[i].coeffs[k][c];
+        float fy = b.sh_texture.pixels[i].coeffs[k][c];
+        std::memcpy(&x, &fx, 4);
+        std::memcpy(&y, &fy, 4);
+        ASSERT_EQ(x, y) << "point " << i << " coeff " << k;
+      }
+    }
+  }
+  ASSERT_EQ(a.environment_visibility_texture.pixel_data.size(),
+            b.environment_visibility_texture.pixel_data.size());
+  EXPECT_EQ(std::memcmp(a.environment_visibility_texture.pixel_data.data(),
+                        b.environment_visibility_texture.pixel_data.data(),
+                        a.environment_visibility_texture.pixel_data.size() *
+                            sizeof(float)),
+            0);
+}
+
+}  // namespace
+
+TEST(BakerProgressTest, ReportsIncreaseAndNeverOverlap) {
+  ProgressFixture f = FloorPoints(1000);
+  ProgressLog log;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  BakeResult result = BakeWith(f.scene, f.points, config);
+
+  EXPECT_FALSE(log.overlapped);
+  EXPECT_FALSE(result.cancelled);
+  ASSERT_FALSE(log.reports.empty());
+  for (size_t i = 0; i < log.reports.size(); ++i) {
+    EXPECT_EQ(log.reports[i].second, 1000u);
+    EXPECT_LE(log.reports[i].first, 1000u);
+    if (i > 0) EXPECT_GT(log.reports[i].first, log.reports[i - 1].first);
+  }
+  EXPECT_EQ(log.reports.back(), std::make_pair(size_t{1000}, size_t{1000}));
+}
+
+TEST(BakerProgressTest, InvalidPointsCount) {
+  // Points 0, 3, 6 and 9 are invalid.
+  ProgressFixture f = FloorPoints(10, /*invalid_every=*/3);
+  ProgressLog log;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  BakeWith(f.scene, f.points, config);
+  ASSERT_FALSE(log.reports.empty());
+  EXPECT_EQ(log.reports.back(), std::make_pair(size_t{10}, size_t{10}));
+}
+
+TEST(BakerProgressTest, AtMostOneReportPerPercent) {
+  ProgressFixture f = FloorPoints(100000, 0, /*lit=*/false);
+  ProgressLog log;
+  BakeConfig config;
+  config.samples = 1;
+  config.bounces = 0;
+  config.progress_fn = log.Callback();
+  BakeWith(f.scene, f.points, config);
+  EXPECT_FALSE(log.overlapped);
+  EXPECT_LE(log.reports.size(), 101u);
+  ASSERT_FALSE(log.reports.empty());
+  EXPECT_EQ(log.reports.back(), std::make_pair(size_t{100000}, size_t{100000}));
+}
+
+TEST(BakerProgressTest, ZeroPointsReportNothing) {
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-1, 1, -1, 1, 0, /*faces_up=*/true, 0), &scene);
+  ProgressLog log;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  RasterConfig raster_config;
+  raster_config.width = 0;
+  raster_config.height = 1;
+  raster_config.supersample_scale = 1;
+  BakeResult result = BakeSHLightMap(scene, {}, raster_config, config);
+  EXPECT_TRUE(log.reports.empty());
+  EXPECT_TRUE(result.sh_texture.pixels.empty());
+  EXPECT_TRUE(result.environment_visibility_texture.pixel_data.empty());
+  EXPECT_FALSE(result.cancelled);
+}
+
+TEST(BakerProgressTest, LibraryWritesNothingToStdout) {
+  ProgressFixture f = FloorPoints(200);
+  testing::internal::CaptureStdout();
+  BakeWith(f.scene, f.points, SmallBake());
+  EXPECT_EQ(testing::internal::GetCapturedStdout(), "");
+}
+
+TEST(BakerProgressTest, ProgressCallbackDoesNotChangeResults) {
+  ProgressFixture f = FloorPoints(300, /*invalid_every=*/7);
+  const BakeResult plain = BakeWith(f.scene, f.points, SmallBake());
+  ProgressLog log;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  ExpectBitIdentical(plain, BakeWith(f.scene, f.points, config));
+}
+
+namespace {
+
+bool IsMarker(const BakeResult& r, size_t i) {
+  for (const Eigen::Vector3f& c : r.sh_texture.pixels[i].coeffs) {
+    if (c != Eigen::Vector3f::Constant(-1.0f)) return false;
+  }
+  return r.environment_visibility_texture.pixel_data[i] == -1.0f;
+}
+
+bool SameBits(const BakeResult& a, const BakeResult& b, size_t i) {
+  return std::memcmp(&a.sh_texture.pixels[i], &b.sh_texture.pixels[i],
+                     sizeof(SHCoeffs)) == 0 &&
+         std::memcmp(&a.environment_visibility_texture.pixel_data[i],
+                     &b.environment_visibility_texture.pixel_data[i],
+                     sizeof(float)) == 0;
+}
+
+}  // namespace
+
+TEST(BakerCancelTest, CancelledBeforeStart) {
+  ProgressFixture f = FloorPoints(500);
+  ProgressLog log;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  int calls = 0;
+  config.cancel_fn = [&calls] {
+    ++calls;
+    return true;
+  };
+  BakeResult result = BakeWith(f.scene, f.points, config);
+  EXPECT_TRUE(result.cancelled);
+  // The first point triggers cancellation, and no further polls occur.
+  EXPECT_EQ(calls, 1);
+  ASSERT_EQ(result.sh_texture.pixels.size(), 500u);
+  for (size_t i = 0; i < 500; ++i) EXPECT_TRUE(IsMarker(result, i)) << i;
+  for (const auto& report : log.reports) EXPECT_LT(report.first, report.second);
+}
+
+TEST(BakerCancelTest, CancelledMidwayKeepsExactResults) {
+  constexpr size_t kPoints = 4096;
+  ProgressFixture f = FloorPoints(kPoints, /*invalid_every=*/11);
+  const BakeResult full = BakeWith(f.scene, f.points, SmallBake());
+
+  std::atomic<bool> quarter_done{false};
+  BakeConfig config = SmallBake();
+  config.progress_fn = [&](size_t done, size_t total) {
+    if (done * 4 >= total) quarter_done = true;
+  };
+  config.cancel_fn = [&] { return quarter_done.load(); };
+  const BakeResult cut = BakeWith(f.scene, f.points, config);
+
+  EXPECT_TRUE(cut.cancelled);
+  size_t baked = 0;
+  for (size_t i = 0; i < kPoints; ++i) {
+    if (IsMarker(cut, i)) {
+      continue;
+    }
+    ++baked;
+    EXPECT_TRUE(SameBits(cut, full, i)) << "point " << i;
+  }
+  // Valid points are 10 in 11; at least a quarter of all points finished.
+  EXPECT_GT(baked, 0u);
+  EXPECT_LT(baked, kPoints * 10 / 11);
+  // Every point the full bake left as a marker is a marker here too.
+  for (size_t i = 0; i < kPoints; ++i) {
+    if (IsMarker(full, i)) EXPECT_TRUE(IsMarker(cut, i)) << i;
+  }
+}
+
+TEST(BakerCancelTest, NoPollAfterTrueAndPollsNeverOverlap) {
+  ProgressFixture f = FloorPoints(4096);
+  std::atomic<int> calls{0};
+  std::atomic<int> after_true{0};
+  std::atomic<int> inside{0};
+  std::atomic<bool> overlapped{false};
+  BakeConfig config = SmallBake();
+  config.cancel_fn = [&] {
+    if (inside.fetch_add(1) != 0) overlapped = true;
+    const int n = ++calls;
+    if (n > 100) ++after_true;
+    if (n == 100) {
+      // Hold the returning poll so other workers queue up behind it: a poll
+      // that began after this true would show up as call 101.
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    inside.fetch_sub(1);
+    return n >= 100;
+  };
+  BakeResult result = BakeWith(f.scene, f.points, config);
+  EXPECT_TRUE(result.cancelled);
+  EXPECT_EQ(calls.load(), 100);
+  EXPECT_EQ(after_true.load(), 0);
+  EXPECT_FALSE(overlapped);
+}
+
+TEST(BakerCancelTest, CancelCheckedBeforeValidity) {
+  // All invalid: cancellation is checked before the first validity check.
+  ProgressFixture f = FloorPoints(10, /*invalid_every=*/1);
+  ProgressLog log;
+  int calls = 0;
+  BakeConfig config = SmallBake();
+  config.progress_fn = log.Callback();
+  config.cancel_fn = [&] { return ++calls >= 1; };
+  BakeResult result = BakeWith(f.scene, f.points, config);
+  EXPECT_TRUE(result.cancelled);
+  EXPECT_EQ(calls, 1);
+  EXPECT_TRUE(log.reports.empty());
+}
+
+TEST(BakerCancelTest, NeverTrueCancelLeavesResultUncancelledAndIdentical) {
+  ProgressFixture f = FloorPoints(300, /*invalid_every=*/7);
+  const BakeResult plain = BakeWith(f.scene, f.points, SmallBake());
+
+  BakeConfig cancel_only = SmallBake();
+  cancel_only.cancel_fn = [] { return false; };
+  const BakeResult a = BakeWith(f.scene, f.points, cancel_only);
+  EXPECT_FALSE(a.cancelled);
+  ExpectBitIdentical(plain, a);
+
+  ProgressLog log;
+  BakeConfig both = SmallBake();
+  both.progress_fn = log.Callback();
+  both.cancel_fn = [] { return false; };
+  const BakeResult b = BakeWith(f.scene, f.points, both);
+  EXPECT_FALSE(b.cancelled);
+  ExpectBitIdentical(plain, b);
+  ASSERT_FALSE(log.reports.empty());
+  EXPECT_EQ(log.reports.back(), std::make_pair(size_t{300}, size_t{300}));
 }
 
 // A fence over a floor, lit straight down by the sun: its RGBA albedo has
