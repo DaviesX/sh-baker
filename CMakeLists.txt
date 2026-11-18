@@ -122,7 +122,7 @@ set(LIB_SOURCES
     src/sensor.cpp
     src/tracer.cpp
     src/light_tree.cpp
-    src/side_file.cpp
+    src/q3map2_extension.cpp
 )
 
 
@@ -142,7 +142,7 @@ set(LIB_HEADERS
     src/atlas.h
     src/sensor.h
     src/tracer.h
-    src/side_file.h
+    src/q3map2_extension.h
 )
 
 
@@ -191,7 +191,7 @@ add_executable(sh_baker_test
     src/sensor_test.cpp
     src/tracer_test.cpp
     src/light_tree_test.cpp
-    src/side_file_test.cpp
+    src/q3map2_extension_test.cpp
 )
 
 

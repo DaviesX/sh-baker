@@ -1,4 +1,4 @@
-#include "side_file.h"
+#include "q3map2_extension.h"
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -21,13 +21,13 @@ namespace {
 namespace fs = std::filesystem;
 
 // A fresh directory per test, removed afterwards.
-class SideFileTest : public ::testing::Test {
+class Q3Map2ExtensionTest : public ::testing::Test {
  protected:
   void SetUp() override {
     const ::testing::TestInfo* info =
         ::testing::UnitTest::GetInstance()->current_test_info();
     dir_ = fs::temp_directory_path() /
-           ("sh_side_file_" + std::string(info->name()) + "_" +
+           ("sh_q3map2_extension_" + std::string(info->name()) + "_" +
             std::to_string(getpid()));
     fs::remove_all(dir_);
     fs::create_directories(dir_);
@@ -37,7 +37,7 @@ class SideFileTest : public ::testing::Test {
   fs::path dir_;
 };
 
-using SideFileDeathTest = SideFileTest;
+using Q3Map2ExtensionDeathTest = Q3Map2ExtensionTest;
 
 // Collects the ERROR messages glog emits while it is registered.
 class ErrorCapture : public google::LogSink {
@@ -102,8 +102,8 @@ uint32_t Bits(float v) {
 }
 
 // A valid page whose values vary by luxel, coefficient and channel.
-SHSidePage MakePage(int width, int height, float seed) {
-  SHSidePage page;
+SHQ3Map2ExtensionPage MakePage(int width, int height, float seed) {
+  SHQ3Map2ExtensionPage page;
   page.width = width;
   page.height = height;
   const int n = width * height;
@@ -131,9 +131,9 @@ SHHullMesh TwoHullMesh() {
 }
 
 // The file of the "Golden bytes" scenario.
-SHSideFile GoldenFile() {
-  SHSideFile file;
-  SHSidePage page;
+SHQ3Map2Extension GoldenFile() {
+  SHQ3Map2Extension file;
+  SHQ3Map2ExtensionPage page;
   page.width = 1;
   page.height = 1;
   page.sh.resize(1);
@@ -155,11 +155,12 @@ constexpr size_t kGoldenVisibility = 86;
 constexpr size_t kGoldenVertices = 96;
 constexpr size_t kGoldenIndices = 132;
 
-void ExpectSameValues(const SHSideFile& written, const SHSideFile& read) {
+void ExpectSameValues(const SHQ3Map2Extension& written,
+                      const SHQ3Map2Extension& read) {
   ASSERT_EQ(read.pages.size(), written.pages.size());
   for (size_t p = 0; p < written.pages.size(); ++p) {
-    const SHSidePage& w = written.pages[p];
-    const SHSidePage& r = read.pages[p];
+    const SHQ3Map2ExtensionPage& w = written.pages[p];
+    const SHQ3Map2ExtensionPage& r = read.pages[p];
     ASSERT_EQ(r.width, w.width) << "page " << p;
     ASSERT_EQ(r.height, w.height) << "page " << p;
     ASSERT_EQ(r.sh.size(), w.sh.size());
@@ -191,8 +192,8 @@ void ExpectSameValues(const SHSideFile& written, const SHSideFile& read) {
 
 // --- Writer ---------------------------------------------------------------
 
-TEST_F(SideFileTest, GoldenBytes) {
-  // Built by hand from the layout in side_file.h.
+TEST_F(Q3Map2ExtensionTest, GoldenBytes) {
+  // Built by hand from the layout in q3map2_extension.h.
   const std::vector<uint8_t> expected = {
       // Header: magic, version 1, 1 page, 1 hull, 3 vertices, 3 indices.
       'S', 'H', 'S', 'F', 1, 0, 0, 0, 1, 0, 0, 0,  //
@@ -223,7 +224,7 @@ TEST_F(SideFileTest, GoldenBytes) {
   ASSERT_EQ(expected.size(), 144u);
 
   const fs::path path = dir_ / "golden.shsf";
-  ASSERT_TRUE(SaveSHSideFile(GoldenFile(), path));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(GoldenFile(), path));
   EXPECT_EQ(ReadBytes(path), expected);
 }
 
@@ -231,23 +232,23 @@ TEST_F(SideFileTest, GoldenBytes) {
 // them back.
 std::vector<float> RoundTripCoefficients(const fs::path& path,
                                          const std::vector<float>& values) {
-  SHSideFile file;
+  SHQ3Map2Extension file;
   for (float v : values) {
-    SHSidePage page = MakePage(1, 1, 0.5f);
+    SHQ3Map2ExtensionPage page = MakePage(1, 1, 0.5f);
     page.sh[0].coeffs[1] = Eigen::Vector3f(v, v, v);
     file.pages.push_back(page);
   }
-  EXPECT_TRUE(SaveSHSideFile(file, path));
-  std::optional<SHSideFile> read = LoadSHSideFile(path);
+  EXPECT_TRUE(SaveSHQ3Map2Extension(file, path));
+  std::optional<SHQ3Map2Extension> read = LoadSHQ3Map2Extension(path);
   std::vector<float> out;
   if (!read.has_value()) return out;
-  for (const SHSidePage& page : read->pages) {
+  for (const SHQ3Map2ExtensionPage& page : read->pages) {
     out.push_back(page.sh[0].coeffs[1].x());
   }
   return out;
 }
 
-TEST_F(SideFileTest, RepresentableValuesRoundTripExactly) {
+TEST_F(Q3Map2ExtensionTest, RepresentableValuesRoundTripExactly) {
   const float smallest_subnormal = std::ldexp(1.0f, -24);
   const std::vector<float> values = {0.0f,    -0.5f,    1.0f,
                                      2048.0f, 65504.0f, smallest_subnormal};
@@ -258,15 +259,15 @@ TEST_F(SideFileTest, RepresentableValuesRoundTripExactly) {
     EXPECT_EQ(Bits(read[i]), Bits(values[i])) << values[i];
   }
   // The smallest subnormal is the bit pattern 0x0001 on disk.
-  SHSideFile file = GoldenFile();
+  SHQ3Map2Extension file = GoldenFile();
   file.pages[0].sh[0].coeffs[1].x() = smallest_subnormal;
-  ASSERT_TRUE(SaveSHSideFile(file, dir_ / "subnormal.shsf"));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(file, dir_ / "subnormal.shsf"));
   const std::vector<uint8_t> bytes = ReadBytes(dir_ / "subnormal.shsf");
   EXPECT_EQ(bytes[kGoldenCoeffs + 6], 0x01);
   EXPECT_EQ(bytes[kGoldenCoeffs + 7], 0x00);
 }
 
-TEST_F(SideFileTest, RoundsToNearestEvenAndClamps) {
+TEST_F(Q3Map2ExtensionTest, RoundsToNearestEvenAndClamps) {
   const float tie = 1.0f + std::ldexp(1.0f, -11);
   const float above = 1.0f + 3.0f * std::ldexp(1.0f, -11);
   const std::vector<float> read =
@@ -278,158 +279,160 @@ TEST_F(SideFileTest, RoundsToNearestEvenAndClamps) {
   EXPECT_EQ(read[3], -65504.0f);
 }
 
-TEST_F(SideFileTest, WindingKept) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionTest, WindingKept) {
+  SHQ3Map2Extension file;
   file.hull_mesh.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
   file.hull_mesh.indices = {0, 1, 2};
   file.hull_mesh.hulls = {{0, 3}};
-  ASSERT_TRUE(SaveSHSideFile(file, dir_ / "w.shsf"));
-  std::optional<SHSideFile> read = LoadSHSideFile(dir_ / "w.shsf");
+  ASSERT_TRUE(SaveSHQ3Map2Extension(file, dir_ / "w.shsf"));
+  std::optional<SHQ3Map2Extension> read =
+      LoadSHQ3Map2Extension(dir_ / "w.shsf");
   ASSERT_TRUE(read.has_value());
   EXPECT_EQ(read->hull_mesh.indices, (std::vector<uint32_t>{0, 1, 2}));
 }
 
-TEST_F(SideFileDeathTest, WrongLuxelCount) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, WrongLuxelCount) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(1, 1, 0.1f));
   file.pages.push_back(MakePage(4, 2, 0.1f));
   file.pages[1].sh.resize(7);
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[1\\]\\.sh: 7 entries, expected 8");
 }
 
-TEST_F(SideFileDeathTest, WrongVisibilityCount) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, WrongVisibilityCount) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(4, 2, 0.1f));
   file.pages[0].visibility.resize(9);
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.visibility: 9 entries, expected 8");
 }
 
-TEST_F(SideFileDeathTest, ZeroWidth) {
-  SHSideFile file;
-  SHSidePage page;
+TEST_F(Q3Map2ExtensionDeathTest, ZeroWidth) {
+  SHQ3Map2Extension file;
+  SHQ3Map2ExtensionPage page;
   page.width = 0;
   page.height = 2;
   file.pages.push_back(page);
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"), "pages\\[0\\]\\.width: 0");
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
+               "pages\\[0\\]\\.width: 0");
 }
 
-TEST_F(SideFileDeathTest, NonFiniteCoefficient) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, NonFiniteCoefficient) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(2, 1, 0.1f));
   file.pages[0].sh[1].coeffs[2][1] = std::numeric_limits<float>::quiet_NaN();
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.sh\\[1\\]\\.coeffs\\[2\\]\\[1\\]: non-finite");
 }
 
-TEST_F(SideFileDeathTest, NonFiniteVisibility) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, NonFiniteVisibility) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(2, 1, 0.1f));
   file.pages[0].visibility[1] = std::numeric_limits<float>::infinity();
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.visibility\\[1\\]: non-finite");
 }
 
-TEST_F(SideFileDeathTest, NonFinitePosition) {
-  SHSideFile file = GoldenFile();
+TEST_F(Q3Map2ExtensionDeathTest, NonFinitePosition) {
+  SHQ3Map2Extension file = GoldenFile();
   file.hull_mesh.positions[1].y() = std::numeric_limits<float>::infinity();
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.positions\\[1\\]: non-finite position");
 }
 
-TEST_F(SideFileDeathTest, NotBakedMarker) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, NotBakedMarker) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(2, 2, 0.1f));
   file.pages[0].sh[3] = SHCoeffs(-1.0f);
   file.pages[0].visibility[3] = -1.0f;
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.visibility\\[3\\]: -1 outside \\[0, 1\\]");
 }
 
-TEST_F(SideFileDeathTest, VisibilityAboveOne) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, VisibilityAboveOne) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(1, 1, 0.1f));
   file.pages[0].visibility[0] = 1.5f;
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.visibility\\[0\\]: 1.5 outside \\[0, 1\\]");
 }
 
-TEST_F(SideFileDeathTest, NegativeL0) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, NegativeL0) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(1, 1, 0.1f));
   file.pages[0].sh[0].coeffs[0][2] = -0.25f;
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "pages\\[0\\]\\.sh\\[0\\]\\.coeffs\\[0\\]\\[2\\]: negative L0 "
                "component -0.25");
 }
 
-TEST_F(SideFileDeathTest, HullCountNotMultipleOfThree) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, HullCountNotMultipleOfThree) {
+  SHQ3Map2Extension file;
   file.hull_mesh.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
   file.hull_mesh.indices = {0, 1, 2, 0};
   file.hull_mesh.hulls = {{0, 4}};
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.hulls\\[0\\]\\.index_count: 4 is not a positive "
                "multiple of 3");
 }
 
-TEST_F(SideFileDeathTest, ZeroCountHull) {
-  SHSideFile file = GoldenFile();
+TEST_F(Q3Map2ExtensionDeathTest, ZeroCountHull) {
+  SHQ3Map2Extension file = GoldenFile();
   file.hull_mesh.hulls = {{0, 0}, {0, 3}};
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.hulls\\[0\\]\\.index_count: 0 is not a positive");
 }
 
-TEST_F(SideFileDeathTest, GapBetweenHulls) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, GapBetweenHulls) {
+  SHQ3Map2Extension file;
   file.hull_mesh.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
   file.hull_mesh.indices = {0, 1, 2, 0, 1, 2, 0, 1, 2};
   file.hull_mesh.hulls = {{0, 3}, {6, 3}};
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.hulls\\[1\\]\\.first_index: 6, expected 3");
 }
 
-TEST_F(SideFileDeathTest, OverlappingHulls) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, OverlappingHulls) {
+  SHQ3Map2Extension file;
   file.hull_mesh.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
   file.hull_mesh.indices = {0, 1, 2, 0, 1, 2};
   file.hull_mesh.hulls = {{0, 3}, {0, 3}};
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.hulls\\[1\\]\\.first_index: 0, expected 3");
 }
 
-TEST_F(SideFileDeathTest, RangesStopShort) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionDeathTest, RangesStopShort) {
+  SHQ3Map2Extension file;
   file.hull_mesh.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
   file.hull_mesh.indices = {0, 1, 2, 0, 1, 2};
   file.hull_mesh.hulls = {{0, 3}};
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.hulls: ranges cover 3 of 6 indices");
 }
 
-TEST_F(SideFileDeathTest, IndexOutOfRange) {
-  SHSideFile file = GoldenFile();
+TEST_F(Q3Map2ExtensionDeathTest, IndexOutOfRange) {
+  SHQ3Map2Extension file = GoldenFile();
   file.hull_mesh.indices[2] = 3;
-  EXPECT_DEATH(SaveSHSideFile(file, dir_ / "x"),
+  EXPECT_DEATH(SaveSHQ3Map2Extension(file, dir_ / "x"),
                "hull_mesh\\.indices\\[2\\]: index 3 not below vertex count 3");
 }
 
-TEST_F(SideFileTest, MissingDirectoryReturnsFalse) {
+TEST_F(Q3Map2ExtensionTest, MissingDirectoryReturnsFalse) {
   const fs::path path = dir_ / "no_such_dir" / "town.shsf";
   ErrorCapture errors;
-  EXPECT_FALSE(SaveSHSideFile(GoldenFile(), path));
+  EXPECT_FALSE(SaveSHQ3Map2Extension(GoldenFile(), path));
   EXPECT_TRUE(errors.Contains("town.shsf")) << errors.All();
   EXPECT_FALSE(fs::exists(dir_ / "no_such_dir"));
   EXPECT_TRUE(fs::is_empty(dir_));
 }
 
-TEST_F(SideFileTest, RenameFailureCleansUp) {
+TEST_F(Q3Map2ExtensionTest, RenameFailureCleansUp) {
   const fs::path target = dir_ / "town.shsf";
   fs::create_directory(target);
   WriteBytes(target / "keep.txt", {'k'});
   ErrorCapture errors;
-  EXPECT_FALSE(SaveSHSideFile(GoldenFile(), target));
+  EXPECT_FALSE(SaveSHQ3Map2Extension(GoldenFile(), target));
   EXPECT_TRUE(errors.Contains("rename")) << errors.All();
   EXPECT_TRUE(fs::is_directory(target));
   EXPECT_EQ(ReadBytes(target / "keep.txt"), std::vector<uint8_t>{'k'});
@@ -442,16 +445,16 @@ TEST_F(SideFileTest, RenameFailureCleansUp) {
   EXPECT_EQ(entries, 1);
 }
 
-TEST_F(SideFileTest, OverwriteReplacesBytes) {
+TEST_F(Q3Map2ExtensionTest, OverwriteReplacesBytes) {
   const fs::path path = dir_ / "town.shsf";
-  SHSideFile first;
+  SHQ3Map2Extension first;
   first.pages.push_back(MakePage(3, 3, 0.2f));
-  ASSERT_TRUE(SaveSHSideFile(first, path));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(first, path));
   const std::vector<uint8_t> first_bytes = ReadBytes(path);
 
-  ASSERT_TRUE(SaveSHSideFile(GoldenFile(), path));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(GoldenFile(), path));
   const fs::path golden_path = dir_ / "golden_copy.shsf";
-  ASSERT_TRUE(SaveSHSideFile(GoldenFile(), golden_path));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(GoldenFile(), golden_path));
   EXPECT_NE(ReadBytes(path), first_bytes);
   EXPECT_EQ(ReadBytes(path), ReadBytes(golden_path));
   EXPECT_FALSE(fs::exists(dir_ / "town.shsf.tmp"));
@@ -459,17 +462,17 @@ TEST_F(SideFileTest, OverwriteReplacesBytes) {
 
 // --- Reader ---------------------------------------------------------------
 
-TEST_F(SideFileTest, RoundTripKeepsOrderAndSizes) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionTest, RoundTripKeepsOrderAndSizes) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(4, 2, 0.3f));
   file.pages.push_back(MakePage(1, 1, 7.0f));
   file.pages.push_back(MakePage(3, 5, 1.25f));
   file.hull_mesh = TwoHullMesh();
   const fs::path path = dir_ / "town.shsf";
-  ASSERT_TRUE(SaveSHSideFile(file, path));
+  ASSERT_TRUE(SaveSHQ3Map2Extension(file, path));
   EXPECT_EQ(fs::file_size(path), 24u + (8 + 56 * 8) + (8 + 56 * 1) +
                                      (8 + 56 * 15) + 8 * 2 + 12 * 5 + 4 * 9);
-  std::optional<SHSideFile> read = LoadSHSideFile(path);
+  std::optional<SHQ3Map2Extension> read = LoadSHQ3Map2Extension(path);
   ASSERT_TRUE(read.has_value());
   ASSERT_EQ(read->pages.size(), 3u);
   EXPECT_EQ(read->pages[0].width, 4);
@@ -481,52 +484,53 @@ TEST_F(SideFileTest, RoundTripKeepsOrderAndSizes) {
   ExpectSameValues(file, *read);
 }
 
-TEST_F(SideFileTest, EmptyPartsAllowed) {
-  SHSideFile hulls_only;
+TEST_F(Q3Map2ExtensionTest, EmptyPartsAllowed) {
+  SHQ3Map2Extension hulls_only;
   hulls_only.hull_mesh = TwoHullMesh();
-  ASSERT_TRUE(SaveSHSideFile(hulls_only, dir_ / "a.shsf"));
-  std::optional<SHSideFile> a = LoadSHSideFile(dir_ / "a.shsf");
+  ASSERT_TRUE(SaveSHQ3Map2Extension(hulls_only, dir_ / "a.shsf"));
+  std::optional<SHQ3Map2Extension> a = LoadSHQ3Map2Extension(dir_ / "a.shsf");
   ASSERT_TRUE(a.has_value());
   ExpectSameValues(hulls_only, *a);
 
-  SHSideFile pages_only;
+  SHQ3Map2Extension pages_only;
   pages_only.pages.push_back(MakePage(2, 3, 0.4f));
-  ASSERT_TRUE(SaveSHSideFile(pages_only, dir_ / "b.shsf"));
-  std::optional<SHSideFile> b = LoadSHSideFile(dir_ / "b.shsf");
+  ASSERT_TRUE(SaveSHQ3Map2Extension(pages_only, dir_ / "b.shsf"));
+  std::optional<SHQ3Map2Extension> b = LoadSHQ3Map2Extension(dir_ / "b.shsf");
   ASSERT_TRUE(b.has_value());
   ExpectSameValues(pages_only, *b);
 
-  SHSideFile empty;
-  ASSERT_TRUE(SaveSHSideFile(empty, dir_ / "c.shsf"));
+  SHQ3Map2Extension empty;
+  ASSERT_TRUE(SaveSHQ3Map2Extension(empty, dir_ / "c.shsf"));
   EXPECT_EQ(fs::file_size(dir_ / "c.shsf"), 24u);
-  std::optional<SHSideFile> c = LoadSHSideFile(dir_ / "c.shsf");
+  std::optional<SHQ3Map2Extension> c = LoadSHQ3Map2Extension(dir_ / "c.shsf");
   ASSERT_TRUE(c.has_value());
   EXPECT_TRUE(c->pages.empty());
   EXPECT_TRUE(c->hull_mesh.positions.empty());
 }
 
-TEST_F(SideFileTest, IrradianceReadsBackAsZero) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionTest, IrradianceReadsBackAsZero) {
+  SHQ3Map2Extension file;
   file.pages.push_back(MakePage(2, 1, 0.5f));
   file.pages[0].sh[0].irradiance = Eigen::Vector3f(3, 4, 5);
   file.pages[0].sh[1].irradiance = Eigen::Vector3f(1, 1, 1);
-  ASSERT_TRUE(SaveSHSideFile(file, dir_ / "i.shsf"));
-  std::optional<SHSideFile> read = LoadSHSideFile(dir_ / "i.shsf");
+  ASSERT_TRUE(SaveSHQ3Map2Extension(file, dir_ / "i.shsf"));
+  std::optional<SHQ3Map2Extension> read =
+      LoadSHQ3Map2Extension(dir_ / "i.shsf");
   ASSERT_TRUE(read.has_value());
   for (const SHCoeffs& sh : read->pages[0].sh) {
     EXPECT_EQ(sh.irradiance, Eigen::Vector3f::Zero());
   }
 }
 
-class SideFileRejectTest : public SideFileTest {
+class Q3Map2ExtensionRejectTest : public Q3Map2ExtensionTest {
  protected:
   // Writes `file`, applies `mutate` to its bytes, and expects the read to
   // fail with a logged message containing `reason`.
-  void ExpectRejected(const SHSideFile& file,
+  void ExpectRejected(const SHQ3Map2Extension& file,
                       void (*mutate)(std::vector<uint8_t>*),
                       const std::string& reason) {
     const fs::path path = dir_ / "bad.shsf";
-    ASSERT_TRUE(SaveSHSideFile(file, path));
+    ASSERT_TRUE(SaveSHQ3Map2Extension(file, path));
     std::vector<uint8_t> bytes = ReadBytes(path);
     mutate(&bytes);
     WriteBytes(path, bytes);
@@ -538,57 +542,57 @@ class SideFileRejectTest : public SideFileTest {
     const fs::path path = dir_ / "bad.shsf";
     WriteBytes(path, bytes);
     ErrorCapture errors;
-    EXPECT_FALSE(LoadSHSideFile(path).has_value());
+    EXPECT_FALSE(LoadSHQ3Map2Extension(path).has_value());
     EXPECT_TRUE(errors.Contains(reason))
         << "expected \"" << reason << "\" in:\n"
         << errors.All();
   }
 };
 
-TEST_F(SideFileRejectTest, MissingFile) {
+TEST_F(Q3Map2ExtensionRejectTest, MissingFile) {
   ErrorCapture errors;
-  EXPECT_FALSE(LoadSHSideFile(dir_ / "nothing.shsf").has_value());
+  EXPECT_FALSE(LoadSHQ3Map2Extension(dir_ / "nothing.shsf").has_value());
   EXPECT_TRUE(errors.Contains("cannot open")) << errors.All();
 }
 
-TEST_F(SideFileRejectTest, BadMagic) {
+TEST_F(Q3Map2ExtensionRejectTest, BadMagic) {
   ExpectRejected(
       GoldenFile(), [](std::vector<uint8_t>* b) { (*b)[0] = 'X'; },
       "bad magic");
 }
 
-TEST_F(SideFileRejectTest, UnknownVersion) {
+TEST_F(Q3Map2ExtensionRejectTest, UnknownVersion) {
   ExpectRejected(
       GoldenFile(), [](std::vector<uint8_t>* b) { PutU32At(b, 4, 2); },
       "unknown version 2");
 }
 
-TEST_F(SideFileRejectTest, TruncatedFile) {
+TEST_F(Q3Map2ExtensionRejectTest, TruncatedFile) {
   ExpectRejected(
       GoldenFile(), [](std::vector<uint8_t>* b) { b->pop_back(); },
       "shorter than expected");
 }
 
-TEST_F(SideFileRejectTest, TrailingBytes) {
+TEST_F(Q3Map2ExtensionRejectTest, TrailingBytes) {
   ExpectRejected(
       GoldenFile(), [](std::vector<uint8_t>* b) { b->push_back(0); },
       "longer than expected");
 }
 
-TEST_F(SideFileRejectTest, ZeroPageWidth) {
+TEST_F(Q3Map2ExtensionRejectTest, ZeroPageWidth) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) { PutU32At(b, kGoldenWidth, 0); },
       "page 0 has size 0 x 1");
 }
 
-TEST_F(SideFileRejectTest, HugeCountsInSmallFile) {
+TEST_F(Q3Map2ExtensionRejectTest, HugeCountsInSmallFile) {
   std::vector<uint8_t> bytes = {'S', 'H', 'S', 'F', 1, 0, 0, 0};
   bytes.resize(24, 0xFF);
   ExpectBytesRejected(bytes, "shorter than expected");
 }
 
-TEST_F(SideFileRejectTest, HugePageInSmallFile) {
+TEST_F(Q3Map2ExtensionRejectTest, HugePageInSmallFile) {
   std::vector<uint8_t> bytes(32, 0);
   std::memcpy(bytes.data(), "SHSF", 4);
   PutU32At(&bytes, 4, 1);
@@ -603,15 +607,15 @@ TEST_F(SideFileRejectTest, HugePageInSmallFile) {
   ExpectBytesRejected(bytes, "does not fit in 32 bytes");
 }
 
-TEST_F(SideFileRejectTest, BadHullIndex) {
+TEST_F(Q3Map2ExtensionRejectTest, BadHullIndex) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) { PutU32At(b, kGoldenIndices + 8, 3); },
       "hull index 3 at 2 not below vertex count 3");
 }
 
-TEST_F(SideFileRejectTest, HullRangeGap) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionRejectTest, HullRangeGap) {
+  SHQ3Map2Extension file;
   file.hull_mesh = TwoHullMesh();
   // Hull 1's range is the second (first, count) pair after the 24-byte
   // header; move its first index from 6 to 7.
@@ -620,7 +624,7 @@ TEST_F(SideFileRejectTest, HullRangeGap) {
       "hull 1 starts at index 7, expected 6");
 }
 
-TEST_F(SideFileRejectTest, InfinityInCoefficient) {
+TEST_F(Q3Map2ExtensionRejectTest, InfinityInCoefficient) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) {
@@ -629,21 +633,21 @@ TEST_F(SideFileRejectTest, InfinityInCoefficient) {
       "non-finite binary16 0x7c00 at page 0 luxel 0 coefficient 3 channel 1");
 }
 
-TEST_F(SideFileRejectTest, NanInCoefficient) {
+TEST_F(Q3Map2ExtensionRejectTest, NanInCoefficient) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) { PutU16At(b, kGoldenCoeffs + 6, 0x7E00); },
       "non-finite binary16 0x7e00 at page 0 luxel 0 coefficient 1 channel 0");
 }
 
-TEST_F(SideFileRejectTest, VisibilityAboveOne) {
+TEST_F(Q3Map2ExtensionRejectTest, VisibilityAboveOne) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) { PutU16At(b, kGoldenVisibility, 0x3E00); },
       "visibility 0x3e00 (1.500000) outside [0, 1] at page 0 luxel 0");
 }
 
-TEST_F(SideFileRejectTest, NegativeL0) {
+TEST_F(Q3Map2ExtensionRejectTest, NegativeL0) {
   ExpectRejected(
       GoldenFile(),
       // L0 green, 0.5, becomes -0.5.
@@ -652,7 +656,7 @@ TEST_F(SideFileRejectTest, NegativeL0) {
       "channel 1");
 }
 
-TEST_F(SideFileRejectTest, NanHullPosition) {
+TEST_F(Q3Map2ExtensionRejectTest, NanHullPosition) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) {
@@ -661,35 +665,35 @@ TEST_F(SideFileRejectTest, NanHullPosition) {
       "non-finite hull position (1.000000, nan, 0.000000) at vertex 1");
 }
 
-TEST_F(SideFileRejectTest, NegativeVisibility) {
+TEST_F(Q3Map2ExtensionRejectTest, NegativeVisibility) {
   ExpectRejected(
       GoldenFile(),
       [](std::vector<uint8_t>* b) { PutU16At(b, kGoldenVisibility, 0xBC00); },
       "visibility 0xbc00 (-1.000000) outside [0, 1] at page 0 luxel 0");
 }
 
-TEST_F(SideFileRejectTest, ZeroCountHull) {
+TEST_F(Q3Map2ExtensionRejectTest, ZeroCountHull) {
   // Hull 0 (first 0, count 6) becomes count 0, so hull 1 starts too late; the
   // count is checked first.
-  SHSideFile file;
+  SHQ3Map2Extension file;
   file.hull_mesh = TwoHullMesh();
   ExpectRejected(
       file, [](std::vector<uint8_t>* b) { PutU32At(b, 24 + 4, 0); },
       "hull 0 has index count 0, not a positive multiple of 3");
 }
 
-TEST_F(SideFileRejectTest, HullCountNotMultipleOfThree) {
-  SHSideFile file;
+TEST_F(Q3Map2ExtensionRejectTest, HullCountNotMultipleOfThree) {
+  SHQ3Map2Extension file;
   file.hull_mesh = TwoHullMesh();
   ExpectRejected(
       file, [](std::vector<uint8_t>* b) { PutU32At(b, 24 + 12, 2); },
       "hull 1 has index count 2, not a positive multiple of 3");
 }
 
-TEST_F(SideFileRejectTest, RangesStopShort) {
+TEST_F(Q3Map2ExtensionRejectTest, RangesStopShort) {
   // Two hulls over 9 indices; drop hull 1 from the header and its range from
   // the file, leaving one 6-index hull over 9 indices.
-  SHSideFile file;
+  SHQ3Map2Extension file;
   file.hull_mesh = TwoHullMesh();
   ExpectRejected(
       file,
@@ -702,8 +706,8 @@ TEST_F(SideFileRejectTest, RangesStopShort) {
 
 // --- L0 dump --------------------------------------------------------------
 
-SHSidePage L0Page() {
-  SHSidePage page = MakePage(4, 2, 0.0f);
+SHQ3Map2ExtensionPage L0Page() {
+  SHQ3Map2ExtensionPage page = MakePage(4, 2, 0.0f);
   for (int y = 0; y < 2; ++y) {
     for (int x = 0; x < 4; ++x) {
       page.sh[y * 4 + x].coeffs[0] = Eigen::Vector3f(x, y, 1);
@@ -712,9 +716,9 @@ SHSidePage L0Page() {
   return page;
 }
 
-TEST_F(SideFileTest, DumpMatchesL0) {
+TEST_F(Q3Map2ExtensionTest, DumpMatchesL0) {
   const fs::path path = dir_ / "l0_page0.hdr";
-  ASSERT_TRUE(SaveSHSidePageL0Hdr(L0Page(), path));
+  ASSERT_TRUE(SaveSHQ3Map2ExtensionPageL0Hdr(L0Page(), path));
   int w = 0, h = 0, c = 0;
   float* data = stbi_loadf(path.c_str(), &w, &h, &c, 3);
   ASSERT_NE(data, nullptr);
@@ -733,11 +737,11 @@ TEST_F(SideFileTest, DumpMatchesL0) {
   stbi_image_free(data);
 }
 
-TEST_F(SideFileTest, DumpWritesNegativeL0AsZero) {
-  SHSidePage page = MakePage(1, 1, 0.0f);
+TEST_F(Q3Map2ExtensionTest, DumpWritesNegativeL0AsZero) {
+  SHQ3Map2ExtensionPage page = MakePage(1, 1, 0.0f);
   page.sh[0].coeffs[0] = Eigen::Vector3f(-2.0f, 0.5f, 0.25f);
   const fs::path path = dir_ / "neg.hdr";
-  ASSERT_TRUE(SaveSHSidePageL0Hdr(page, path));
+  ASSERT_TRUE(SaveSHQ3Map2ExtensionPageL0Hdr(page, path));
   int w = 0, h = 0, c = 0;
   float* data = stbi_loadf(path.c_str(), &w, &h, &c, 3);
   ASSERT_NE(data, nullptr);
@@ -747,20 +751,21 @@ TEST_F(SideFileTest, DumpWritesNegativeL0AsZero) {
   stbi_image_free(data);
 }
 
-TEST_F(SideFileTest, DumpRefusesRend2Names) {
+TEST_F(Q3Map2ExtensionTest, DumpRefusesRend2Names) {
   for (const char* name : {"LM_0000.hdr", "lm_x.hdr", "Lm_1.hdr"}) {
     ErrorCapture errors;
-    EXPECT_FALSE(SaveSHSidePageL0Hdr(L0Page(), dir_ / name)) << name;
+    EXPECT_FALSE(SaveSHQ3Map2ExtensionPageL0Hdr(L0Page(), dir_ / name)) << name;
     EXPECT_FALSE(fs::exists(dir_ / name)) << name;
     EXPECT_TRUE(errors.Contains("lm_")) << errors.All();
   }
-  EXPECT_TRUE(SaveSHSidePageL0Hdr(L0Page(), dir_ / "l0_lm_.hdr"));
+  EXPECT_TRUE(SaveSHQ3Map2ExtensionPageL0Hdr(L0Page(), dir_ / "l0_lm_.hdr"));
   EXPECT_TRUE(fs::exists(dir_ / "l0_lm_.hdr"));
 }
 
-TEST_F(SideFileTest, DumpMissingDirectoryReturnsFalse) {
+TEST_F(Q3Map2ExtensionTest, DumpMissingDirectoryReturnsFalse) {
   ErrorCapture errors;
-  EXPECT_FALSE(SaveSHSidePageL0Hdr(L0Page(), dir_ / "missing" / "l0.hdr"));
+  EXPECT_FALSE(
+      SaveSHQ3Map2ExtensionPageL0Hdr(L0Page(), dir_ / "missing" / "l0.hdr"));
   EXPECT_TRUE(errors.Contains("cannot write")) << errors.All();
 }
 

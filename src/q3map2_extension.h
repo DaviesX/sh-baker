@@ -1,5 +1,5 @@
-#ifndef SH_BAKER_SRC_SIDE_FILE_H_
-#define SH_BAKER_SRC_SIDE_FILE_H_
+#ifndef SH_BAKER_SRC_Q3MAP2_EXTENSION_H_
+#define SH_BAKER_SRC_Q3MAP2_EXTENSION_H_
 
 #include <Eigen/Dense>
 #include <cstdint>
@@ -11,8 +11,9 @@
 
 namespace sh_baker {
 
-// The SH side file: a level's baked SH lightmap pages and its solid hull mesh,
-// written by q3map2 through this header and read by renderer_sh.
+// The q3map2 extension, stored as the SH side file: a level's baked SH
+// lightmap pages and its solid hull mesh, written by q3map2 through this
+// header and read by renderer_sh.
 //
 // Byte layout (version 1). Little-endian, no padding beyond what is listed,
 // and the file ends exactly after the hull indices:
@@ -83,15 +84,15 @@ struct SHHullMesh {
 };
 
 // One page of width * height luxels, x fastest, then y.
-struct SHSidePage {
+struct SHQ3Map2ExtensionPage {
   int width = 0, height = 0;
   // width * height. `irradiance` is not stored, and reads back as zero.
   std::vector<SHCoeffs> sh;
   std::vector<float> visibility;  // width * height, each in [0, 1]
 };
 
-struct SHSideFile {
-  std::vector<SHSidePage> pages;
+struct SHQ3Map2Extension {
+  std::vector<SHQ3Map2ExtensionPage> pages;
   SHHullMesh hull_mesh;
 };
 
@@ -111,7 +112,8 @@ struct SHSideFile {
 // If that fails, returns false with a logged reason, removes the temporary
 // file and leaves any file at `path` unchanged. Two writers to the same path
 // at once are not supported.
-bool SaveSHSideFile(const SHSideFile& file, const std::filesystem::path& path);
+bool SaveSHQ3Map2Extension(const SHQ3Map2Extension& file,
+                           const std::filesystem::path& path);
 
 // Reads a side file. Returns std::nullopt, with a LOG(ERROR) reason, for a
 // file that cannot be opened, or with a wrong magic, an unknown version, a
@@ -119,17 +121,18 @@ bool SaveSHSideFile(const SHSideFile& file, const std::filesystem::path& path);
 // height of 0 or above 2^31 - 1, or values the writer would refuse. Sizes are
 // checked against the file before any page or hull storage is allocated.
 // Never aborts on file contents.
-std::optional<SHSideFile> LoadSHSideFile(const std::filesystem::path& path);
+std::optional<SHQ3Map2Extension> LoadSHQ3Map2Extension(
+    const std::filesystem::path& path);
 
 // Writes `page`'s L0 RGB as a Radiance RGBE .hdr image for inspection: row 0
 // is page row 0, values are unscaled, and negative components are written as
 // 0. Refuses a file name beginning with "lm_" in any letter case (rend2
 // auto-loads maps/<name>/lm_*.hdr), returning false and writing nothing.
 // Returns false with a logged reason on an I/O failure. The page's sizes and
-// counts are CHECKed as SaveSHSideFile does.
-bool SaveSHSidePageL0Hdr(const SHSidePage& page,
-                         const std::filesystem::path& path);
+// counts are CHECKed as SaveSHQ3Map2Extension does.
+bool SaveSHQ3Map2ExtensionPageL0Hdr(const SHQ3Map2ExtensionPage& page,
+                                    const std::filesystem::path& path);
 
 }  // namespace sh_baker
 
-#endif  // SH_BAKER_SRC_SIDE_FILE_H_
+#endif  // SH_BAKER_SRC_Q3MAP2_EXTENSION_H_

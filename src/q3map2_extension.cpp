@@ -1,4 +1,4 @@
-#include "side_file.h"
+#include "q3map2_extension.h"
 
 #include <glog/logging.h>
 #include <stb_image_write.h>
@@ -64,7 +64,7 @@ uint32_t CheckedU32(size_t count, const char* field) {
 
 // --- Writer checks --------------------------------------------------------
 
-void CheckPageShape(const SHSidePage& page, size_t p) {
+void CheckPageShape(const SHQ3Map2ExtensionPage& page, size_t p) {
   CHECK_GE(page.width, 1) << "pages[" << p << "].width: " << page.width;
   CHECK_GE(page.height, 1) << "pages[" << p << "].height: " << page.height;
   const size_t luxels =
@@ -78,7 +78,7 @@ void CheckPageShape(const SHSidePage& page, size_t p) {
       << page.height << ")";
 }
 
-void CheckPageValues(const SHSidePage& page, size_t p) {
+void CheckPageValues(const SHQ3Map2ExtensionPage& page, size_t p) {
   for (size_t j = 0; j < page.sh.size(); ++j) {
     // Visibility first, so the bake's not-baked marker is reported as such.
     const float vis = page.visibility[j];
@@ -134,10 +134,10 @@ void CheckHullMesh(const SHHullMesh& mesh) {
   }
 }
 
-std::vector<uint8_t> Serialize(const SHSideFile& file) {
+std::vector<uint8_t> Serialize(const SHQ3Map2Extension& file) {
   const SHHullMesh& mesh = file.hull_mesh;
   uint64_t total = kHeaderBytes;
-  for (const SHSidePage& page : file.pages) {
+  for (const SHQ3Map2ExtensionPage& page : file.pages) {
     total += kPageHeaderBytes + kBytesPerLuxel * page.sh.size();
   }
   total += 8 * mesh.hulls.size() + 12 * mesh.positions.size() +
@@ -151,7 +151,7 @@ std::vector<uint8_t> Serialize(const SHSideFile& file) {
   PutU32(static_cast<uint32_t>(mesh.hulls.size()), &out);
   PutU32(static_cast<uint32_t>(mesh.positions.size()), &out);
   PutU32(static_cast<uint32_t>(mesh.indices.size()), &out);
-  for (const SHSidePage& page : file.pages) {
+  for (const SHQ3Map2ExtensionPage& page : file.pages) {
     PutU32(static_cast<uint32_t>(page.width), &out);
     PutU32(static_cast<uint32_t>(page.height), &out);
     for (int k = 0; k < 9; ++k) {
@@ -215,7 +215,7 @@ bool ReadWholeFile(const std::filesystem::path& path,
                    std::vector<uint8_t>* bytes) {
   std::FILE* f = std::fopen(path.c_str(), "rb");
   if (f == nullptr) {
-    LOG(ERROR) << "LoadSHSideFile: cannot open " << path << ": "
+    LOG(ERROR) << "LoadSHQ3Map2Extension: cannot open " << path << ": "
                << std::strerror(errno);
     return false;
   }
@@ -229,7 +229,7 @@ bool ReadWholeFile(const std::filesystem::path& path,
   }
   std::fclose(f);
   if (!ok) {
-    LOG(ERROR) << "LoadSHSideFile: cannot read " << path << ": "
+    LOG(ERROR) << "LoadSHQ3Map2Extension: cannot read " << path << ": "
                << std::strerror(errno);
   }
   return ok;
@@ -237,7 +237,8 @@ bool ReadWholeFile(const std::filesystem::path& path,
 
 }  // namespace
 
-bool SaveSHSideFile(const SHSideFile& file, const std::filesystem::path& path) {
+bool SaveSHQ3Map2Extension(const SHQ3Map2Extension& file,
+                           const std::filesystem::path& path) {
   CheckedU32(file.pages.size(), "pages");
   for (size_t p = 0; p < file.pages.size(); ++p) {
     CheckPageShape(file.pages[p], p);
@@ -251,36 +252,37 @@ bool SaveSHSideFile(const SHSideFile& file, const std::filesystem::path& path) {
 
   std::FILE* f = std::fopen(tmp.c_str(), "wb");
   if (f == nullptr) {
-    LOG(ERROR) << "SaveSHSideFile: cannot create " << tmp << " for " << path
-               << ": " << std::strerror(errno);
+    LOG(ERROR) << "SaveSHQ3Map2Extension: cannot create " << tmp << " for "
+               << path << ": " << std::strerror(errno);
     return false;
   }
   const bool written =
       std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
   const bool closed = std::fclose(f) == 0;
   if (!written || !closed) {
-    LOG(ERROR) << "SaveSHSideFile: cannot write " << tmp << " for " << path
-               << ": " << std::strerror(errno);
+    LOG(ERROR) << "SaveSHQ3Map2Extension: cannot write " << tmp << " for "
+               << path << ": " << std::strerror(errno);
     RemoveQuietly(tmp);
     return false;
   }
   std::error_code ec;
   std::filesystem::rename(tmp, path, ec);
   if (ec) {
-    LOG(ERROR) << "SaveSHSideFile: cannot rename " << tmp << " to " << path
-               << ": " << ec.message();
+    LOG(ERROR) << "SaveSHQ3Map2Extension: cannot rename " << tmp << " to "
+               << path << ": " << ec.message();
     RemoveQuietly(tmp);
     return false;
   }
   return true;
 }
 
-std::optional<SHSideFile> LoadSHSideFile(const std::filesystem::path& path) {
+std::optional<SHQ3Map2Extension> LoadSHQ3Map2Extension(
+    const std::filesystem::path& path) {
   std::vector<uint8_t> bytes;
   if (!ReadWholeFile(path, &bytes)) return std::nullopt;
   const uint64_t size = bytes.size();
   auto fail = [&path](const std::string& reason) {
-    LOG(ERROR) << "LoadSHSideFile: " << path << ": " << reason;
+    LOG(ERROR) << "LoadSHQ3Map2Extension: " << path << ": " << reason;
     return std::nullopt;
   };
   auto shorter = [&](uint64_t expected) {
@@ -339,11 +341,11 @@ std::optional<SHSideFile> LoadSHSideFile(const std::filesystem::path& path) {
   }
 
   // The sizes match the file; decode.
-  SHSideFile file;
+  SHQ3Map2Extension file;
   file.pages.resize(page_count);
   in.Seek(kHeaderBytes);
   for (uint64_t p = 0; p < page_count; ++p) {
-    SHSidePage& page = file.pages[p];
+    SHQ3Map2ExtensionPage& page = file.pages[p];
     page.width = static_cast<int>(in.U32());
     page.height = static_cast<int>(in.U32());
     const size_t luxels =
@@ -439,15 +441,15 @@ std::optional<SHSideFile> LoadSHSideFile(const std::filesystem::path& path) {
   return file;
 }
 
-bool SaveSHSidePageL0Hdr(const SHSidePage& page,
-                         const std::filesystem::path& path) {
+bool SaveSHQ3Map2ExtensionPageL0Hdr(const SHQ3Map2ExtensionPage& page,
+                                    const std::filesystem::path& path) {
   CheckPageShape(page, 0);
   std::string name = path.filename().string();
   if (name.size() >= 3 &&
       std::tolower(static_cast<unsigned char>(name[0])) == 'l' &&
       std::tolower(static_cast<unsigned char>(name[1])) == 'm' &&
       name[2] == '_') {
-    LOG(ERROR) << "SaveSHSidePageL0Hdr: refusing " << path
+    LOG(ERROR) << "SaveSHQ3Map2ExtensionPageL0Hdr: refusing " << path
                << ": rend2 auto-loads lm_*.hdr files";
     return false;
   }
@@ -459,7 +461,7 @@ bool SaveSHSidePageL0Hdr(const SHSidePage& page,
   }
   if (stbi_write_hdr(path.c_str(), page.width, page.height, 3, rgb.data()) ==
       0) {
-    LOG(ERROR) << "SaveSHSidePageL0Hdr: cannot write " << path;
+    LOG(ERROR) << "SaveSHQ3Map2ExtensionPageL0Hdr: cannot write " << path;
     return false;
   }
   return true;

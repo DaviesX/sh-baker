@@ -14,7 +14,7 @@
 
 #include "baker.h"
 #include "loader_q3map2.h"
-#include "side_file.h"
+#include "q3map2_extension.h"
 
 #if defined(__cpp_rtti) || defined(__GXX_RTTI)
 #error "no_rtti_caller_test must be compiled with -fno-rtti"
@@ -46,9 +46,9 @@ float Halfed(float v) { return static_cast<float>(Eigen::half(v)); }
 // Writes one 4x2 page from the first 8 points the cancelled bake finished
 // (points it skipped hold the not-baked marker, which the side file refuses)
 // and one tetrahedron hull, reads the file back and compares.
-int CheckSideFile(const sh_baker::BakeResult& result) {
-  sh_baker::SHSideFile file;
-  sh_baker::SHSidePage page;
+int CheckQ3Map2Extension(const sh_baker::BakeResult& result) {
+  sh_baker::SHQ3Map2Extension file;
+  sh_baker::SHQ3Map2ExtensionPage page;
   page.width = 4;
   page.height = 2;
   const size_t points = result.sh_texture.pixels.size();
@@ -73,15 +73,17 @@ int CheckSideFile(const sh_baker::BakeResult& result) {
 
   const std::filesystem::path path =
       std::filesystem::temp_directory_path() /
-      ("sh_no_rtti_side_file_" + std::to_string(getpid()) + ".shsf");
-  if (!sh_baker::SaveSHSideFile(file, path)) return Fail("side file write");
-  std::optional<sh_baker::SHSideFile> read = sh_baker::LoadSHSideFile(path);
+      ("sh_no_rtti_q3map2_extension_" + std::to_string(getpid()) + ".shsf");
+  if (!sh_baker::SaveSHQ3Map2Extension(file, path))
+    return Fail("side file write");
+  std::optional<sh_baker::SHQ3Map2Extension> read =
+      sh_baker::LoadSHQ3Map2Extension(path);
   std::error_code ec;
   std::filesystem::remove(path, ec);
   if (!read.has_value()) return Fail("side file read");
 
   if (read->pages.size() != 1) return Fail("side file page count");
-  const sh_baker::SHSidePage& r = read->pages[0];
+  const sh_baker::SHQ3Map2ExtensionPage& r = read->pages[0];
   if (r.width != 4 || r.height != 2) return Fail("side file page size");
   if (r.sh.size() != 8 || r.visibility.size() != 8) {
     return Fail("side file luxel count");
@@ -175,5 +177,5 @@ int main() {
   if (last_done >= kPoints) return Fail("cancelled bake reported completion");
   std::printf("no_rtti_caller_test: %zu reports, cancelled at %zu of %zu\n",
               reports, last_done, kPoints);
-  return CheckSideFile(result);
+  return CheckQ3Map2Extension(result);
 }
