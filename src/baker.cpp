@@ -58,6 +58,62 @@ std::vector<T> DownsampleTexture(const std::vector<T>& input, int input_width,
   return output;
 }
 
+class BakeObserver {
+ public:
+  BakeObserver(const BakeConfig& config, size_t total_tasks)
+      : config_(config), total_tasks_(total_tasks) {}
+
+  bool Cancelled() {
+    if (!config_.cancel_fn) {
+      return false;
+    }
+
+    if (cancelled_.load(std::memory_order_acquire)) {
+      return true;
+    }
+
+    std::lock_guard<std::mutex> lock(cancel_mutex_);
+    if (!cancelled_.load(std::memory_order_relaxed) && config_.cancel_fn()) {
+      cancelled_.store(true, std::memory_order_release);
+    }
+    return cancelled_.load(std::memory_order_relaxed);
+  }
+
+  void FinishOneTask() {
+    if (!config_.progress_fn) {
+      return;
+    }
+
+    const size_t done_tasks =
+        finished_tasks_.fetch_add(1, std::memory_order_relaxed) + 1;
+    const int percent = static_cast<int>((done_tasks * 100) / total_tasks_);
+    if (percent <= last_percent_.load(std::memory_order_relaxed)) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(progress_mutex_);
+    if (percent <= last_percent_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    last_percent_.store(percent, std::memory_order_relaxed);
+
+    config_.progress_fn(done_tasks, total_tasks_);
+  }
+
+  bool WasCancelled() const {
+    return cancelled_.load(std::memory_order_acquire);
+  }
+
+ private:
+  const BakeConfig& config_;
+  const size_t total_tasks_;
+  std::atomic<bool> cancelled_{false};
+  std::mutex cancel_mutex_;
+  std::atomic<size_t> finished_tasks_{0};
+  std::atomic<int> last_percent_{-1};
+  std::mutex progress_mutex_;
+};
+
 }  // namespace
 
 BakeResult BakeSHLightMap(const Scene& scene,
@@ -92,28 +148,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
   result.environment_visibility_texture.height = height;
   result.environment_visibility_texture.pixel_data.resize(width * height, -1);
 
-  // Cancel: polls are serialized and latch the first true. The latch is
-  // checked again under the lock, so no poll can begin after one has returned
-  // true, and the caller's callback never runs concurrently.
-  std::atomic<bool> cancelled{false};
-  std::mutex cancel_mutex;
-  auto poll_cancel = [&]() -> bool {
-    if (cancelled.load(std::memory_order_acquire)) return true;
-    std::lock_guard<std::mutex> lock(cancel_mutex);
-    if (cancelled.load(std::memory_order_relaxed)) return true;
-    if (config.cancel_fn && config.cancel_fn()) {
-      cancelled.store(true, std::memory_order_release);
-      return true;
-    }
-    return false;
-  };
-
-  // Cancelled before any ray-tracing setup: every point keeps its marker.
-  if (poll_cancel()) {
-    result.cancelled = true;
-    return result;
-  }
-
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
@@ -137,45 +171,26 @@ BakeResult BakeSHLightMap(const Scene& scene,
 
   float inv_pdf_uniform = 2.0f * M_PI;
 
-  size_t total_pixels = surface_points.size();
-  // Cancelled after the BVH build: skip the loop, then release as usual.
-  const size_t loop_end = poll_cancel() ? 0 : total_pixels;
-
-  // Progress: count a point once its result is written (or it is skipped as
-  // invalid). Report under a lock so calls never overlap, at most once per
-  // whole percent; reported percents strictly increase, so `done` does too, and
-  // 100% is reported exactly when done == total.
-  std::atomic<size_t> finished_count{0};
-  std::atomic<int> last_percent{-1};
-  std::mutex progress_mutex;
-  auto point_finished = [&]() {
-    size_t done = finished_count.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!config.progress_fn) return;
-    int percent = static_cast<int>((done * 100) / total_pixels);
-    if (percent <= last_percent.load(std::memory_order_relaxed)) return;
-    std::lock_guard<std::mutex> lock(progress_mutex);
-    if (percent <= last_percent.load(std::memory_order_relaxed)) return;
-    last_percent.store(percent, std::memory_order_relaxed);
-    config.progress_fn(done, total_pixels);
-  };
+  const size_t total_pixels = surface_points.size();
+  BakeObserver bake_observer(config, total_pixels);
 
 #if USE_TBB
   tbb::parallel_for(
-      tbb::blocked_range<size_t>(0, loop_end),
+      tbb::blocked_range<size_t>(0, total_pixels),
       [&](const tbb::blocked_range<size_t>& r) {
         for (size_t idx = r.begin(); idx != r.end(); ++idx) {
 #else
-  for (size_t idx = 0; idx < loop_end; ++idx) {
+  for (size_t idx = 0; idx < total_pixels; ++idx) {
 #endif
           // Process lightmap texel.
           // Polled before the validity check: once cancelled, no further
           // point is baked or counted as done.
-          if (poll_cancel()) continue;
+          if (bake_observer.Cancelled()) break;
 
           const SurfacePoint& sp = surface_points[idx];
           if (sp.material_id < 0) {
             // Invalid lightmap texel.
-            point_finished();
+            bake_observer.FinishOneTask();
             continue;
           }
 
@@ -226,7 +241,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
               sensor.sample_count > 0 ? (1.0f / sensor.sample_count) : 0.0f;
           result.environment_visibility_texture.pixel_data[idx] =
               visibility_accum * inv_samples;
-          point_finished();
+
+          bake_observer.FinishOneTask();
         }
 #if USE_TBB
       });
@@ -236,7 +252,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
   ReleaseBVH(rtc_scene);
   rtcReleaseDevice(device);
 
-  result.cancelled = cancelled.load(std::memory_order_acquire);
+  result.cancelled = bake_observer.WasCancelled();
   return result;
 }
 

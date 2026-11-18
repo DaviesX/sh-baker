@@ -460,7 +460,7 @@ TEST(BakerCancelTest, CancelledBeforeStart) {
   };
   BakeResult result = BakeWith(f.scene, f.points, config);
   EXPECT_TRUE(result.cancelled);
-  // The first poll comes before any ray-tracing setup, and none follows it.
+  // The first point triggers cancellation, and no further polls occur.
   EXPECT_EQ(calls, 1);
   ASSERT_EQ(result.sh_texture.pixels.size(), 500u);
   for (size_t i = 0; i < 500; ++i) EXPECT_TRUE(IsMarker(result, i)) << i;
@@ -525,29 +525,17 @@ TEST(BakerCancelTest, NoPollAfterTrueAndPollsNeverOverlap) {
 }
 
 TEST(BakerCancelTest, CancelCheckedBeforeValidity) {
-  // All invalid. Calls 1 and 2 are the pre-setup and post-build polls; call 3
-  // is the first point's.
+  // All invalid: cancellation is checked before the first validity check.
   ProgressFixture f = FloorPoints(10, /*invalid_every=*/1);
   ProgressLog log;
   int calls = 0;
   BakeConfig config = SmallBake();
   config.progress_fn = log.Callback();
-  config.cancel_fn = [&] { return ++calls >= 3; };
+  config.cancel_fn = [&] { return ++calls >= 1; };
   BakeResult result = BakeWith(f.scene, f.points, config);
   EXPECT_TRUE(result.cancelled);
-  EXPECT_EQ(calls, 3);
+  EXPECT_EQ(calls, 1);
   EXPECT_TRUE(log.reports.empty());
-}
-
-TEST(BakerCancelTest, CancelledAfterBuildSkipsLoop) {
-  ProgressFixture f = FloorPoints(100);
-  int calls = 0;
-  BakeConfig config = SmallBake();
-  config.cancel_fn = [&] { return ++calls >= 2; };
-  BakeResult result = BakeWith(f.scene, f.points, config);
-  EXPECT_TRUE(result.cancelled);
-  EXPECT_EQ(calls, 2);
-  for (size_t i = 0; i < 100; ++i) EXPECT_TRUE(IsMarker(result, i)) << i;
 }
 
 TEST(BakerCancelTest, NeverTrueCancelLeavesResultUncancelledAndIdentical) {

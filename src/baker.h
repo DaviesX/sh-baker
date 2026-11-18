@@ -32,8 +32,7 @@ struct BakeConfig {
   // is not cancelled ends with (total, total). Not called for zero points.
   std::function<void(size_t done, size_t total)> progress_fn;
 
-  // Optional cancel poll: called before any ray-tracing setup, after the BVH
-  // build, and before each point. Polls never overlap, but may come from
+  // Optional cancel poll: called before each point in the bake loop. Polls never overlap, but may come from
   // different worker threads, so the callback need not be thread-safe. Once a
   // poll returns true there are no more: no further point starts, points in
   // progress finish, and the bake returns with BakeResult::cancelled set.
