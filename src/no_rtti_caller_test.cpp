@@ -1,13 +1,20 @@
 // Built with -fno-exceptions -fno-rtti, as q3map2 is, and linked against
 // libsh_baker.so (built with RTTI): sets both bake callbacks across that
-// boundary and checks they behave as specified. Exits 0 on success.
+// boundary and checks they behave as specified, then writes a side file from
+// the bake's results and reads it back. Exits 0 on success.
+
+#include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include "baker.h"
 #include "loader_q3map2.h"
+#include "side_file.h"
 
 #if defined(__cpp_rtti) || defined(__GXX_RTTI)
 #error "no_rtti_caller_test must be compiled with -fno-rtti"
@@ -30,6 +37,76 @@ sh_baker::Texture SolidTexture(int channels, std::vector<uint8_t> texel) {
 int Fail(const char* what) {
   std::fprintf(stderr, "no_rtti_caller_test: %s\n", what);
   return 1;
+}
+
+bool SameBits(float a, float b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+float Halfed(float v) { return static_cast<float>(Eigen::half(v)); }
+
+// Writes one 4x2 page from the first 8 points the cancelled bake finished
+// (points it skipped hold the not-baked marker, which the side file refuses)
+// and one tetrahedron hull, reads the file back and compares.
+int CheckSideFile(const sh_baker::BakeResult& result) {
+  sh_baker::SHSideFile file;
+  sh_baker::SHSidePage page;
+  page.width = 4;
+  page.height = 2;
+  const size_t points = result.sh_texture.pixels.size();
+  for (size_t i = 0; i < points && page.sh.size() < 8; ++i) {
+    const float visibility =
+        result.environment_visibility_texture.pixel_data[i];
+    if (visibility < 0.0f) continue;
+    page.sh.push_back(result.sh_texture.pixels[i]);
+    page.visibility.push_back(visibility);
+  }
+  if (page.sh.size() < 8) return Fail("fewer than 8 baked points");
+  bool any_light = false;
+  for (const sh_baker::SHCoeffs& sh : page.sh) {
+    if (sh.coeffs[0].maxCoeff() > 0.0f) any_light = true;
+  }
+  if (!any_light) return Fail("baked points hold no light");
+  file.pages.push_back(page);
+  sh_baker::SHHullMesh& hull = file.hull_mesh;
+  hull.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  hull.indices = {0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0};
+  hull.hulls = {{0, 12}};
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      ("sh_no_rtti_side_file_" + std::to_string(getpid()) + ".shsf");
+  if (!sh_baker::SaveSHSideFile(file, path)) return Fail("side file write");
+  std::optional<sh_baker::SHSideFile> read = sh_baker::LoadSHSideFile(path);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  if (!read.has_value()) return Fail("side file read");
+
+  if (read->pages.size() != 1) return Fail("side file page count");
+  const sh_baker::SHSidePage& r = read->pages[0];
+  if (r.width != 4 || r.height != 2) return Fail("side file page size");
+  if (r.sh.size() != 8 || r.visibility.size() != 8) {
+    return Fail("side file luxel count");
+  }
+  for (size_t j = 0; j < 8; ++j) {
+    for (int k = 0; k < 9; ++k) {
+      for (int c = 0; c < 3; ++c) {
+        if (!SameBits(r.sh[j].coeffs[k][c], Halfed(page.sh[j].coeffs[k][c]))) {
+          return Fail("side file coefficient differs");
+        }
+      }
+    }
+    if (!SameBits(r.visibility[j], Halfed(page.visibility[j]))) {
+      return Fail("side file visibility differs");
+    }
+  }
+  const sh_baker::SHHullMesh& rh = read->hull_mesh;
+  if (rh.positions != hull.positions) return Fail("side file positions");
+  if (rh.indices != hull.indices) return Fail("side file indices");
+  if (rh.hulls.size() != 1 || rh.hulls[0].first_index != 0 ||
+      rh.hulls[0].index_count != 12) {
+    return Fail("side file hull ranges");
+  }
+  std::printf("no_rtti_caller_test: side file round trip of 8 baked points\n");
+  return 0;
 }
 
 }  // namespace
@@ -98,5 +175,5 @@ int main() {
   if (last_done >= kPoints) return Fail("cancelled bake reported completion");
   std::printf("no_rtti_caller_test: %zu reports, cancelled at %zu of %zu\n",
               reports, last_done, kPoints);
-  return 0;
+  return CheckSideFile(result);
 }

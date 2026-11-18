@@ -129,7 +129,7 @@ q3map2 links `libsh_baker.so` and includes headers from `src/` to bake its own l
   - It gives a pure occluder without texture UVs UVs from its world-space XY.
   - It generates tangents the way the glTF loader does: MikkTSpace from the given texture UVs, and the geometric fallback basis for a surface without them.
   - Add every surface before creating lights and building the BVH; a surface added after an area light aborts.
-- **Headers.** `loader_q3map2.h` and `baker.h` need only `src` and Eigen on the include path, and they compile under `-fno-exceptions -fno-rtti`. `scene.h` declares Embree's two handle types itself.
+- **Headers.** `loader_q3map2.h`, `baker.h` and `side_file.h` need only `src` and Eigen on the include path, and they compile under `-fno-exceptions -fno-rtti`. `scene.h` declares Embree's two handle types itself.
 - **Baking.** `BakeSHLightMap` bakes any list of points without rasterizing. Lay N points out as an N x 1 buffer (`RasterConfig` width N, height 1). Each point needs a position, a unit normal, a unit tangent perpendicular to it with `w` of +1 or -1, and `material_id >= 0`. Result i belongs to point i.
 - **Progress and cancel.** `BakeConfig` takes optional callbacks. Progress and cancel callbacks run on bake worker threads, so keep them short: they must not call back into sh-baker, run TBB work, or block waiting on the bake. `done_fn` runs once on the calling thread after the bake, including empty or cancelled bakes. The library writes no progress to stdout itself; `sh_baker_main` prints `[Baking] N%` through `progress_fn`.
   - `progress_fn(done, total)` reports points finished, counting points skipped as invalid. Calls never overlap, `done` strictly increases, and there is at most one call per whole percent. A bake of at least one point that is not cancelled ends with `(total, total)`.
@@ -137,3 +137,26 @@ q3map2 links `libsh_baker.so` and includes headers from `src/` to bake its own l
   - `cancel_fn()` is polled before each point in the bake loop. Polls never overlap, so it need not be thread-safe, and after one returns true there are no more. No further point starts, points in progress finish, and the call returns with `BakeResult::cancelled` set. Every baked point then holds exactly what a full bake gives it, and the rest keep the not-baked marker (`SHCoeffs(-1)`, environment visibility -1).
 
 None of this changes the baked output: on the same scene and arguments, `sh_baker_main` writes the same lightmaps. The saved glTF differs in one case: a material-less primitive read without `TEXCOORD_0` keeps no texture UVs, so it is written without `TEXCOORD_0` instead of with zero UVs.
+
+## Library: SH side file
+
+`side_file.h` defines the SH side file, which carries a level's baked SH lightmap pages and its solid hull mesh from q3map2 to `renderer_sh`. q3map2 chooses the pages, lays out its luxels in them and builds the hulls. sh-baker only checks, encodes and decodes them, and stores everything as given apart from the value encoding.
+
+- **Contents.** An ordered list of pages, each with its own width and height (both at least 1), and one hull mesh. Either may be empty. Each luxel holds the nine SH coefficients as RGB, in the order L0, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22, and the environment visibility in [0, 1]. The basis is real SH with no Condon–Shortley phase, for a unit direction (x, y, z) in the caller's world frame pointing towards the incoming light: L0 = 0.282095; L1m1, L10, L11 = 0.488603 · (y, z, x); L2m2 = 1.092548 xy; L2m1 = 1.092548 yz; L20 = 0.315392 (3z² − 1); L21 = 1.092548 xz; L22 = 0.546274 (x² − y²). Each coefficient is the projection of the incident radiance, ∫ L_i(ω) Y(ω) dω over the hemisphere above the surface, not convolved with the cosine lobe. `SHCoeffs::irradiance` is not stored, and reads back as zero.
+- **No "not baked" value.** The writer refuses the bake's marker (`SHCoeffs(-1)`, visibility -1), so fill luxels the bake skipped (with zeros or by dilation) before writing.
+- **Byte layout, version 1.** Little-endian, with no padding beyond what is listed, ending exactly after the last section:
+
+  | Section | Contents |
+  | --- | --- |
+  | Header, 24 bytes | `S`,`H`,`S`,`F`; then `uint32` version (1), page count, hull count, hull vertex count, hull index count |
+  | Each page | `uint32` width, `uint32` height; 9 coefficient planes of width × height RGB `binary16` triples; 1 visibility plane of width × height `binary16` values. Luxels run x fastest, then y, from row 0. A page takes 8 + 56 × width × height bytes |
+  | Hull ranges | per hull, `uint32` first index and `uint32` index count |
+  | Hull vertices | per vertex, `float32` x, y, z |
+  | Hull indices | one `uint32` per index |
+
+- **Version rule.** The writer always writes version 1, and the reader accepts only version 1. Any change to the layout or the meaning of the values takes a new version.
+- **Values.** Coefficients and visibility are IEEE `binary16`, rounded to nearest with ties to even. Finite values beyond ±65504 are clamped to ±65504, so very bright luxels clip. Positions are `float32`, stored exactly.
+- **Hulls.** The un-shrunk closed hulls of the casting brushes, in the caller's world space and units. Triangles face outward, with front faces clockwise when seen from outside (q3map2's winding). Each hull is a contiguous index range, and the ranges cover the index list in order. The file neither checks nor changes closure, convexity or winding.
+- **Writing.** `SaveSHSideFile` aborts with a `CHECK` on input only a caller bug can produce: page sizes below 1, luxel counts that differ from width × height, non-finite values, a visibility outside [0, 1] or a negative L0 component, hull ranges that are empty, not multiples of 3 or not contiguous, an index out of range, or a count beyond `uint32`. It writes `<path>.tmp` and renames it over `path`. An I/O failure returns false, removes the temporary file and leaves an existing file unchanged. Two writers to one path at once are not supported.
+- **Reading.** `LoadSHSideFile` returns `std::nullopt`, logging the reason, for a file it cannot open, a bad magic, an unknown version, a size other than its header and pages imply, a page side of 0 or above 2^31 - 1, or values the writer would refuse. It checks the sizes against the file before allocating any page or hull storage, and never aborts on file contents.
+- **Inspection.** `SaveSHSidePageL0Hdr` writes one page's L0 RGB as a Radiance `.hdr`, with row 0 first and negative components written as 0. It refuses file names starting with `lm_` in any letter case, because rend2 loads `maps/<name>/lm_*.hdr` on its own.
