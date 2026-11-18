@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <vector>
 
 #include "light_tree.h"
 #include "occlusion.h"
@@ -27,6 +28,31 @@ struct AreaSample {
 
 // Samples a point on the area light geometry.
 AreaSample SampleAreaLight(const Light& light, std::mt19937& rng);
+
+// True when a ranged point or spot light is farther than its range from the
+// shaded point, `dist` away.
+inline bool OutOfRange(const Light& light, float dist) {
+  return light.range > 0.f && dist > light.range;
+}
+
+// A spot light's cone factor for cos_l, the cosine of the angle between the
+// spot's direction and the direction to the shaded point (Light::ConeFalloff).
+inline float SpotConeFactor(const Light& light, float cos_l) {
+  const float cos_inner = light.cos_inner_cone;
+  const float cos_outer = light.cos_outer_cone;
+  const bool hard_edge = light.cone_falloff == Light::ConeFalloff::kSmoothstep
+                             ? cos_inner <= cos_outer
+                             : cos_inner == cos_outer;
+  if (hard_edge) {
+    return cos_l >= cos_outer ? 1.0f : 0.0f;
+  }
+  float t = (cos_l - cos_outer) / (cos_inner - cos_outer);
+  t = std::clamp(t, 0.0f, 1.0f);
+  if (light.cone_falloff == Light::ConeFalloff::kSmoothstep) {
+    return t * t * (3.0f - 2.0f * t);
+  }
+  return t;
+}
 
 struct DirectionalLightIncoming {
   Eigen::Vector3f radiance;
@@ -89,7 +115,7 @@ inline PointLightIncoming PointLightIncomingRadiance(const Light& light,
 
   // Incoming radiance without visibility term.
   float cos_n = N.dot(L);
-  if (cos_n < 0.f) {
+  if (cos_n < 0.f || OutOfRange(light, dist)) {
     return PointLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
   return PointLightIncoming{light.intensity * light.color / dist_sq, L, cos_n};
@@ -133,10 +159,8 @@ inline SpotLightIncoming SpotLightIncomingRadiance(const Light& light,
   // Incoming radiance without visibility term.
   float cos_n = N.dot(L);
   float cos_l = light.direction.dot(-L);
-  float falloff = (cos_l - light.cos_outer_cone) /
-                  (light.cos_inner_cone - light.cos_outer_cone);
-  falloff = std::clamp(falloff, 0.0f, 1.0f);
-  if (cos_n < 0.f) {
+  float falloff = SpotConeFactor(light, cos_l);
+  if (cos_n < 0.f || OutOfRange(light, dist)) {
     return SpotLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
   return SpotLightIncoming{light.intensity * light.color / dist_sq * falloff, L,
@@ -232,7 +256,8 @@ float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
 //
 // Visibility is FindTransmittance() along each shadow ray: surfaces with alpha
 // below 1 attenuate the sample by (1 - alpha), opaque surfaces and
-// material-less occluders block it. `materials` is the scene's material list,
+// material-less occluders block it. A light whose casts_shadows is false is
+// not tested and always visible. `materials` is the scene's material list,
 // indexed by Geometry::material_id.
 Eigen::Vector3f EvaluateLightSamples(
     const LightTree* light_tree, RTCScene rtc_scene,

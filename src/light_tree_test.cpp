@@ -584,5 +584,174 @@ TEST(LightTreeTest, MixedPointAndAreaLights) {
   EXPECT_GT(count_area, 0);
 }
 
+// --- Range-aware light selection ---
+
+TEST(LightTreeInternalTest, ComputeLightBoundsCarriesRange) {
+  Light point;
+  point.type = Light::Type::Point;
+  point.flux = 100.0f;
+  EXPECT_EQ(light_tree_internal::ComputeLightBounds(point).max_range, 0.0f);
+  point.range = 64.0f;
+  EXPECT_EQ(light_tree_internal::ComputeLightBounds(point).max_range, 64.0f);
+  Light spot = point;
+  spot.type = Light::Type::Spot;
+  EXPECT_EQ(light_tree_internal::ComputeLightBounds(spot).max_range, 64.0f);
+}
+
+TEST(LightTreeInternalTest, UnionRange) {
+  light_tree_internal::LightBounds empty;
+  light_tree_internal::LightBounds a;
+  a.bounds =
+      Eigen::AlignedBox3f(Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero());
+  a.phi = 10.0f;
+  a.max_range = 64.0f;
+  light_tree_internal::LightBounds b = a;
+  b.max_range = 128.0f;
+  light_tree_internal::LightBounds unranged = a;
+  unranged.max_range = 0.0f;
+
+  EXPECT_EQ(light_tree_internal::Union(a, b).max_range, 128.0f);
+  EXPECT_EQ(light_tree_internal::Union(b, a).max_range, 128.0f);
+  EXPECT_EQ(light_tree_internal::Union(a, unranged).max_range, 0.0f);
+  EXPECT_EQ(light_tree_internal::Union(unranged, b).max_range, 0.0f);
+  // An empty side leaves the other's range.
+  EXPECT_EQ(light_tree_internal::Union(empty, a).max_range, 64.0f);
+  EXPECT_EQ(light_tree_internal::Union(a, empty).max_range, 64.0f);
+}
+
+TEST(LightTreeInternalTest, ImportanceZeroBeyondRange) {
+  light_tree_internal::LightBounds lb;
+  lb.bounds =
+      Eigen::AlignedBox3f(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(10, 0, 0));
+  lb.phi = 100.0f;
+  lb.cos_theta_o = -1.0f;
+  lb.cos_theta_e = -1.0f;
+  lb.two_sided = true;
+  const Eigen::Vector3f n = Eigen::Vector3f::Zero();
+  const Eigen::Vector3f near_end(10 + 63, 0, 0), far_end(10 + 65, 0, 0);
+
+  EXPECT_GT(light_tree_internal::Importance(lb, far_end, n), 0.0f);
+  lb.max_range = 64.0f;
+  // Range is measured from the bounds, not their centre.
+  EXPECT_GT(light_tree_internal::Importance(lb, near_end, n), 0.0f);
+  EXPECT_EQ(light_tree_internal::Importance(lb, far_end, n), 0.0f);
+}
+
+// One point light of range 64 and a sun.
+struct RangedAndSun {
+  std::vector<Light> lights;
+  LightTree tree;
+
+  RangedAndSun() {
+    Light point;
+    point.type = Light::Type::Point;
+    point.position = Eigen::Vector3f(0, 0, 0);
+    point.intensity = 100.0f;
+    point.flux = 1000.0f;
+    point.range = 64.0f;
+    Light sun;
+    sun.type = Light::Type::Directional;
+    sun.direction = -Eigen::Vector3f::UnitZ();
+    sun.intensity = 3.0f;
+    lights = {point, sun};
+    tree.Build(lights);
+  }
+  const Light* point() const { return &lights[0]; }
+  const Light* sun() const { return &lights[1]; }
+};
+
+TEST(LightTreeTest, OutOfRangeLightsNeverSampled) {
+  RangedAndSun f;
+  const Eigen::Vector3f p(500, 0, 0), n = Eigen::Vector3f::UnitZ();
+  for (int i = 0; i < 1000; ++i) {
+    const float u = (i + 0.5f) / 1000.0f;
+    std::optional<SampledLight> s = f.tree.Sample(p, n, u);
+    ASSERT_TRUE(s.has_value()) << u;
+    EXPECT_EQ(s->light, f.sun()) << u;
+    EXPECT_EQ(s->pdf, 1.0f) << u;
+  }
+  EXPECT_EQ(f.tree.Pdf(p, n, f.point()), 0.0f);
+  EXPECT_EQ(f.tree.Pdf(p, n, f.sun()), 1.0f);
+}
+
+TEST(LightTreeTest, InRangeKeepsTheFixedDirectionalShare) {
+  RangedAndSun f;
+  const Eigen::Vector3f p(30, 0, 10), n = Eigen::Vector3f::UnitZ();
+  EXPECT_EQ(f.tree.Pdf(p, n, f.sun()), 0.5f);
+  EXPECT_EQ(f.tree.Pdf(p, n, f.point()), 0.5f);
+  EXPECT_EQ(f.tree.Sample(p, n, 0.25f)->light, f.sun());
+  EXPECT_EQ(f.tree.Sample(p, n, 0.75f)->light, f.point());
+}
+
+TEST(LightTreeTest, SampleAndPdfAgreeInAndOutOfRange) {
+  // Ranged point and spot lights of different ranges along X, and a sun.
+  std::vector<Light> lights;
+  for (int i = 0; i < 6; ++i) {
+    Light light;
+    light.type = i % 2 ? Light::Type::Spot : Light::Type::Point;
+    light.position = Eigen::Vector3f(40.0f * i, 0, 0);
+    light.direction = -Eigen::Vector3f::UnitZ();
+    light.intensity = 100.0f;
+    light.flux = 1000.0f;
+    light.range = 30.0f + 10.0f * i;
+    lights.push_back(light);
+  }
+  Light sun;
+  sun.type = Light::Type::Directional;
+  sun.direction = -Eigen::Vector3f::UnitZ();
+  lights.push_back(sun);
+  LightTree tree;
+  tree.Build(lights);
+
+  const Eigen::Vector3f n = Eigen::Vector3f::UnitZ();
+  const Eigen::Vector3f points[] = {
+      Eigen::Vector3f(0, 0, -10),    // in range of light 0
+      Eigen::Vector3f(85, 0, -20),   // between lights 2 and 3
+      Eigen::Vector3f(200, 0, -30),  // near the last
+      Eigen::Vector3f(100, 300, 0),  // out of every range
+      Eigen::Vector3f(-500, 0, 0),   // out of every range
+  };
+  for (const Eigen::Vector3f& p : points) {
+    // Out-of-range lights have pdf 0. A node's range test is conservative (its
+    // bounds and largest range), so the total can fall short of 1 where a
+    // reachable node holds only unreachable lights; Sample() then returns
+    // nothing, with the same probability.
+    float total = 0.0f;
+    for (const Light& light : lights) {
+      const float pdf = tree.Pdf(p, -n, &light);
+      if (light.range > 0.0f && (light.position - p).norm() > light.range) {
+        EXPECT_EQ(pdf, 0.0f) << p.transpose();
+      }
+      total += pdf;
+    }
+    EXPECT_LE(total, 1.0f + 1e-5f) << p.transpose();
+    EXPECT_GE(tree.Pdf(p, -n, &lights.back()), 0.5f) << p.transpose();
+    for (int i = 0; i < 200; ++i) {
+      const float u = (i + 0.5f) / 200.0f;
+      std::optional<SampledLight> s = tree.Sample(p, -n, u);
+      if (!s) continue;
+      EXPECT_NEAR(s->pdf, tree.Pdf(p, -n, s->light), 1e-6f) << p.transpose();
+      if (s->light->range > 0.0f) {
+        EXPECT_LE((s->light->position - p).norm(), s->light->range)
+            << p.transpose();
+      }
+    }
+  }
+}
+
+TEST(LightTreeTest, OutOfRangeWithoutDirectionalSamplesNothing) {
+  Light point;
+  point.type = Light::Type::Point;
+  point.flux = 1000.0f;
+  point.range = 64.0f;
+  std::vector<Light> lights = {point};
+  LightTree tree;
+  tree.Build(lights);
+  const Eigen::Vector3f p(500, 0, 0), n = Eigen::Vector3f::UnitZ();
+  EXPECT_FALSE(tree.Sample(p, n, 0.5f).has_value());
+  EXPECT_EQ(tree.Pdf(p, n, &lights[0]), 0.0f);
+  EXPECT_TRUE(tree.Sample(Eigen::Vector3f(10, 0, 5), n, 0.5f).has_value());
+}
+
 }  // namespace
 }  // namespace sh_baker

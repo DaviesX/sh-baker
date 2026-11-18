@@ -291,9 +291,12 @@ Eigen::Vector3f EvaluateLightSamples(
     if (radiance.isZero()) continue;
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
-    // 1.0f exactly and its result is unchanged.
-    float visibility =
-        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
+    // 1.0f exactly and its result is unchanged. A light that casts no shadows
+    // is always visible.
+    float visibility = light.casts_shadows
+                           ? light_internal::FindTransmittance(
+                                 rtc_scene, materials, visibility_ray)
+                           : 1.0f;
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 
@@ -369,9 +372,12 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
     if (radiance.isZero()) continue;
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
-    // 1.0f exactly and its result is unchanged.
-    float visibility =
-        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
+    // 1.0f exactly and its result is unchanged. A light that casts no shadows
+    // is always visible.
+    float visibility = light.casts_shadows
+                           ? light_internal::FindTransmittance(
+                                 rtc_scene, materials, visibility_ray)
+                           : 1.0f;
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 

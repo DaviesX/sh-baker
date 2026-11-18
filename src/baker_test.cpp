@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <thread>
@@ -266,6 +267,54 @@ TEST(BakerTest, HullBehindCrackBlocksLight) {
   EXPECT_GT(open, 0.1f);
   EXPECT_GE(hulled, 0.0f);
   EXPECT_LT(hulled, 0.05f * open) << "open " << open << ", hulled " << hulled;
+}
+
+namespace {
+
+// One point light 100 above an open floor, and floor points 200 and 300 from
+// it.
+struct RangeFixture {
+  Scene scene;
+  std::vector<SurfacePoint> points;
+};
+
+RangeFixture PointLightOverFloor(float range) {
+  RangeFixture f;
+  f.scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-400, 400, -400, 400, 0, /*faces_up=*/true, 0),
+                   &f.scene);
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = Eigen::Vector3f(0, 0, 100);
+  point.intensity = 1.0e4f;
+  point.flux = Flux(point);
+  point.range = range;
+  f.scene.lights.push_back(point);
+  const Eigen::Vector3f up(0, 0, 1);
+  f.points = {
+      PointAt(Eigen::Vector3f(std::sqrt(200.0f * 200.0f - 1.0e4f), 0, 0), up,
+              0),
+      PointAt(Eigen::Vector3f(std::sqrt(300.0f * 300.0f - 1.0e4f), 0, 0), up,
+              0)};
+  return f;
+}
+
+}  // namespace
+
+TEST(BakerRangeTest, PointBeyondRangeIsDark) {
+  RangeFixture f = PointLightOverFloor(256.0f);
+  BakeResult r = BakePoints(f.scene, f.points);
+  EXPECT_GT(r.sh_texture.pixels[0].coeffs[0].x(), 0.0f);
+  for (const Eigen::Vector3f& c : r.sh_texture.pixels[1].coeffs) {
+    EXPECT_EQ(c, Eigen::Vector3f::Zero());
+  }
+}
+
+TEST(BakerRangeTest, DefaultRangeUnchanged) {
+  RangeFixture f = PointLightOverFloor(Light().range);
+  BakeResult r = BakePoints(f.scene, f.points);
+  EXPECT_GT(r.sh_texture.pixels[0].coeffs[0].x(), 0.0f);
+  EXPECT_GT(r.sh_texture.pixels[1].coeffs[0].x(), 0.0f);
 }
 
 namespace {

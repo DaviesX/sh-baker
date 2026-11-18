@@ -3,6 +3,7 @@
 #include <embree4/rtcore.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>  // For M_PI
 
 #include "colorspace.h"
@@ -296,6 +297,180 @@ TEST_F(LightTest, SampleAreaLight_Internal) {
   EXPECT_NEAR(sample.radiance.x(), 10.0f, 1e-4f);
 }
 
+// --- Range cutoff ---
+
+Light RangedPoint(float range) {
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = Eigen::Vector3f(0, 0, 0);
+  point.intensity = 100.0f;
+  point.flux = Flux(point);
+  point.range = range;
+  return point;
+}
+
+// E_perp at a point `dist` along +X from the light, facing it.
+float PointIrradianceAt(const Light& light, float dist) {
+  Ray ray;
+  return light_internal::PointLightIncomingRadiance(
+             light, Eigen::Vector3f(dist, 0, 0), Eigen::Vector3f(-1, 0, 0),
+             &ray)
+      .radiance.x();
+}
+
+TEST(LightRangeTest, PointLightCutsOffBeyondRange) {
+  const Light light = RangedPoint(256.0f);
+  EXPECT_FLOAT_EQ(PointIrradianceAt(light, 200.0f), 100.0f / (200.0f * 200.0f));
+  EXPECT_FLOAT_EQ(PointIrradianceAt(light, 255.0f), 100.0f / (255.0f * 255.0f));
+  EXPECT_EQ(PointIrradianceAt(light, 257.0f), 0.0f);
+  EXPECT_EQ(PointIrradianceAt(light, 300.0f), 0.0f);
+}
+
+TEST(LightRangeTest, DefaultRangeIsUnbounded) {
+  EXPECT_EQ(Light().range, 0.0f);
+  const Light light = RangedPoint(0.0f);
+  EXPECT_FLOAT_EQ(PointIrradianceAt(light, 300.0f), 100.0f / (300.0f * 300.0f));
+  EXPECT_GT(PointIrradianceAt(light, 1.0e4f), 0.0f);
+}
+
+TEST(LightRangeTest, SpotLightCutsOffBeyondRange) {
+  Light spot = RangedPoint(256.0f);
+  spot.type = Light::Type::Spot;
+  spot.direction = Eigen::Vector3f(1, 0, 0);
+  Ray ray;
+  auto at = [&](float dist) {
+    return light_internal::SpotLightIncomingRadiance(
+               spot, Eigen::Vector3f(dist, 0, 0), Eigen::Vector3f(-1, 0, 0),
+               &ray)
+        .radiance.x();
+  };
+  EXPECT_GT(at(200.0f), 0.0f);
+  EXPECT_EQ(at(300.0f), 0.0f);
+}
+
+// The cutoff also applies at bounce vertices (EvaluateLightSamples).
+TEST_F(LightTest, RangeAppliesToEvaluatedSamples) {
+  Light light = RangedPoint(256.0f);
+  RTCScene rtc_scene = rtcNewScene(device_);
+  rtcCommitScene(rtc_scene);
+  auto eval = [&](const Light& l, float dist) {
+    std::vector<Light> lights{l};
+    LightTree tree;
+    tree.Build(lights);
+    const Eigen::Vector3f P(dist, 0, 0), N(-1, 0, 0);
+    return EvaluateLightSamples(&tree, rtc_scene, {}, P, N, N, mat_,
+                                Eigen::Vector2f(0, 0), 4, rng_)
+        .x();
+  };
+  EXPECT_GT(eval(light, 200.0f), 0.0f);
+  EXPECT_EQ(eval(light, 300.0f), 0.0f);
+  light.range = 0.0f;
+  EXPECT_GT(eval(light, 300.0f), 0.0f);
+  rtcReleaseScene(rtc_scene);
+}
+
+// --- Cone falloff ---
+
+constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
+
+// A spot at the origin aiming down +X, with the given half-angles in degrees.
+Light SpotAlongX(float outer_deg, float inner_deg, Light::ConeFalloff falloff) {
+  Light spot;
+  spot.type = Light::Type::Spot;
+  spot.position = Eigen::Vector3f::Zero();
+  spot.direction = Eigen::Vector3f(1, 0, 0);
+  spot.intensity = 100.0f;
+  spot.cos_outer_cone = std::cos(outer_deg * kDegToRad);
+  spot.cos_inner_cone = std::cos(inner_deg * kDegToRad);
+  spot.cone_falloff = falloff;
+  spot.flux = Flux(spot);
+  return spot;
+}
+
+// E_perp from `spot` at distance 10, at angle `theta` (radians) off its axis,
+// on a surface facing the light.
+float SpotIrradianceAtAngle(const Light& spot, float theta) {
+  const Eigen::Vector3f dir(std::cos(theta), std::sin(theta), 0.0f);
+  Ray ray;
+  return light_internal::SpotLightIncomingRadiance(spot, 10.0f * dir, -dir,
+                                                   &ray)
+      .radiance.x();
+}
+
+// The angle where t = clamp((cos theta - cos outer) / (cos inner - cos
+// outer)) is `t`.
+float AngleAtT(const Light& spot, float t) {
+  return std::acos(spot.cos_outer_cone +
+                   t * (spot.cos_inner_cone - spot.cos_outer_cone));
+}
+
+TEST(LightConeTest, LinearIsTheDefault) {
+  EXPECT_EQ(Light().cone_falloff, Light::ConeFalloff::kLinear);
+}
+
+TEST(LightConeTest, SmoothstepAtQuarter) {
+  const Light spot = SpotAlongX(45.0f, 30.0f, Light::ConeFalloff::kSmoothstep);
+  const float on_axis = SpotIrradianceAtAngle(spot, 0.0f);
+  const float quarter = SpotIrradianceAtAngle(spot, AngleAtT(spot, 0.25f));
+  ASSERT_GT(on_axis, 0.0f);
+  EXPECT_NEAR(quarter / on_axis, 0.15625f, 1e-4f * 0.15625f);
+  EXPECT_NEAR(light_internal::SpotConeFactor(
+                  spot, spot.cos_outer_cone + 0.25f * (spot.cos_inner_cone -
+                                                       spot.cos_outer_cone)),
+              0.15625f, 1e-6f);
+}
+
+TEST(LightConeTest, LinearAtQuarterByDefault) {
+  Light spot = SpotAlongX(45.0f, 30.0f, Light::ConeFalloff::kSmoothstep);
+  spot.cone_falloff = Light().cone_falloff;
+  const float on_axis = SpotIrradianceAtAngle(spot, 0.0f);
+  const float quarter = SpotIrradianceAtAngle(spot, AngleAtT(spot, 0.25f));
+  EXPECT_NEAR(quarter / on_axis, 0.25f, 1e-4f * 0.25f);
+  EXPECT_NEAR(light_internal::SpotConeFactor(
+                  spot, spot.cos_outer_cone + 0.25f * (spot.cos_inner_cone -
+                                                       spot.cos_outer_cone)),
+              0.25f, 1e-6f);
+}
+
+TEST(LightConeTest, EqualConesGiveAHardEdge) {
+  for (Light::ConeFalloff falloff :
+       {Light::ConeFalloff::kLinear, Light::ConeFalloff::kSmoothstep}) {
+    const Light spot = SpotAlongX(30.0f, 30.0f, falloff);
+    ASSERT_EQ(spot.cos_inner_cone, spot.cos_outer_cone);
+    const float on_axis = SpotIrradianceAtAngle(spot, 0.0f);
+    const float inside = SpotIrradianceAtAngle(spot, 29.9f * kDegToRad);
+    const float outside = SpotIrradianceAtAngle(spot, 30.1f * kDegToRad);
+    EXPECT_TRUE(std::isfinite(on_axis));
+    EXPECT_TRUE(std::isfinite(inside));
+    EXPECT_TRUE(std::isfinite(outside));
+    EXPECT_FLOAT_EQ(inside, on_axis) << static_cast<int>(falloff);
+    EXPECT_EQ(outside, 0.0f) << static_cast<int>(falloff);
+    // Exactly on the edge is inside.
+    EXPECT_EQ(light_internal::SpotConeFactor(spot, spot.cos_outer_cone), 1.0f);
+  }
+}
+
+TEST(LightConeTest, SmoothstepInvertedConesGiveAHardEdge) {
+  const Light spot = SpotAlongX(30.0f, 40.0f, Light::ConeFalloff::kSmoothstep);
+  EXPECT_EQ(SpotIrradianceAtAngle(spot, 29.9f * kDegToRad),
+            SpotIrradianceAtAngle(spot, 0.0f));
+  EXPECT_EQ(SpotIrradianceAtAngle(spot, 30.1f * kDegToRad), 0.0f);
+}
+
+// Inverted cones (inner wider than outer) in linear mode keep the formula
+// used before cone_falloff existed, bit for bit.
+TEST(LightConeTest, LinearInvertedConesUnchanged) {
+  const Light spot = SpotAlongX(40.0f, 50.0f, Light::ConeFalloff::kLinear);
+  ASSERT_LT(spot.cos_inner_cone, spot.cos_outer_cone);
+  for (float deg : {0.0f, 20.0f, 39.0f, 41.0f, 45.0f, 49.0f, 55.0f}) {
+    const float cos_l = std::cos(deg * kDegToRad);
+    float before = (cos_l - spot.cos_outer_cone) /
+                   (spot.cos_inner_cone - spot.cos_outer_cone);
+    before = std::clamp(before, 0.0f, 1.0f);
+    EXPECT_EQ(light_internal::SpotConeFactor(spot, cos_l), before) << deg;
+  }
+}
+
 // A 1x1 RGBA albedo with the given alpha (channels 3 when `rgb` is set).
 Material CardMaterial(uint8_t alpha, bool rgb = false) {
   Material mat;
@@ -473,6 +648,27 @@ TEST_F(LightTransmittanceTest, OpaqueCardsBlock) {
 
 TEST_F(LightTransmittanceTest, CardBeyondLightIgnored) {
   ExpectRatio(PointAbove(), {HorizontalCard(12.0f, kOpaque)}, 1.0f);
+}
+
+// A light that casts no shadows reaches the point through an opaque blocker
+// and a 128/255 card alike, at bake points and at bounce vertices.
+TEST_F(LightTransmittanceTest, NonCastingLightIgnoresBlockers) {
+  std::vector<Light> lights = {PointAbove(), SpotAbove(), SunAbove(),
+                               AreaAbove()};
+  for (Light& light : lights) {
+    light.casts_shadows = false;
+    ExpectRatio(light, {HorizontalCard(5.0f, kOpaque)}, 1.0f);
+    ExpectRatio(light, {HorizontalCard(5.0f, kHalf)}, 1.0f);
+    ExpectRatio(light,
+                {HullBox(Eigen::Vector3f(-1, 4, -1), Eigen::Vector3f(1, 6, 1))},
+                1.0f);
+  }
+}
+
+// The flag defaults to casting, which keeps the visibility test.
+TEST_F(LightTransmittanceTest, LightsCastByDefault) {
+  EXPECT_TRUE(Light().casts_shadows);
+  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kOpaque)}, 0.0f);
 }
 
 // A 1x1 albedo texture. channels 4 carries `alpha` (0..255); channels 3 has
