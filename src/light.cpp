@@ -391,4 +391,46 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
   }
 }
 
+void AccumulatePunctualDirect(const std::vector<Light>& lights,
+                              RTCScene rtc_scene,
+                              const std::vector<Material>& materials,
+                              const Eigen::Vector3f& hit_point,
+                              const Eigen::Vector3f& hit_point_normal,
+                              SHCoeffs* accumulator) {
+  for (const Light& light : lights) {
+    Eigen::Vector3f radiance;
+    Ray visibility_ray;
+    switch (light.type) {
+      case Light::Type::Directional:
+        radiance = light_internal::DirectionalLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      case Light::Type::Point:
+        radiance = light_internal::PointLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      case Light::Type::Spot:
+        radiance = light_internal::SpotLightIncomingRadiance(
+                       light, hit_point, hit_point_normal, &visibility_ray)
+                       .radiance;
+        break;
+      default:
+        continue;
+    }
+
+    if (radiance.isZero()) continue;
+
+    float visibility = light.casts_shadows
+                           ? light_internal::FindTransmittance(
+                                 rtc_scene, materials, visibility_ray)
+                           : 1.0f;
+    if (visibility <= 0.0f) continue;
+
+    AccumulateRadiance(radiance * visibility, visibility_ray.direction,
+                       hit_point_normal, accumulator);
+  }
+}
+
 }  // namespace sh_baker

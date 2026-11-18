@@ -154,6 +154,18 @@ BakeResult BakeSHLightMap(const Scene& scene,
   result.environment_visibility_texture.height = height;
   result.environment_visibility_texture.pixel_data.resize(width * height, -1);
 
+  const bool split = config.split_punctual_direct;
+  if (split) {
+    result.punctual_direct_sh_texture.width = width;
+    result.punctual_direct_sh_texture.height = height;
+    result.punctual_direct_sh_texture.pixels.resize(width * height,
+                                                    SHCoeffs(-1));
+    result.punctual_direct_irradiance.width = width;
+    result.punctual_direct_irradiance.height = height;
+    result.punctual_direct_irradiance.channels = 3;
+    result.punctual_direct_irradiance.pixel_data.resize(width * height * 3, -1);
+  }
+
   RTCDevice device = rtcNewDevice(nullptr);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
@@ -171,9 +183,10 @@ BakeResult BakeSHLightMap(const Scene& scene,
   area_light_tree.Build(area_lights);
 
   // Determine which light tree to use for direct lighting contribution based on
-  // the bake config.
+  // the bake config. Splitting the punctual direct light off drops it from the
+  // main result exactly as indirect_only does.
   const LightTree& direct_light_tree =
-      config.indirect_only ? area_light_tree : light_tree;
+      (config.indirect_only || split) ? area_light_tree : light_tree;
 
   float inv_pdf_uniform = 2.0f * M_PI;
 
@@ -247,6 +260,20 @@ BakeResult BakeSHLightMap(const Scene& scene,
               sensor.sample_count > 0 ? (1.0f / sensor.sample_count) : 0.0f;
           result.environment_visibility_texture.pixel_data[idx] =
               visibility_accum * inv_samples;
+
+          if (split) {
+            // Exact punctual direct light: every light once, no sampling.
+            SHCoeffs punctual;
+            AccumulatePunctualDirect(scene.lights, rtc_scene, scene.materials,
+                                     sp.position, sp.normal, &punctual);
+            result.punctual_direct_irradiance.pixel_data[idx * 3 + 0] =
+                punctual.irradiance.x();
+            result.punctual_direct_irradiance.pixel_data[idx * 3 + 1] =
+                punctual.irradiance.y();
+            result.punctual_direct_irradiance.pixel_data[idx * 3 + 2] =
+                punctual.irradiance.z();
+            result.punctual_direct_sh_texture.pixels[idx] = punctual;
+          }
 
           bake_observer.FinishOneTask();
         }

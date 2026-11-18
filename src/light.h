@@ -283,6 +283,20 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     unsigned num_samples, std::mt19937& rng,
                                     SHCoeffs* accumulator);
 
+// Evaluates every punctual light (point, spot, directional) in `lights` once
+// at the point, with no random sampling, and accumulates the incident radiance
+// E_perp * visibility of each into `accumulator`: E_perp * Y(w) into its SH
+// coefficients and E_perp * max(0, n . w) into its irradiance, where w is the
+// direction to the light. Range and cone falloff apply; visibility is
+// FindTransmittance() for a light that casts shadows and 1 for one that does
+// not. Area lights are skipped.
+void AccumulatePunctualDirect(const std::vector<Light>& lights,
+                              RTCScene rtc_scene,
+                              const std::vector<Material>& materials,
+                              const Eigen::Vector3f& hit_point,
+                              const Eigen::Vector3f& hit_point_normal,
+                              SHCoeffs* accumulator);
+
 }  // namespace sh_baker
 
 #endif  // SH_BAKER_SRC_LIGHT_H_
