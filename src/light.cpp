@@ -291,12 +291,9 @@ Eigen::Vector3f EvaluateLightSamples(
     if (radiance.isZero()) continue;
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
-    // 1.0f exactly and its result is unchanged. A light that casts no shadows
-    // is always visible.
-    float visibility = light.casts_shadows
-                           ? light_internal::FindTransmittance(
-                                 rtc_scene, materials, visibility_ray)
-                           : 1.0f;
+    // 1.0f exactly and its result is unchanged.
+    float visibility =
+        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 
@@ -372,12 +369,9 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
     if (radiance.isZero()) continue;
 
     // Opaque content gives exactly 0 or 1, so an unoccluded sample is scaled by
-    // 1.0f exactly and its result is unchanged. A light that casts no shadows
-    // is always visible.
-    float visibility = light.casts_shadows
-                           ? light_internal::FindTransmittance(
-                                 rtc_scene, materials, visibility_ray)
-                           : 1.0f;
+    // 1.0f exactly and its result is unchanged.
+    float visibility =
+        light_internal::FindTransmittance(rtc_scene, materials, visibility_ray);
     if (visibility <= 0.0f) continue;
     radiance *= visibility;
 
@@ -388,48 +382,6 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
       AccumulateRadiance(Li, visibility_ray.direction, hit_point_normal,
                          accumulator);
     }
-  }
-}
-
-void AccumulatePunctualDirect(const std::vector<Light>& lights,
-                              RTCScene rtc_scene,
-                              const std::vector<Material>& materials,
-                              const Eigen::Vector3f& hit_point,
-                              const Eigen::Vector3f& hit_point_normal,
-                              SHCoeffs* accumulator) {
-  for (const Light& light : lights) {
-    Eigen::Vector3f radiance;
-    Ray visibility_ray;
-    switch (light.type) {
-      case Light::Type::Directional:
-        radiance = light_internal::DirectionalLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
-                       .radiance;
-        break;
-      case Light::Type::Point:
-        radiance = light_internal::PointLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
-                       .radiance;
-        break;
-      case Light::Type::Spot:
-        radiance = light_internal::SpotLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
-                       .radiance;
-        break;
-      default:
-        continue;
-    }
-
-    if (radiance.isZero()) continue;
-
-    float visibility = light.casts_shadows
-                           ? light_internal::FindTransmittance(
-                                 rtc_scene, materials, visibility_ray)
-                           : 1.0f;
-    if (visibility <= 0.0f) continue;
-
-    AccumulateRadiance(radiance * visibility, visibility_ray.direction,
-                       hit_point_normal, accumulator);
   }
 }
 

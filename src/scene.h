@@ -56,8 +56,8 @@ struct Light {
   //   kLinear: the factor is t. An inverted cone (cos_inner_cone <
   //     cos_outer_cone) keeps this formula, negative denominator and all.
   //   kSmoothstep: the factor is t^2 (3 - 2t).
-  // Equal cones in either mode, and cos_inner_cone <= cos_outer_cone in
-  // smoothstep, give a hard edge: 1 for cos theta >= cos_outer_cone, else 0.
+  // Smoothstep with cos_inner_cone <= cos_outer_cone gives a hard edge:
+  // 1 for cos theta >= cos_outer_cone, else 0.
   enum class ConeFalloff { kLinear, kSmoothstep };
 
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
@@ -75,10 +75,6 @@ struct Light {
   // LightBounds::max_range), so a light alone in its node is not picked there.
   // 0 means no cutoff. Ignored for directional and area lights.
   float range = 0.0f;
-
-  // False: the light reaches every point with no visibility test (no shadow
-  // ray, no alpha transmittance), at the baked point and at every bounce.
-  bool casts_shadows = true;
 
   // Area Light Parameters
   float area = 0.0f;

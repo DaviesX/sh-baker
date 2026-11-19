@@ -196,10 +196,6 @@ target_link_libraries(sh_baker_test PRIVATE
     sh_baker
     GTest::gtest_main
 )
-# The defaults test's bit-exact references come from the Release build.
-target_compile_definitions(sh_baker_test PRIVATE
-    $<$<CONFIG:Release>:SH_BAKER_TEST_RELEASE_BUILD>
-)
 
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)

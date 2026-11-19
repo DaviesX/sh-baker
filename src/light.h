@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-#include <vector>
 
 #include "light_tree.h"
 #include "occlusion.h"
@@ -40,15 +39,13 @@ inline bool OutOfRange(const Light& light, float dist) {
 inline float SpotConeFactor(const Light& light, float cos_l) {
   const float cos_inner = light.cos_inner_cone;
   const float cos_outer = light.cos_outer_cone;
-  const bool hard_edge = light.cone_falloff == Light::ConeFalloff::kSmoothstep
-                             ? cos_inner <= cos_outer
-                             : cos_inner == cos_outer;
-  if (hard_edge) {
+  const bool smoothstep = light.cone_falloff == Light::ConeFalloff::kSmoothstep;
+  if (smoothstep && cos_inner <= cos_outer) {
     return cos_l >= cos_outer ? 1.0f : 0.0f;
   }
   float t = (cos_l - cos_outer) / (cos_inner - cos_outer);
   t = std::clamp(t, 0.0f, 1.0f);
-  if (light.cone_falloff == Light::ConeFalloff::kSmoothstep) {
+  if (smoothstep) {
     return t * t * (3.0f - 2.0f * t);
   }
   return t;
@@ -256,8 +253,7 @@ float FindTransmittance(RTCScene scene, const std::vector<Material>& materials,
 //
 // Visibility is FindTransmittance() along each shadow ray: surfaces with alpha
 // below 1 attenuate the sample by (1 - alpha), opaque surfaces and
-// material-less occluders block it. A light whose casts_shadows is false is
-// not tested and always visible. `materials` is the scene's material list,
+// material-less occluders block it. `materials` is the scene's material list,
 // indexed by Geometry::material_id.
 Eigen::Vector3f EvaluateLightSamples(
     const LightTree* light_tree, RTCScene rtc_scene,
@@ -282,20 +278,6 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,
                                     SHCoeffs* accumulator);
-
-// Evaluates every punctual light (point, spot, directional) in `lights` once
-// at the point, with no random sampling, and accumulates the incident radiance
-// E_perp * visibility of each into `accumulator`: E_perp * Y(w) into its SH
-// coefficients and E_perp * max(0, n . w) into its irradiance, where w is the
-// direction to the light. Range and cone falloff apply; visibility is
-// FindTransmittance() for a light that casts shadows and 1 for one that does
-// not. Area lights are skipped.
-void AccumulatePunctualDirect(const std::vector<Light>& lights,
-                              RTCScene rtc_scene,
-                              const std::vector<Material>& materials,
-                              const Eigen::Vector3f& hit_point,
-                              const Eigen::Vector3f& hit_point_normal,
-                              SHCoeffs* accumulator);
 
 }  // namespace sh_baker
 

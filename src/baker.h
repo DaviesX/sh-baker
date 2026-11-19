@@ -18,15 +18,6 @@ struct BakeConfig {
   int bounces = 5;            // Max path depth
   int num_light_samples = 1;  // Number of light samples for NEE
   bool indirect_only = false;
-  // Split the punctual lights' (point, spot, directional) direct light at each
-  // baked point off the main result. The main SH then omits it, as under
-  // indirect_only: next-event estimation at the point samples area lights
-  // only, while bounces still see every light. Instead, each punctual light is
-  // evaluated once per point, with one visibility test and no random sampling,
-  // into BakeResult::punctual_direct_sh_texture and
-  // punctual_direct_irradiance. Area lights' direct light stays in the main
-  // result.
-  bool split_punctual_direct = false;
   // Max per-sample indirect luminance; over-bright samples are scaled down to
   // suppress fireflies. <= 0 disables (unbiased).
   float firefly_clamp = 0.0f;
@@ -41,39 +32,25 @@ struct BakeConfig {
   // is not cancelled ends with (total, total). Not called for zero points.
   std::function<void(size_t done, size_t total)> progress_fn;
 
-  // Optional cancel poll: called before each point in the bake loop. Polls
-  // never overlap, but may come from different worker threads, so the callback
-  // need not be thread-safe. Once a poll returns true there are no more: no
-  // further point starts, points in progress finish, and the bake returns with
-  // BakeResult::cancelled set.
+  // Optional cancel poll: called before each point in the bake loop. Polls never overlap, but may come from
+  // different worker threads, so the callback need not be thread-safe. Once a
+  // poll returns true there are no more: no further point starts, points in
+  // progress finish, and the bake returns with BakeResult::cancelled set.
   std::function<bool()> cancel_fn;
 
   // Called once on the calling thread after the bake finishes, including for
   // empty or cancelled bakes, before BakeSHLightMap returns.
   std::function<void()> done_fn;
 
-  // The progress and cancel callbacks must be short, and must not call back
-  // into sh-baker, run TBB work, or block waiting on the bake: they run on bake
-  // worker threads, and the progress callback runs under the bake's reporting
-  // lock. Either may be left empty. done_fn may also be left empty.
+  // The progress and cancel callbacks must be short, and must not call back into sh-baker, run
+  // TBB work, or block waiting on the bake: they run on bake worker threads,
+  // and the progress callback runs under the bake's reporting lock. Either may
+  // be left empty. done_fn may also be left empty.
 };
 
 struct BakeResult {
   SHTexture sh_texture;
   Texture32F environment_visibility_texture;
-  // Filled only with BakeConfig::split_punctual_direct, and empty (0 x 0)
-  // otherwise. Per point:
-  //   punctual_direct_sh_texture: the sum over punctual lights of
-  //     E_perp * visibility * Y(w), w the direction to the light;
-  //   punctual_direct_irradiance: 3 channels (RGB), the sum of
-  //     E_perp * visibility * max(0, n . w), at the point's normal n.
-  // E_perp is the light's irradiance on a surface facing it, after range and
-  // cone falloff, and zero for a light below the point's hemisphere. A skipped
-  // or unbaked point keeps the not-baked marker: SHCoeffs(-1), and -1 in every
-  // irradiance channel. These are deterministic: they do not depend on the
-  // sample count or seed.
-  SHTexture punctual_direct_sh_texture;
-  Texture32F punctual_direct_irradiance;
   // True when cancel_fn returned true, even if every point had already
   // started. Points that were not baked keep the not-baked marker, as invalid
   // points do; every baked point holds the result a full bake gives it.

@@ -432,22 +432,19 @@ TEST(LightConeTest, LinearAtQuarterByDefault) {
               0.25f, 1e-6f);
 }
 
-TEST(LightConeTest, EqualConesGiveAHardEdge) {
-  for (Light::ConeFalloff falloff :
-       {Light::ConeFalloff::kLinear, Light::ConeFalloff::kSmoothstep}) {
-    const Light spot = SpotAlongX(30.0f, 30.0f, falloff);
-    ASSERT_EQ(spot.cos_inner_cone, spot.cos_outer_cone);
-    const float on_axis = SpotIrradianceAtAngle(spot, 0.0f);
-    const float inside = SpotIrradianceAtAngle(spot, 29.9f * kDegToRad);
-    const float outside = SpotIrradianceAtAngle(spot, 30.1f * kDegToRad);
-    EXPECT_TRUE(std::isfinite(on_axis));
-    EXPECT_TRUE(std::isfinite(inside));
-    EXPECT_TRUE(std::isfinite(outside));
-    EXPECT_FLOAT_EQ(inside, on_axis) << static_cast<int>(falloff);
-    EXPECT_EQ(outside, 0.0f) << static_cast<int>(falloff);
-    // Exactly on the edge is inside.
-    EXPECT_EQ(light_internal::SpotConeFactor(spot, spot.cos_outer_cone), 1.0f);
-  }
+TEST(LightConeTest, SmoothstepEqualConesGiveAHardEdge) {
+  const Light spot = SpotAlongX(30.0f, 30.0f, Light::ConeFalloff::kSmoothstep);
+  ASSERT_EQ(spot.cos_inner_cone, spot.cos_outer_cone);
+  const float on_axis = SpotIrradianceAtAngle(spot, 0.0f);
+  const float inside = SpotIrradianceAtAngle(spot, 29.9f * kDegToRad);
+  const float outside = SpotIrradianceAtAngle(spot, 30.1f * kDegToRad);
+  EXPECT_TRUE(std::isfinite(on_axis));
+  EXPECT_TRUE(std::isfinite(inside));
+  EXPECT_TRUE(std::isfinite(outside));
+  EXPECT_FLOAT_EQ(inside, on_axis);
+  EXPECT_EQ(outside, 0.0f);
+  // Exactly on the edge is inside.
+  EXPECT_EQ(light_internal::SpotConeFactor(spot, spot.cos_outer_cone), 1.0f);
 }
 
 TEST(LightConeTest, SmoothstepInvertedConesGiveAHardEdge) {
@@ -648,27 +645,6 @@ TEST_F(LightTransmittanceTest, OpaqueCardsBlock) {
 
 TEST_F(LightTransmittanceTest, CardBeyondLightIgnored) {
   ExpectRatio(PointAbove(), {HorizontalCard(12.0f, kOpaque)}, 1.0f);
-}
-
-// A light that casts no shadows reaches the point through an opaque blocker
-// and a 128/255 card alike, at bake points and at bounce vertices.
-TEST_F(LightTransmittanceTest, NonCastingLightIgnoresBlockers) {
-  std::vector<Light> lights = {PointAbove(), SpotAbove(), SunAbove(),
-                               AreaAbove()};
-  for (Light& light : lights) {
-    light.casts_shadows = false;
-    ExpectRatio(light, {HorizontalCard(5.0f, kOpaque)}, 1.0f);
-    ExpectRatio(light, {HorizontalCard(5.0f, kHalf)}, 1.0f);
-    ExpectRatio(light,
-                {HullBox(Eigen::Vector3f(-1, 4, -1), Eigen::Vector3f(1, 6, 1))},
-                1.0f);
-  }
-}
-
-// The flag defaults to casting, which keeps the visibility test.
-TEST_F(LightTransmittanceTest, LightsCastByDefault) {
-  EXPECT_TRUE(Light().casts_shadows);
-  ExpectRatio(PointAbove(), {HorizontalCard(5.0f, kOpaque)}, 0.0f);
 }
 
 // A 1x1 albedo texture. channels 4 carries `alpha` (0..255); channels 3 has
