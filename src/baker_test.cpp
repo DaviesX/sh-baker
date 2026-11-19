@@ -1060,6 +1060,13 @@ BakeConfig DefaultsConfig(bool indirect_only) {
 // point, as bit patterns, baked by sh-baker at ce5419a, before Light::range,
 // cone_falloff, casts_shadows and split_punctual_direct existed. Regenerate
 // only from a build of that commit.
+//
+// The bits come from the Release build (-O3 -flto -march=native, x86-64 with
+// AVX2 and FMA), and float results move by a few ulps with the optimisation
+// level and the target's instruction set. So the test compares bit for bit
+// only in a Release build (SH_BAKER_TEST_RELEASE_BUILD), and within a tight
+// tolerance otherwise. Checked separately: ce5419a and this change, both built
+// RelWithDebInfo, bake this scene bit-identically.
 constexpr uint32_t kDefaultsReferenceFull[] = {
     // point 0
     0x3ebfacd1,
@@ -1413,6 +1420,31 @@ constexpr uint32_t kDefaultsReferenceIndirectOnly[] = {
     0x3f300000,
 };
 
+float FromBits(uint32_t b) {
+  float f;
+  std::memcpy(&f, &b, 4);
+  return f;
+}
+
+// Bit for bit in the Release build the references come from; elsewhere within
+// 1e-4 relative plus 1e-6 absolute, far below any change in the light model.
+::testing::AssertionResult SameAsReference(float actual, uint32_t expected) {
+#ifdef SH_BAKER_TEST_RELEASE_BUILD
+  if (Bits(actual) == expected) return ::testing::AssertionSuccess();
+#else
+  const float e = FromBits(expected);
+  if (std::abs(actual - e) <= 1e-4f * std::abs(e) + 1e-6f) {
+    return ::testing::AssertionSuccess();
+  }
+#endif
+  return ::testing::AssertionFailure()
+         << "got " << actual << " (0x" << std::hex << Bits(actual)
+         << "), reference " << FromBits(expected) << " (0x" << expected << ")";
+}
+
+#define ExpectSameAsReference(actual, expected) \
+  EXPECT_TRUE(SameAsReference((actual), (expected)))
+
 void ExpectMatchesReference(const BakeResult& r, const uint32_t* reference,
                             size_t reference_size) {
   ASSERT_EQ(reference_size, r.sh_texture.pixels.size() * 28);
@@ -1420,13 +1452,13 @@ void ExpectMatchesReference(const BakeResult& r, const uint32_t* reference,
     const uint32_t* expected = reference + i * 28;
     for (int k = 0; k < 9; ++k) {
       for (int c = 0; c < 3; ++c) {
-        EXPECT_EQ(Bits(r.sh_texture.pixels[i].coeffs[k][c]),
-                  expected[k * 3 + c])
+        ExpectSameAsReference(r.sh_texture.pixels[i].coeffs[k][c],
+                              expected[k * 3 + c])
             << "point " << i << " coeff " << k << " channel " << c;
       }
     }
-    EXPECT_EQ(Bits(r.environment_visibility_texture.pixel_data[i]),
-              expected[27])
+    ExpectSameAsReference(r.environment_visibility_texture.pixel_data[i],
+                          expected[27])
         << "point " << i;
   }
 }
