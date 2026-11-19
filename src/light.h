@@ -28,6 +28,29 @@ struct AreaSample {
 // Samples a point on the area light geometry.
 AreaSample SampleAreaLight(const Light& light, std::mt19937& rng);
 
+// True when a ranged point or spot light is farther than its range from the
+// shaded point, `dist` away.
+inline bool OutOfRange(const Light& light, float dist) {
+  return light.range > 0.f && dist > light.range;
+}
+
+// A spot light's cone factor for cos_l, the cosine of the angle between the
+// spot's direction and the direction to the shaded point (Light::ConeFalloff).
+inline float SpotConeFactor(const Light& light, float cos_l) {
+  const float cos_inner = light.cos_inner_cone;
+  const float cos_outer = light.cos_outer_cone;
+  const bool smoothstep = light.cone_falloff == Light::ConeFalloff::kSmoothstep;
+  if (smoothstep && cos_inner <= cos_outer) {
+    return cos_l >= cos_outer ? 1.0f : 0.0f;
+  }
+  float t = (cos_l - cos_outer) / (cos_inner - cos_outer);
+  t = std::clamp(t, 0.0f, 1.0f);
+  if (smoothstep) {
+    return t * t * (3.0f - 2.0f * t);
+  }
+  return t;
+}
+
 struct DirectionalLightIncoming {
   Eigen::Vector3f radiance;
   float cos_n;
@@ -89,7 +112,7 @@ inline PointLightIncoming PointLightIncomingRadiance(const Light& light,
 
   // Incoming radiance without visibility term.
   float cos_n = N.dot(L);
-  if (cos_n < 0.f) {
+  if (cos_n < 0.f || OutOfRange(light, dist)) {
     return PointLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
   return PointLightIncoming{light.intensity * light.color / dist_sq, L, cos_n};
@@ -133,10 +156,8 @@ inline SpotLightIncoming SpotLightIncomingRadiance(const Light& light,
   // Incoming radiance without visibility term.
   float cos_n = N.dot(L);
   float cos_l = light.direction.dot(-L);
-  float falloff = (cos_l - light.cos_outer_cone) /
-                  (light.cos_inner_cone - light.cos_outer_cone);
-  falloff = std::clamp(falloff, 0.0f, 1.0f);
-  if (cos_n < 0.f) {
+  float falloff = SpotConeFactor(light, cos_l);
+  if (cos_n < 0.f || OutOfRange(light, dist)) {
     return SpotLightIncoming{Eigen::Vector3f::Zero(), L, cos_n};
   }
   return SpotLightIncoming{light.intensity * light.color / dist_sq * falloff, L,

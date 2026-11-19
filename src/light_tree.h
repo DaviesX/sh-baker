@@ -22,6 +22,9 @@ namespace light_tree_internal {
 //   light emits).
 // - phi: Total power (flux) of the light(s) in the node.
 // - two_sided: True if the light emits from both sides.
+// - max_range: The largest Light::range of the light(s), or 0 if any of them is
+//   unranged. A shaded point farther than max_range from `bounds` gets zero
+//   importance.
 struct LightBounds {
   Eigen::AlignedBox3f bounds;
   Eigen::Vector3f axis = Eigen::Vector3f::UnitY();
@@ -29,14 +32,21 @@ struct LightBounds {
   float cos_theta_e = 1.0f;  // Spread of emission cone.
   float phi = 0.0f;          // Total flux.
   bool two_sided = false;
+  float max_range = 0.0f;  // 0: unbounded.
 
   Eigen::Vector3f Centroid() const { return bounds.center(); }
 };
 
-// Union two LightBounds.
+// Union two LightBounds. An empty side (phi 0) leaves the other side's range;
+// otherwise max_range is 0 if either side is 0, else the larger range.
 LightBounds Union(const LightBounds& a, const LightBounds& b);
 
-// Compute the importance of a LightBounds from a reference point.
+// True when lb is ranged (max_range > 0) and p is farther than max_range from
+// its bounds, with a small relative slack that keeps the test conservative.
+bool BeyondRange(const LightBounds& lb, const Eigen::Vector3f& p);
+
+// Compute the importance of a LightBounds from a reference point. It is 0
+// when max_range > 0 and p is farther than max_range from the bounds.
 // p: the reference point.
 // n: the normal at the reference point (can be zero for volumetric).
 float Importance(const LightBounds& lb, const Eigen::Vector3f& p,
@@ -79,6 +89,13 @@ class LightTree {
   void Build(const std::vector<Light>& lights);
 
   // Samples a light given a reference point and normal.
+  //
+  // Directional lights get a fixed share of the choice, n_dir / (n_dir + 1),
+  // and the BVH the rest, except where p is beyond the range of the BVH's
+  // root (light_tree_internal::BeyondRange): there the whole choice goes to
+  // the directional lights, or nothing is sampled if there are none. Pdf()
+  // applies the same per-point rule.
+  //
   // p: the shading point.
   // n: the shading normal.
   // u: a uniform random number in [0, 1).
@@ -125,6 +142,10 @@ class LightTree {
   }
 
  private:
+  // The probability of choosing the directional set at p, by the rule in
+  // Sample(). 0 with no directional lights.
+  float DirectionalShare(const Eigen::Vector3f& p) const;
+
   // Recursively builds the BVH.
   // Returns (node_index, LightBounds).
   std::pair<int, light_tree_internal::LightBounds> BuildBVH(

@@ -39,6 +39,18 @@ LightBounds Union(const LightBounds& a, const LightBounds& b) {
   // Union two-sided.
   result.two_sided = a.two_sided || b.two_sided;
 
+  // Union range: an empty side contributes nothing; an unranged side (0)
+  // makes the union unranged.
+  if (a.phi == 0.0f) {
+    result.max_range = b.max_range;
+  } else if (b.phi == 0.0f) {
+    result.max_range = a.max_range;
+  } else if (a.max_range == 0.0f || b.max_range == 0.0f) {
+    result.max_range = 0.0f;
+  } else {
+    result.max_range = std::max(a.max_range, b.max_range);
+  }
+
   // Union orientation cones.
   // We need to find a cone that bounds both cones.
   // This is a simplified approach: we compute the average axis and widen the
@@ -107,8 +119,24 @@ LightBounds Union(const LightBounds& a, const LightBounds& b) {
   return result;
 }
 
+bool BeyondRange(const LightBounds& lb, const Eigen::Vector3f& p) {
+  // The test is slightly conservative: OutOfRange() compares sqrt(|L|^2) with
+  // the range, and a squared comparison here could round the other way at the
+  // boundary, giving a light that still lights p zero probability (a biased
+  // estimate). A light within the slack is picked and then contributes
+  // nothing.
+  return lb.max_range > 0.0f &&
+         std::sqrt(lb.bounds.squaredExteriorDistance(p)) >
+             lb.max_range * (1.0f + 1e-5f);
+}
+
 float Importance(const LightBounds& lb, const Eigen::Vector3f& p,
                  const Eigen::Vector3f& n) {
+  // Beyond the range of every light in the node.
+  if (BeyondRange(lb, p)) {
+    return 0.0f;
+  }
+
   // Compute clamped squared distance to bounding box center.
   Eigen::Vector3f pc = lb.bounds.center();
   float d2 = (p - pc).squaredNorm();
@@ -173,6 +201,7 @@ LightBounds ComputeLightBounds(const Light& light) {
       lb.cos_theta_e = -1.0f;              // Full sphere emission.
       lb.phi = light.flux;
       lb.two_sided = true;
+      lb.max_range = std::max(light.range, 0.0f);
       break;
     }
     case Light::Type::Spot: {
@@ -183,6 +212,7 @@ LightBounds ComputeLightBounds(const Light& light) {
       lb.cos_theta_e = light.cos_outer_cone;
       lb.phi = light.flux;
       lb.two_sided = false;
+      lb.max_range = std::max(light.range, 0.0f);
       break;
     }
     case Light::Type::Directional: {
@@ -422,8 +452,11 @@ std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
     return std::nullopt;
   }
 
-  float p_directional = static_cast<float>(num_directional) /
-                        static_cast<float>(num_directional + (has_bvh ? 1 : 0));
+  float p_directional = DirectionalShare(p);
+  if (num_directional == 0 && p_directional > 0.0f) {
+    // The BVH is out of range here and there is nothing else to sample.
+    return std::nullopt;
+  }
 
   if (u < p_directional) {
     // Sample a directional light uniformly.
@@ -482,6 +515,25 @@ std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
   }
 }
 
+float LightTree::DirectionalShare(const Eigen::Vector3f& p) const {
+  const size_t num_directional = directional_lights_.size();
+  if (nodes_.empty()) {
+    return num_directional > 0 ? 1.0f : 0.0f;
+  }
+  // A ranged BVH that cannot reach p hands the whole choice to the directional
+  // lights. Unranged trees keep the fixed share, so their sampling is
+  // unchanged. Only the range test decides this, not the root's full
+  // Importance(): the orientation bound of a unioned cone is not always
+  // conservative (anti-parallel axes), and the traversal in Sample() and Pdf()
+  // checks the children, never the root, so a zero there must not drop a
+  // reachable light.
+  if (light_tree_internal::BeyondRange(nodes_[0].light_bounds, p)) {
+    return 1.0f;
+  }
+  return static_cast<float>(num_directional) /
+         static_cast<float>(num_directional + 1);
+}
+
 std::optional<SampledLight> LightTree::SampleUniform(float u) const {
   size_t total = NumLights();
   if (total == 0) {
@@ -511,8 +563,10 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
     return 0.0f;
   }
 
-  float p_directional = static_cast<float>(num_directional) /
-                        static_cast<float>(num_directional + (has_bvh ? 1 : 0));
+  float p_directional = DirectionalShare(p);
+  if (p_directional >= 1.0f && num_directional == 0) {
+    return 0.0f;
+  }
 
   // Check if this is a directional light.
   for (const Light* dir_light : directional_lights_) {
@@ -531,6 +585,9 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
   uint32_t bit_trail = it->second;
   int node_index = 0;
   float pmf = 1.0f - p_directional;  // Start with probability of choosing BVH.
+  if (pmf <= 0.0f) {
+    return 0.0f;
+  }
 
   while (true) {
     const LightBVHNode& node = nodes_[node_index];

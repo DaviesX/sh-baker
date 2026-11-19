@@ -49,6 +49,17 @@ struct Light {
   enum class Type { Point, Directional, Spot, Area };
   Type type;
 
+  // How a spot light's cone factor falls from the inner to the outer cone, as a
+  // function of t = clamp((cos theta - cos_outer_cone) / (cos_inner_cone -
+  // cos_outer_cone), 0, 1), where theta is the angle between the spot's
+  // direction and the direction to the shaded point.
+  //   kLinear: the factor is t. An inverted cone (cos_inner_cone <
+  //     cos_outer_cone) keeps this formula, negative denominator and all.
+  //   kSmoothstep: the factor is t^2 (3 - 2t).
+  // Smoothstep with cos_inner_cone <= cos_outer_cone gives a hard edge:
+  // 1 for cos theta >= cos_outer_cone, else 0.
+  enum class ConeFalloff { kLinear, kSmoothstep };
+
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
   Eigen::Vector3f direction = Eigen::Vector3f(0, 0, -1);
   Eigen::Vector3f color = Eigen::Vector3f::Ones();
@@ -56,6 +67,14 @@ struct Light {
 
   float cos_inner_cone = 1.0f;
   float cos_outer_cone = 0.70710678118654752440f;  // cos(pi/4)
+  ConeFalloff cone_falloff = ConeFalloff::kLinear;
+
+  // Point and spot lights: a shaded point farther than `range` from the light
+  // gets nothing from it, at the baked point and at every bounce. The light
+  // tree culls nodes whose bounds are out of their largest range (see
+  // LightBounds::max_range), so a light alone in its node is not picked there.
+  // 0 means no cutoff. Ignored for directional and area lights.
+  float range = 0.0f;
 
   // Area Light Parameters
   float area = 0.0f;
