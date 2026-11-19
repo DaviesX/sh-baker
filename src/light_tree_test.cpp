@@ -780,6 +780,56 @@ TEST(LightTreeTest, SampleAndPdfAgreeInAndOutOfRange) {
   }
 }
 
+// The root's union cone of two anti-parallel spots is not conservative (it
+// keeps one axis with a 90 degree spread), so the root's full importance can
+// be 0 at a point one of the spots lights. The directional share must then
+// stay fixed: only the range test may hand the whole choice to the sun.
+TEST(LightTreeTest, InRangeRootWithZeroOrientationImportanceKeepsTheShare) {
+  std::vector<Light> lights;
+  for (int i = 0; i < 2; ++i) {
+    Light spot;
+    spot.type = Light::Type::Spot;
+    spot.position = Eigen::Vector3f(10.0f * i, 0, 0);
+    spot.direction = Eigen::Vector3f(0, 0, i == 0 ? 1.0f : -1.0f);
+    spot.intensity = 100.0f;
+    spot.range = 100.0f;
+    spot.flux = Flux(spot);
+    lights.push_back(spot);
+  }
+  Light sun;
+  sun.type = Light::Type::Directional;
+  sun.direction = -Eigen::Vector3f::UnitZ();
+  sun.intensity = 1.0f;
+  sun.flux = Flux(sun);
+  lights.push_back(sun);
+  LightTree tree;
+  tree.Build(lights);
+
+  // Above the up spot and below the down spot, facing each.
+  const std::pair<Eigen::Vector3f, Eigen::Vector3f> cases[] = {
+      {Eigen::Vector3f(0, 0, 20), -Eigen::Vector3f::UnitZ()},
+      {Eigen::Vector3f(10, 0, -20), Eigen::Vector3f::UnitZ()},
+  };
+  for (int i = 0; i < 2; ++i) {
+    const auto& [p, n] = cases[i];
+    Ray ray;
+    ASSERT_GT(light_internal::SpotLightIncomingRadiance(lights[i], p, n, &ray)
+                  .radiance.x(),
+              0.0f);
+    EXPECT_GT(tree.Pdf(p, n, &lights[i]), 0.0f) << i;
+    EXPECT_EQ(tree.Pdf(p, n, &lights[2]), 0.5f) << i;
+    int picked = 0;
+    for (int k = 0; k < 1000; ++k) {
+      std::optional<SampledLight> s = tree.Sample(p, n, (k + 0.5f) / 1000.0f);
+      if (s && s->light == &lights[i]) {
+        ++picked;
+        EXPECT_FLOAT_EQ(s->pdf, tree.Pdf(p, n, s->light));
+      }
+    }
+    EXPECT_GT(picked, 0) << i;
+  }
+}
+
 TEST(LightTreeTest, OutOfRangeWithoutDirectionalSamplesNothing) {
   Light point;
   point.type = Light::Type::Point;

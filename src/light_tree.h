@@ -41,6 +41,10 @@ struct LightBounds {
 // otherwise max_range is 0 if either side is 0, else the larger range.
 LightBounds Union(const LightBounds& a, const LightBounds& b);
 
+// True when lb is ranged (max_range > 0) and p is farther than max_range from
+// its bounds, with a small relative slack that keeps the test conservative.
+bool BeyondRange(const LightBounds& lb, const Eigen::Vector3f& p);
+
 // Compute the importance of a LightBounds from a reference point. It is 0
 // when max_range > 0 and p is farther than max_range from the bounds.
 // p: the reference point.
@@ -87,9 +91,9 @@ class LightTree {
   // Samples a light given a reference point and normal.
   //
   // Directional lights get a fixed share of the choice, n_dir / (n_dir + 1),
-  // and the BVH the rest, except where the BVH's root is ranged
-  // (max_range > 0) and has zero importance at p: there the whole choice goes
-  // to the directional lights, or nothing is sampled if there are none. Pdf()
+  // and the BVH the rest, except where p is beyond the range of the BVH's
+  // root (light_tree_internal::BeyondRange): there the whole choice goes to
+  // the directional lights, or nothing is sampled if there are none. Pdf()
   // applies the same per-point rule.
   //
   // p: the shading point.
@@ -138,10 +142,9 @@ class LightTree {
   }
 
  private:
-  // The probability of choosing the directional set at (p, n), by the rule in
+  // The probability of choosing the directional set at p, by the rule in
   // Sample(). 0 with no directional lights.
-  float DirectionalShare(const Eigen::Vector3f& p,
-                         const Eigen::Vector3f& n) const;
+  float DirectionalShare(const Eigen::Vector3f& p) const;
 
   // Recursively builds the BVH.
   // Returns (node_index, LightBounds).

@@ -119,15 +119,21 @@ LightBounds Union(const LightBounds& a, const LightBounds& b) {
   return result;
 }
 
+bool BeyondRange(const LightBounds& lb, const Eigen::Vector3f& p) {
+  // The test is slightly conservative: OutOfRange() compares sqrt(|L|^2) with
+  // the range, and a squared comparison here could round the other way at the
+  // boundary, giving a light that still lights p zero probability (a biased
+  // estimate). A light within the slack is picked and then contributes
+  // nothing.
+  return lb.max_range > 0.0f &&
+         std::sqrt(lb.bounds.squaredExteriorDistance(p)) >
+             lb.max_range * (1.0f + 1e-5f);
+}
+
 float Importance(const LightBounds& lb, const Eigen::Vector3f& p,
                  const Eigen::Vector3f& n) {
-  // Beyond the range of every light in the node. The test is slightly
-  // conservative: OutOfRange() compares sqrt(|L|^2) with the range, and a
-  // squared comparison here could round the other way at the boundary, giving
-  // a light that still lights p zero probability (a biased estimate). A light
-  // within the slack is picked and then contributes nothing.
-  if (lb.max_range > 0.0f && std::sqrt(lb.bounds.squaredExteriorDistance(p)) >
-                                 lb.max_range * (1.0f + 1e-5f)) {
+  // Beyond the range of every light in the node.
+  if (BeyondRange(lb, p)) {
     return 0.0f;
   }
 
@@ -446,7 +452,7 @@ std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
     return std::nullopt;
   }
 
-  float p_directional = DirectionalShare(p, n);
+  float p_directional = DirectionalShare(p);
   if (num_directional == 0 && p_directional > 0.0f) {
     // The BVH is out of range here and there is nothing else to sample.
     return std::nullopt;
@@ -509,18 +515,19 @@ std::optional<SampledLight> LightTree::Sample(const Eigen::Vector3f& p,
   }
 }
 
-float LightTree::DirectionalShare(const Eigen::Vector3f& p,
-                                  const Eigen::Vector3f& n) const {
+float LightTree::DirectionalShare(const Eigen::Vector3f& p) const {
   const size_t num_directional = directional_lights_.size();
   if (nodes_.empty()) {
     return num_directional > 0 ? 1.0f : 0.0f;
   }
   // A ranged BVH that cannot reach p hands the whole choice to the directional
   // lights. Unranged trees keep the fixed share, so their sampling is
-  // unchanged.
-  const light_tree_internal::LightBounds& root = nodes_[0].light_bounds;
-  if (root.max_range > 0.0f &&
-      light_tree_internal::Importance(root, p, n) == 0.0f) {
+  // unchanged. Only the range test decides this, not the root's full
+  // Importance(): the orientation bound of a unioned cone is not always
+  // conservative (anti-parallel axes), and the traversal in Sample() and Pdf()
+  // checks the children, never the root, so a zero there must not drop a
+  // reachable light.
+  if (light_tree_internal::BeyondRange(nodes_[0].light_bounds, p)) {
     return 1.0f;
   }
   return static_cast<float>(num_directional) /
@@ -556,7 +563,7 @@ float LightTree::Pdf(const Eigen::Vector3f& p, const Eigen::Vector3f& n,
     return 0.0f;
   }
 
-  float p_directional = DirectionalShare(p, n);
+  float p_directional = DirectionalShare(p);
   if (p_directional >= 1.0f && num_directional == 0) {
     return 0.0f;
   }
