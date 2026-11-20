@@ -840,8 +840,16 @@ uint32_t FloatBits(float f) {
 
 // Bit patterns of the bake of BuildDefaultsScene() at DefaultsPoints() with
 // DefaultsConfig(), recorded from a Release build at 046ff2e, before
-// SurfacePoint::full_sphere existed. Point 3 is skipped (material_id -1). Never
-// regenerate these: they pin the default bake's output.
+// SurfacePoint::full_sphere existed. Point 3 is skipped (material_id -1). They
+// pin the default bake's output. Never regenerate them from a later commit.
+//
+// The bits are those of one host's Release build (-march=native, -flto, -O3,
+// GCC 15.2), so ExpectMatchesReference compares them bit for bit only when
+// configured with -DSH_BAKER_BIT_EXACT_TESTS=ON on that host and toolchain;
+// otherwise within a tolerance. To pin bits on another CPU or toolchain,
+// re-record them from a Release build of 046ff2e itself (this test block and
+// the definition copied onto it, printing FloatBits of each value), then check
+// that this commit's build matches them.
 struct DefaultsReference {
   uint32_t coeffs[27];  // 9 coefficients x RGB.
   uint32_t irradiance[3];
@@ -966,16 +974,17 @@ constexpr DefaultsReference kDefaultsIndirectOnly[] = {
      0x3f200000},
 };
 
-// Compares a bake with a reference: bit for bit in a Release build, the build
-// the reference was recorded in, and within a small tolerance otherwise, where
-// other compiler flags (no -march=native, so no FMA contraction) round
-// differently.
+// Compares a bake with a reference: bit for bit when SH_BAKER_TEST_BIT_EXACT is
+// defined (a Release build with SH_BAKER_BIT_EXACT_TESTS=ON, on the host and
+// toolchain the reference was recorded with), and within a small tolerance
+// otherwise, where other compiler flags or CPUs (no -march=native, so no FMA
+// contraction, or another vector width) round differently.
 void ExpectMatchesReference(const BakeResult& r,
                             const DefaultsReference (&ref)[8]) {
   ASSERT_EQ(r.sh_texture.pixels.size(), 8u);
   auto expect = [](float got, uint32_t want_bits, const char* what, size_t i,
                    int k) {
-#ifdef SH_BAKER_TEST_RELEASE_BUILD
+#ifdef SH_BAKER_TEST_BIT_EXACT
     EXPECT_EQ(FloatBits(got), want_bits)
         << what << " of point " << i << ", element " << k << ": got " << got;
 #else
