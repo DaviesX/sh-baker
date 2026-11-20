@@ -55,7 +55,8 @@ Arguments:
 - `--input`: Path to the input glTF file.
 - `--output`: Output directory.
 - `--width`, `--height`: Lightmap resolution.
-- `--samples`: Rays per texel.
+- `--samples`: Rays per texel (the maximum while adaptive sampling is on).
+- `--confidence_threshold`: Adaptive-sampling stop tolerance (default 0.01). After a 64-sample warm-up, a texel stops once the 3-sigma standard error of its L0 luminance falls below this fraction of its mean (or an absolute floor of 1e-4). `<= 0` disables adaptive stopping, so every texel takes exactly `--samples` rays.
 - `--bounces`: Light bounces (default 3).
 - `--indirect_only`: Skip direct lighting from punctual and area lights at baked points. Both light types still contribute to bounces.
 - `--dilation`: Dilation passes (default 0).
@@ -132,6 +133,7 @@ q3map2 links `libsh_baker.so` and includes headers from `src/` to bake its own l
   - Add every surface before creating lights and building the BVH; a surface added after an area light aborts.
 - **Headers.** `loader_q3map2.h` and `baker.h` need only `src` and Eigen on the include path, and they compile under `-fno-exceptions -fno-rtti`. `scene.h` declares Embree's two handle types itself.
 - **Baking.** `BakeSHLightMap` bakes any list of points without rasterizing. Lay N points out as an N x 1 buffer (`RasterConfig` width N, height 1). Each point needs a position, a unit normal, a unit tangent perpendicular to it with `w` of +1 or -1, and `material_id >= 0`. Result i belongs to point i.
+  - **Sample count.** `BakeConfig::samples` is a maximum: with the default `confidence_threshold` (0.01) a point may stop adaptively after 64 rays, and a point whose per-sample L0 does not vary (one lit only by unshadowed point lights, say) always stops there. Set `confidence_threshold <= 0` to take exactly `samples` rays at every valid point, for a fixed cost per quality preset.
   - **Full-sphere points.** `SurfacePoint::full_sphere` (default false) makes a point a probe in open space, such as one of q3map2's light-grid points. Its SH is the projection of the radiance arriving from the whole sphere, ∫ L_i(ω) Y(ω) dω, with no cosine. Its rays are uniform over the sphere in world space, weighted 4π instead of 2π, and next-event estimation counts light from every direction, giving the light tree a zero normal. Its normal and tangent are not used, so they may be zero; only `position` and `material_id >= 0` matter. Only the baked point changes: the bounces of its paths shade surfaces as usual. Its `irradiance` has no meaning and should not be used, and its environment visibility is the fraction of rays over the whole sphere that escape. The flag works the same with `indirect_only`, and points of both kinds bake in one call without changing each other's results.
 - **Progress and cancel.** `BakeConfig` takes optional callbacks. Progress and cancel callbacks run on bake worker threads, so keep them short: they must not call back into sh-baker, run TBB work, or block waiting on the bake. `done_fn` runs once on the calling thread after the bake, including empty or cancelled bakes. The library writes no progress to stdout itself; `sh_baker_main` prints `[Baking] N%` through `progress_fn`.
   - `progress_fn(done, total)` reports points finished, counting points skipped as invalid. Calls never overlap, `done` strictly increases, and there is at most one call per whole percent. A bake of at least one point that is not cancelled ends with `(total, total)`.

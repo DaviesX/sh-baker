@@ -68,6 +68,47 @@ TEST(SensorTest, MaxSamples) {
   EXPECT_EQ(sensor.sample_count, 100);
 }
 
+// Takes rays until SampleRay() stops (with a constant, zero-variance sample) or
+// `cap` samples are taken, and returns the sample count.
+unsigned RunToStop(Sensor* sensor, unsigned cap) {
+  std::mt19937 rng(42);
+  const SHCoeffs const_val(1.0f);
+  while (sensor->sample_count < cap && SampleRay(*sensor, rng).has_value()) {
+    AddSample(const_val, sensor);
+  }
+  return sensor->sample_count;
+}
+
+SurfacePoint UpPoint() {
+  SurfacePoint sp;
+  sp.position = Eigen::Vector3f(0, 0, 0);
+  sp.normal = Eigen::Vector3f(0, 0, 1);
+  sp.tangent = Eigen::Vector4f(1, 0, 0, 1);
+  return sp;
+}
+
+// The default threshold stops a zero-variance sensor right after the warm-up
+// (kMinSamples = 64), however many samples it may take.
+TEST(SensorTest, DefaultThresholdStopsZeroVarianceAtWarmUp) {
+  Sensor sensor(UpPoint(), 4096, 0.01f);
+  EXPECT_EQ(RunToStop(&sensor, 10000), 64u);
+}
+
+// A threshold of 0 disables the adaptive stop: even a zero-variance sensor
+// takes exactly max_samples rays.
+TEST(SensorTest, ZeroThresholdTakesEveryRay) {
+  Sensor sensor(UpPoint(), 1000, 0.0f);
+  EXPECT_EQ(RunToStop(&sensor, 10000), 1000u);
+  std::mt19937 rng(1);
+  EXPECT_FALSE(SampleRay(sensor, rng).has_value());
+}
+
+// So does a negative threshold.
+TEST(SensorTest, NegativeThresholdTakesEveryRay) {
+  Sensor sensor(UpPoint(), 1000, -1.0f);
+  EXPECT_EQ(RunToStop(&sensor, 10000), 1000u);
+}
+
 TEST(SensorTest, SampleSphereUniformCoversTheSphere) {
   std::mt19937 rng(42);
   constexpr int kN = 20000;

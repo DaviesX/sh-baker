@@ -21,8 +21,12 @@ struct BakeConfig {
   // Max per-sample indirect luminance; over-bright samples are scaled down to
   // suppress fireflies. <= 0 disables (unbiased).
   float firefly_clamp = 0.0f;
-  // Adaptive-sampling stop tolerance: stop a texel once the 3-sigma SEM of its
-  // luminance falls below confidence_threshold * mean.
+  // Adaptive-sampling stop tolerance: after a 64-sample warm-up, stop a texel
+  // once the 3-sigma SEM of its L0 luminance falls below
+  // max(confidence_threshold * mean, 1e-4). <= 0 disables adaptive stopping:
+  // every valid point then takes exactly `samples` rays (a fixed, predictable
+  // cost, and no early stop for zero-variance points such as ones lit only by
+  // unshadowed point lights).
   float confidence_threshold = 0.01f;
 
   // Optional progress report: called with (points finished, total points),
