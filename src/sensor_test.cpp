@@ -2,6 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <optional>
+#include <random>
+
 #include "glog/logging.h"
 #include "rasterizer.h"
 
@@ -62,6 +66,60 @@ TEST(SensorTest, MaxSamples) {
   auto ray = SampleRay(sensor, rng);
   EXPECT_FALSE(ray.has_value());
   EXPECT_EQ(sensor.sample_count, 100);
+}
+
+TEST(SensorTest, SampleSphereUniformCoversTheSphere) {
+  std::mt19937 rng(42);
+  constexpr int kN = 20000;
+  Eigen::Vector3f mean = Eigen::Vector3f::Zero();
+  int below = 0;
+  for (int i = 0; i < kN; ++i) {
+    Eigen::Vector3f v = sensor_internal::SampleSphereUniform(rng);
+    EXPECT_NEAR(v.norm(), 1.0f, 1e-4f);
+    mean += v;
+    if (v.z() < 0.0f) ++below;
+  }
+  mean /= float(kN);
+  // Uniform: zero mean (each component has variance 1/3, so the mean's sigma
+  // is 0.004) and half the samples below the equator (sigma 0.0035).
+  EXPECT_LT(mean.norm(), 0.02f);
+  EXPECT_NEAR(below / float(kN), 0.5f, 0.02f);
+}
+
+// A full-sphere point samples world-space directions over the whole sphere,
+// with a zero normal and tangent, and weighs each by 4 pi; a surface point
+// keeps the hemisphere and 2 pi.
+TEST(SensorTest, FullSphereRaysIgnoreTheFrame) {
+  SurfacePoint sp;
+  sp.position = Eigen::Vector3f(1, 2, 3);
+  sp.material_id = 0;
+  sp.full_sphere = true;
+  Sensor sensor(sp, 1000, 0.01f);
+  EXPECT_FLOAT_EQ(SampleRayInvPdf(sensor), 4.0f * float(M_PI));
+
+  std::mt19937 rng(7);
+  std::mt19937 reference_rng(7);
+  int below = 0;
+  for (int i = 0; i < 200; ++i) {
+    std::optional<Ray> ray = SampleRay(sensor, rng);
+    ASSERT_TRUE(ray.has_value());
+    EXPECT_TRUE(ray->direction.allFinite());
+    EXPECT_NEAR(ray->direction.norm(), 1.0f, 1e-4f);
+    EXPECT_EQ(ray->origin, sp.position);
+    // Exactly the world-space sphere sample, with the same draws.
+    EXPECT_EQ(ray->direction,
+              sensor_internal::SampleSphereUniform(reference_rng));
+    if (ray->direction.z() < 0.0f) ++below;
+  }
+  EXPECT_GT(below, 50);
+  EXPECT_LT(below, 150);
+
+  SurfacePoint surface = sp;
+  surface.full_sphere = false;
+  surface.normal = Eigen::Vector3f(0, 0, 1);
+  surface.tangent = Eigen::Vector4f(1, 0, 0, 1);
+  EXPECT_EQ(SampleRayInvPdf(Sensor(surface, 1000, 0.01f)),
+            static_cast<float>(2.0f * M_PI));
 }
 
 }  // namespace sh_baker

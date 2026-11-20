@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>  // For M_PI
+#include <functional>
 
 #include "colorspace.h"
 #include "light_tree.h"
@@ -773,6 +774,121 @@ TEST_F(TransmittanceTest, ManyCrossingsCountAsBlocked) {
   // At the limit the walk still passes.
   cards.resize(light_internal::kMaxTransmittanceCrossings);
   EXPECT_EQ(Transmittance(cards, DownRay()), 1.0f);
+}
+
+// --- Full-sphere points ---
+
+// Light from below the surface (here, at 120 degrees from N) is rejected,
+// unless the point is a full-sphere point, which takes the same radiance as a
+// point facing the light would. The shadow ray is the same either way.
+TEST(LightFullSphereTest, IncomingRadianceCountsLightFromBelow) {
+  const Eigen::Vector3f P(0, 0, 0);
+  const Eigen::Vector3f N(0, 0, 1);
+  const Eigen::Vector3f to_light =
+      Eigen::Vector3f(std::sqrt(3.0f) / 2.0f, 0, -0.5f);  // cos_n = -0.5.
+  const float dist = 4.0f;
+
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = P + dist * to_light;
+  point.intensity = 32.0f;
+  point.flux = Flux(point);
+
+  Light spot = point;
+  spot.type = Light::Type::Spot;
+  spot.direction = -to_light;  // On axis.
+  spot.flux = Flux(spot);
+
+  Light sun;
+  sun.type = Light::Type::Directional;
+  sun.direction = -to_light;
+  sun.intensity = 2.0f;
+
+  light_internal::AreaSample area;
+  area.point = P + dist * to_light;
+  area.normal = -to_light;  // Facing P.
+  area.radiance = Eigen::Vector3f(5, 5, 5);
+  area.pdf = 1.0f;
+
+  struct Case {
+    const char* name;
+    std::function<Eigen::Vector3f(bool, Ray*)> radiance;
+    float expected;
+  };
+  const Case cases[] = {
+      {"point",
+       [&](bool fs, Ray* ray) {
+         return light_internal::PointLightIncomingRadiance(point, P, N, ray, fs)
+             .radiance;
+       },
+       32.0f / (dist * dist)},
+      {"spot",
+       [&](bool fs, Ray* ray) {
+         return light_internal::SpotLightIncomingRadiance(spot, P, N, ray, fs)
+             .radiance;
+       },
+       32.0f / (dist * dist)},
+      {"directional",
+       [&](bool fs, Ray* ray) {
+         return light_internal::DirectionalLightIncomingRadiance(sun, P, N, ray,
+                                                                 fs)
+             .radiance;
+       },
+       2.0f},
+      {"area",
+       [&](bool fs, Ray* ray) {
+         return light_internal::AreaLightIncomingRadiance(area, P, N, ray, fs)
+             .radiance;
+       },
+       5.0f / (dist * dist)},
+  };
+  for (const Case& c : cases) {
+    Ray surface_ray, probe_ray;
+    EXPECT_EQ(c.radiance(false, &surface_ray), Eigen::Vector3f::Zero())
+        << c.name;
+    const Eigen::Vector3f got = c.radiance(true, &probe_ray);
+    EXPECT_NEAR(got.x(), c.expected, 1e-5f * c.expected) << c.name;
+    EXPECT_TRUE(surface_ray.direction.isApprox(probe_ray.direction)) << c.name;
+    EXPECT_TRUE(probe_ray.direction.isApprox(to_light, 1e-5f)) << c.name;
+  }
+}
+
+// A full-sphere point still applies the emitter's own cosine: an area sample
+// seen edge-on gives nothing, and one at 60 degrees gives half.
+TEST(LightFullSphereTest, AreaLightKeepsEmitterCosine) {
+  const Eigen::Vector3f P(0, 0, 0);
+  light_internal::AreaSample area;
+  area.point = Eigen::Vector3f(0, 0, 2);
+  area.radiance = Eigen::Vector3f(4, 4, 4);
+  area.pdf = 1.0f;
+  Ray ray;
+
+  area.normal = Eigen::Vector3f(1, 0, 0);  // Edge-on to P.
+  EXPECT_EQ(light_internal::AreaLightIncomingRadiance(
+                area, P, Eigen::Vector3f::Zero(), &ray, /*full_sphere=*/true)
+                .radiance,
+            Eigen::Vector3f::Zero());
+
+  area.normal = Eigen::Vector3f(std::sqrt(3.0f) / 2.0f, 0, -0.5f);
+  EXPECT_NEAR(light_internal::AreaLightIncomingRadiance(
+                  area, P, Eigen::Vector3f::Zero(), &ray, /*full_sphere=*/true)
+                  .radiance.x(),
+              4.0f * 0.5f / 4.0f, 1e-5f);
+}
+
+// The bounce path's *LightRadiance() functions, which never pass full_sphere,
+// still reject light from below.
+TEST(LightFullSphereTest, BounceShadingStillRejectsLightFromBelow) {
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = Eigen::Vector3f(0, 0, -2);
+  point.intensity = 10.0f;
+  Ray ray;
+  auto brdf = [](const Eigen::Vector3f&) { return Eigen::Vector3f::Ones(); };
+  EXPECT_EQ(
+      light_internal::PointLightRadiance(point, Eigen::Vector3f::Zero(),
+                                         Eigen::Vector3f(0, 0, 1), brdf, &ray),
+      Eigen::Vector3f::Zero());
 }
 
 }  // namespace

@@ -312,10 +312,15 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
                                     const Eigen::Vector3f& hit_point,
                                     const Eigen::Vector3f& hit_point_normal,
                                     unsigned num_samples, std::mt19937& rng,
-                                    SHCoeffs* accumulator) {
+                                    SHCoeffs* accumulator, bool full_sphere) {
   if (!light_tree || light_tree->Empty()) return;
 
   std::uniform_real_distribution<float> u_dist(0.0f, 1.0f);
+
+  // The normal light selection weighs by; zero (no incident-angle term) for a
+  // full-sphere point.
+  const Eigen::Vector3f selection_normal =
+      full_sphere ? Eigen::Vector3f::Zero() : hit_point_normal;
 
   for (unsigned i = 0; i < num_samples; ++i) {
     float u = u_dist(rng);
@@ -323,7 +328,7 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
     std::optional<SampledLight> sampled_light = light_tree->SampleUniform(u);
 #else
     std::optional<SampledLight> sampled_light =
-        light_tree->Sample(hit_point, hit_point_normal, u);
+        light_tree->Sample(hit_point, selection_normal, u);
 #endif
 
     if (!sampled_light || sampled_light->pdf <= 0.0f) continue;
@@ -337,19 +342,22 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
       case Light::Type::Directional: {
         light_internal::DirectionalLightIncoming incoming =
             light_internal::DirectionalLightIncomingRadiance(
-                light, hit_point, hit_point_normal, &visibility_ray);
+                light, hit_point, hit_point_normal, &visibility_ray,
+                full_sphere);
         radiance = incoming.radiance;
         break;
       }
       case Light::Type::Point: {
         radiance = light_internal::PointLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
+                       light, hit_point, hit_point_normal, &visibility_ray,
+                       full_sphere)
                        .radiance;
         break;
       }
       case Light::Type::Spot: {
         radiance = light_internal::SpotLightIncomingRadiance(
-                       light, hit_point, hit_point_normal, &visibility_ray)
+                       light, hit_point, hit_point_normal, &visibility_ray,
+                       full_sphere)
                        .radiance;
         break;
       }
@@ -357,7 +365,8 @@ void AccumulateIncomingLightSamples(const LightTree* light_tree,
         light_internal::AreaSample sample =
             light_internal::SampleAreaLight(light, rng);
         radiance = light_internal::AreaLightIncomingRadiance(
-                       sample, hit_point, hit_point_normal, &visibility_ray)
+                       sample, hit_point, hit_point_normal, &visibility_ray,
+                       full_sphere)
                        .radiance;
         area_sample_pdf = sample.pdf;
         break;

@@ -14,9 +14,9 @@ namespace sh_baker {
 // versioning: callers (q3map2) must be rebuilt against these headers whenever
 // libsh_baker.so moves to a new commit.
 struct BakeConfig {
-  int samples = 128;          // Rays per texel
-  int bounces = 5;            // Max path depth
-  int num_light_samples = 1;  // Number of light samples for NEE
+  int samples = 128;           // Rays per texel
+  int bounces = 5;             // Max path depth
+  int num_light_samples = 1;   // Number of light samples for NEE
   bool indirect_only = false;  // Skip direct lighting at baked points.
   // Max per-sample indirect luminance; over-bright samples are scaled down to
   // suppress fireflies. <= 0 disables (unbiased).
@@ -32,20 +32,21 @@ struct BakeConfig {
   // is not cancelled ends with (total, total). Not called for zero points.
   std::function<void(size_t done, size_t total)> progress_fn;
 
-  // Optional cancel poll: called before each point in the bake loop. Polls never overlap, but may come from
-  // different worker threads, so the callback need not be thread-safe. Once a
-  // poll returns true there are no more: no further point starts, points in
-  // progress finish, and the bake returns with BakeResult::cancelled set.
+  // Optional cancel poll: called before each point in the bake loop. Polls
+  // never overlap, but may come from different worker threads, so the callback
+  // need not be thread-safe. Once a poll returns true there are no more: no
+  // further point starts, points in progress finish, and the bake returns with
+  // BakeResult::cancelled set.
   std::function<bool()> cancel_fn;
 
   // Called once on the calling thread after the bake finishes, including for
   // empty or cancelled bakes, before BakeSHLightMap returns.
   std::function<void()> done_fn;
 
-  // The progress and cancel callbacks must be short, and must not call back into sh-baker, run
-  // TBB work, or block waiting on the bake: they run on bake worker threads,
-  // and the progress callback runs under the bake's reporting lock. Either may
-  // be left empty. done_fn may also be left empty.
+  // The progress and cancel callbacks must be short, and must not call back
+  // into sh-baker, run TBB work, or block waiting on the bake: they run on bake
+  // worker threads, and the progress callback runs under the bake's reporting
+  // lock. Either may be left empty. done_fn may also be left empty.
 };
 
 struct BakeResult {
@@ -65,7 +66,10 @@ struct BakeResult {
 // N, height 1, supersample_scale 1). Each point supplies its position, a unit
 // normal, a unit tangent perpendicular to the normal with w of +1 or -1 (the
 // tangent only orients the sampling hemisphere, and w = 0 would flatten it),
-// and material_id >= 0; a point with material_id < 0 is skipped. Result i
+// and material_id >= 0; a point with material_id < 0 is skipped. A point with
+// SurfacePoint::full_sphere set is a probe in open space instead: it needs only
+// a position and material_id >= 0, its SH is the projection of the radiance
+// arriving from the whole sphere, and its irradiance has no meaning. Result i
 // belongs to point i, and a skipped point keeps the not-baked marker
 // (SHCoeffs(-1), environment visibility -1). One call builds the BVH and the
 // light trees once for all its points.

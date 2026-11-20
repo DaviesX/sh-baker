@@ -1,5 +1,6 @@
 #include "sensor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <random>
@@ -18,6 +19,17 @@ Eigen::Vector3f SampleHemisphereUniform(std::mt19937& rng) {
   float r = std::sqrt(1.0f - u1 * u1);
   float phi = 2.0f * M_PI * u2;
   return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), u1);
+}
+
+Eigen::Vector3f SampleSphereUniform(std::mt19937& rng) {
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  float u1 = dist(rng);
+  float u2 = dist(rng);
+
+  float z = 1.0f - 2.0f * u1;
+  float r = std::sqrt(std::max(0.0f, 1.0f - z * z));
+  float phi = 2.0f * M_PI * u2;
+  return Eigen::Vector3f(r * std::cos(phi), r * std::sin(phi), z);
 }
 
 }  // namespace sensor_internal
@@ -86,6 +98,12 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
   ray.tfar = 1e4f;
   ray.origin = sensor.sp.position;
 
+  if (sensor.sp.full_sphere) {
+    // World space: a full-sphere point has no frame to orient.
+    ray.direction = sensor_internal::SampleSphereUniform(rng);
+    return ray;
+  }
+
   Eigen::Vector3f dir_local = sensor_internal::SampleHemisphereUniform(rng);
 
   // Transform to World
@@ -99,6 +117,13 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
                   bitangent * dir_local.y() + sensor.sp.normal * dir_local.z();
 
   return ray;
+}
+
+float SampleRayInvPdf(const Sensor& sensor) {
+  // Spelled as the bake always computed 2 pi (double, then float), so the
+  // default weight keeps its bits.
+  return sensor.sp.full_sphere ? static_cast<float>(4.0f * M_PI)
+                               : static_cast<float>(2.0f * M_PI);
 }
 
 }  // namespace sh_baker

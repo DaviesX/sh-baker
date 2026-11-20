@@ -196,6 +196,18 @@ target_link_libraries(sh_baker_test PRIVATE
     sh_baker
     GTest::gtest_main
 )
+# BakerDefaultsTest compares the default bake with recorded references. Its bit
+# patterns hold only for the Release build (-march=native, -flto, -O3) of the
+# machine and toolchain they were recorded on, so the bit-for-bit comparison is
+# opt-in; otherwise it compares within a tolerance. See the references in
+# src/baker_test.cpp for how to re-record them.
+option(SH_BAKER_BIT_EXACT_TESTS
+    "Compare BakerDefaultsTest bit for bit in Release (only on the recording host and toolchain)"
+    OFF)
+if(SH_BAKER_BIT_EXACT_TESTS)
+  target_compile_definitions(sh_baker_test PRIVATE
+      $<$<CONFIG:Release>:SH_BAKER_TEST_BIT_EXACT>)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)
