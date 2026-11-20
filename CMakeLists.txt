@@ -196,6 +196,11 @@ target_link_libraries(sh_baker_test PRIVATE
     sh_baker
     GTest::gtest_main
 )
+# Tests that pin bake output bit for bit (BakerDefaultsTest) do so only in the
+# Release build their references were recorded in; other builds round
+# differently and compare within a tolerance.
+target_compile_definitions(sh_baker_test PRIVATE
+    $<$<CONFIG:Release>:SH_BAKER_TEST_RELEASE_BUILD>)
 
 include(GoogleTest)
 gtest_discover_tests(sh_baker_test)

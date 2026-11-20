@@ -23,6 +23,7 @@ struct SHCoeffs {
                                Eigen::Vector3f::Zero()};
 
   // Irradiance is the integral of the incident radiance over the hemisphere.
+  // It has no meaning for a full-sphere point (SurfacePoint::full_sphere).
   Eigen::Vector3f irradiance = Eigen::Vector3f::Zero();
 
   // Scalar multiplication (scaling brightness).

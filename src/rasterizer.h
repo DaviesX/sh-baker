@@ -15,11 +15,27 @@ struct RasterConfig {
   int supersample_scale = 1;
 };
 
+// A point to bake. By default it is a point on a surface: BakeSHLightMap
+// samples the hemisphere around `normal`, oriented by `tangent`.
 struct SurfacePoint {
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
   Eigen::Vector3f normal = Eigen::Vector3f::Zero();
   Eigen::Vector4f tangent = Eigen::Vector4f::Zero();
   int32_t material_id = -1;  // Invalid if < 0.
+  // A probe in open space instead of a surface point, such as one of q3map2's
+  // light-grid points. Its SH is the projection of the incident radiance over
+  // the whole sphere, the integral of L_i(w) Y(w) dw, with no cosine:
+  //   - its sample rays are uniform over the sphere in world space, each
+  //     weighted 4 pi instead of 2 pi;
+  //   - next-event estimation passes the light tree a zero normal and counts
+  //     light from every direction;
+  //   - `normal` and `tangent` orient nothing, so a zero tangent is fine;
+  //   - the bounces of its paths shade surfaces exactly as for any point.
+  // Its SHCoeffs::irradiance still accumulates max(0, normal . w) and has no
+  // meaning; callers must not use it. Its environment visibility is the
+  // fraction of first rays, over the whole sphere, that escape the scene.
+  // material_id must still be >= 0 for the point to be baked.
+  bool full_sphere = false;
 };
 
 // Rasterizes the scene UVs into a buffer of SurfacePoints.

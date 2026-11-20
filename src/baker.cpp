@@ -160,8 +160,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
   LightTree light_tree;
   light_tree.Build(scene.lights);
 
-  float inv_pdf_uniform = 2.0f * M_PI;
-
   const size_t total_pixels = surface_points.size();
   BakeObserver bake_observer(config, total_pixels);
 
@@ -190,6 +188,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
                                   // deterministic but different per pixel
 
           Sensor sensor(sp, config.samples, config.confidence_threshold);
+          // 2 pi for a surface point, 4 pi for a full-sphere point.
+          const float inv_pdf_uniform = SampleRayInvPdf(sensor);
 
           float visibility_accum = 0.0f;
 
@@ -212,7 +212,8 @@ BakeResult BakeSHLightMap(const Scene& scene,
             if (!config.indirect_only) {
               AccumulateIncomingLightSamples(
                   &light_tree, rtc_scene, scene.materials, sp.position,
-                  sp.normal, config.num_light_samples, rng, &sample_sh_accum);
+                  sp.normal, config.num_light_samples, rng, &sample_sh_accum,
+                  sp.full_sphere);
             }
 
             // Indirect lighting.
