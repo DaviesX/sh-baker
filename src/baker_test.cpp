@@ -1123,6 +1123,56 @@ TEST(BakerFullSphereTest, ProbeBetweenOpposedPointLights) {
   EXPECT_NEAR(sh.coeffs[0].z(), 2.0f * a * 0.282095f, 1e-3f * a);
 }
 
+// With confidence_threshold 0, a point whose per-sample L0 is constant takes
+// exactly `samples` rays instead of stopping after the 64-sample warm-up. The
+// probe sees one unshadowed point light (its next-event sample is the same
+// every time) and a material-less floor that returns exactly 0, so every
+// sample is identical. Its environment visibility, escaped rays / rays taken,
+// shows the ray count: with 97 rays (prime) and some but not all rays
+// escaping, it is a multiple of 1/97 and not of 1/64.
+TEST(BakerFullSphereTest, ZeroThresholdTakesEverySampleAtConstantPoint) {
+  Scene scene;
+  scene.materials.push_back(BlackMaterial());
+  AddQ3Map2Surface(RectXY(-1000, 1000, -1000, 1000, 0.0f, /*faces_up=*/true,
+                          /*material_id=*/-1),
+                   &scene);
+  Light point;
+  point.type = Light::Type::Point;
+  point.position = Eigen::Vector3f(0, 0, 3);
+  point.color = Eigen::Vector3f(1, 1, 1);
+  point.intensity = 10.0f;
+  point.flux = Flux(point);
+  scene.lights.push_back(point);
+
+  constexpr int kSamples = 97;
+  BakeConfig config;
+  config.samples = kSamples;
+  config.bounces = 1;
+  const std::vector<SurfacePoint> probe = {ProbeAt(Eigen::Vector3f(0, 0, 1))};
+
+  // Distance of v * n from the nearest integer.
+  auto off_grid = [](float v, int n) {
+    return std::abs(v * n - std::round(v * n));
+  };
+
+  // Default threshold: stops at the warm-up.
+  const float v_default = BakeWith(scene, probe, config)
+                              .environment_visibility_texture.pixel_data[0];
+  EXPECT_GT(v_default, 0.0f);
+  EXPECT_LT(v_default, 1.0f);
+  EXPECT_LT(off_grid(v_default, 64), 1e-4f) << v_default;
+
+  for (float threshold : {0.0f, -1.0f}) {
+    config.confidence_threshold = threshold;
+    const float v = BakeWith(scene, probe, config)
+                        .environment_visibility_texture.pixel_data[0];
+    EXPECT_GT(v, 0.0f) << threshold;
+    EXPECT_LT(v, 1.0f) << threshold;
+    EXPECT_LT(off_grid(v, kSamples), 1e-4f) << threshold << ": " << v;
+    EXPECT_GT(off_grid(v, 64), 1e-3f) << threshold << ": " << v;
+  }
+}
+
 // A sun exactly edge-on to the probe's normal field still adds its full
 // projection E Y(w); a surface point with that normal gets nothing from it.
 // The light tree picks the only light with pdf 1, so there is no noise.

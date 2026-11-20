@@ -31,6 +31,7 @@ struct Sensor {
 
   const SurfacePoint sp;
   const unsigned max_samples;
+  // Adaptive-stop tolerance (see SampleRay()); <= 0 disables the adaptive stop.
   const float confidence_threshold;
 
   SHCoeffs sh_coeffs_sum;
@@ -46,7 +47,9 @@ void AddSample(const SHCoeffs& sample, Sensor* sensor);
 SHCoeffs GetEstimation(const Sensor& sensor);
 
 // Sample a ray from the sensor if we need more samples (sample count <
-// max_samples or confidence threshold not met).
+// max_samples and, when confidence_threshold > 0, the adaptive stop has not
+// fired). A confidence_threshold <= 0 disables the adaptive stop, so the
+// sensor takes exactly max_samples rays.
 // TODO: We will perform uniform sampling on the hemisphere for now.
 // A full-sphere point (SurfacePoint::full_sphere) samples the whole sphere
 // uniformly in world space instead, and ignores its normal and tangent. The

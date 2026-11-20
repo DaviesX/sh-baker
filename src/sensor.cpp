@@ -69,8 +69,15 @@ std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {
   // Estimate variance from more than a handful of samples: the integrand is
   // heavy-tailed, so a small warm-up under-estimates variance and stops right
   // before the tail appears. 64 gives the tail a chance to register.
+  //
+  // A threshold <= 0 disables the adaptive stop: every point then takes exactly
+  // max_samples rays. The absolute noise floor below would otherwise stop a
+  // zero-variance point (e.g. one lit only by unshadowed point lights, whose
+  // per-sample L0 is constant) at kMinSamples whatever max_samples says, and
+  // leave its L1/L2 direction noisy.
   constexpr int kMinSamples = 64;
-  if (sensor.sample_count >= kMinSamples) {
+  if (sensor.confidence_threshold > 0.0f &&
+      sensor.sample_count >= kMinSamples) {
     // 3-sigma standard error of the mean of the per-sample luminance. Guard
     // against a slightly-negative m2 from Welford float error, which would make
     // std::sqrt return NaN and stall convergence (NaN < tolerance is false).

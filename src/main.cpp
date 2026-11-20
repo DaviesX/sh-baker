@@ -19,10 +19,12 @@ DEFINE_int32(bounces, 3, "Number of bounces.");
 DEFINE_double(firefly_clamp, 0.0,
               "Max per-sample indirect luminance; brighter samples are scaled "
               "down to suppress fireflies. <= 0 disables (unbiased).");
-DEFINE_double(confidence_threshold, 0.01,
-              "Adaptive-sampling stop tolerance: a texel stops once its 3-sigma "
-              "SEM falls below this fraction of its mean luminance. Smaller = "
-              "more samples / less noise.");
+DEFINE_double(
+    confidence_threshold, 0.01,
+    "Adaptive-sampling stop tolerance: a texel stops once its 3-sigma "
+    "SEM falls below this fraction of its mean luminance. Smaller = "
+    "more samples / less noise. <= 0 disables adaptive stopping, so "
+    "every texel takes exactly --samples rays.");
 DEFINE_bool(indirect_only, false,
             "Bake only bounced light from punctual and area lights.");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
