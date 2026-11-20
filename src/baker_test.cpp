@@ -1326,4 +1326,133 @@ TEST(BakerFullSphereTest, ZeroTangentGivesNoNaN) {
   EXPECT_LT(vis, 1.0f);  // The floor and ceiling block some rays.
 }
 
+// A full-sphere probe with a nonzero normal still counts light from every
+// direction: it gives the light tree a zero normal, so a light edge-on to or
+// below the normal is picked, and the point and spot estimators skip their
+// cos_n rejection. With normal +Z, a red point light edge-on at +X, a green
+// point light below at -Z and a blue spot below at (0, -1, -1) aimed at the
+// probe each add (I / r^2) color Y(w), the full-sphere projection of a delta
+// light (the probe is on the spot's axis, where its cone factor is 1).
+//
+// Tolerance: the only noise is which light each NEE pick chooses; there is no
+// geometry. With 512 samples x 64 picks (32768 picks), a channel's coefficient
+// has relative sigma sqrt((1 - p) / (p n)), under 0.017 for any pick
+// probability p >= 0.1, so 0.1 a |Y_k| is over 5 sigma. Coefficients whose
+// basis is 0 in a light's direction are exactly 0 in its channel.
+TEST(BakerFullSphereTest, ProbeWithNormalCountsLightsEdgeOnAndBelow) {
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  const float kIntensity = 50.0f;
+  const float kDist = 2.0f;
+  const Eigen::Vector3f spot_dir = Eigen::Vector3f(0, -1, -1).normalized();
+  struct Placed {
+    Light::Type type;
+    Eigen::Vector3f w;  // Direction from the probe to the light.
+    Eigen::Vector3f color;
+  };
+  const Placed placed[] = {
+      {Light::Type::Point, Eigen::Vector3f::UnitX(), Eigen::Vector3f(1, 0, 0)},
+      {Light::Type::Point, -Eigen::Vector3f::UnitZ(), Eigen::Vector3f(0, 1, 0)},
+      {Light::Type::Spot, spot_dir, Eigen::Vector3f(0, 0, 1)},
+  };
+  for (const Placed& p : placed) {
+    Light light;
+    light.type = p.type;
+    light.position = kDist * p.w;
+    light.direction = -p.w;  // Spot only: aimed at the probe.
+    light.color = p.color;
+    light.intensity = kIntensity;
+    light.flux = Flux(light);
+    scene.lights.push_back(light);
+  }
+  BakeConfig config;
+  config.samples = 512;
+  config.bounces = 0;
+  config.num_light_samples = 64;
+  config.confidence_threshold = 0.0f;
+  SurfacePoint probe = ProbeAt(Eigen::Vector3f::Zero());
+  probe.normal = Eigen::Vector3f(0, 0, 1);
+  const BakeResult r = BakeWith(scene, {probe}, config);
+
+  const float a = kIntensity / (kDist * kDist);
+  const SHCoeffs& sh = r.sh_texture.pixels[0];
+  for (int c = 0; c < 3; ++c) {
+    const std::array<float, 9> y = ShBasis(placed[c].w);
+    for (int k = 0; k < 9; ++k) {
+      EXPECT_NEAR(sh.coeffs[k][c], a * y[k], 0.1f * a * std::abs(y[k]) + 1e-6f)
+          << "coefficient " << k << ", channel " << c;
+    }
+    EXPECT_GT(sh.coeffs[0][c], 0.0f) << "channel " << c;
+  }
+}
+
+// An emissive quad below a full-sphere probe's normal adds its full-sphere
+// projection, the integral over the quad of L cos_light / d^2 Y(w) dA: the area
+// estimator skips its cos_n rejection for the probe. The reference integral is
+// a 256 x 256 midpoint sum over the quad.
+//
+// Tolerance: the light tree picks the only light, so the only noise is where
+// on the 0.5 x 0.5 quad, 2 below the probe, each NEE sample lands. Over the
+// quad L cos_light / d^2 Y_k(w) varies by under 0.06 L for every k (|w_x|,
+// |w_y| <= 0.125), so 256 samples x 16 picks give a sigma under 0.001 L; the
+// tolerance is 0.005 L.
+TEST(BakerFullSphereTest, ProbeWithNormalCountsAreaLightBelow) {
+  Scene scene;
+  scene.materials.push_back(BlackMaterial());
+  Material emitter = BlackMaterial();
+  emitter.name = "emitter";
+  const float kRadiance = 4.0f;
+  emitter.emissive_factor = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
+  emitter.emissive_strength = kRadiance;
+  scene.materials.push_back(emitter);
+  const float kHalf = 0.25f;
+  const float kDepth = -2.0f;
+  AddQ3Map2Surface(RectXY(-kHalf, kHalf, -kHalf, kHalf, kDepth,
+                          /*faces_up=*/true, /*material_id=*/1),
+                   &scene);
+  Light area;
+  area.type = Light::Type::Area;
+  area.geometry = &scene.geometries.back();
+  area.material = &scene.materials.back();
+  area.color = area.material->emissive_factor;
+  area.intensity = area.material->emissive_strength;
+  area.area = SurfaceArea(*area.geometry);
+  area.flux = Flux(area);
+  scene.lights.push_back(area);
+
+  BakeConfig config;
+  config.samples = 256;
+  config.bounces = 0;
+  config.num_light_samples = 16;
+  config.confidence_threshold = 0.0f;
+  SurfacePoint probe = ProbeAt(Eigen::Vector3f::Zero());
+  probe.normal = Eigen::Vector3f(0, 0, 1);
+  const BakeResult r = BakeWith(scene, {probe}, config);
+
+  // Projection per unit radiance.
+  constexpr int kGrid = 256;
+  const double cell = 2.0 * kHalf / kGrid;
+  std::array<double, 9> want{};
+  for (int i = 0; i < kGrid; ++i) {
+    for (int j = 0; j < kGrid; ++j) {
+      const Eigen::Vector3f q(-kHalf + (i + 0.5) * cell,
+                              -kHalf + (j + 0.5) * cell, kDepth);
+      const float d2 = q.squaredNorm();
+      const Eigen::Vector3f w = q / std::sqrt(d2);
+      const double weight = std::abs(w.z()) / d2 * cell * cell;
+      const std::array<float, 9> y = ShBasis(w);
+      for (int k = 0; k < 9; ++k) want[k] += weight * y[k];
+    }
+  }
+  const SHCoeffs& sh = r.sh_texture.pixels[0];
+  for (int c = 0; c < 3; ++c) {
+    const float l = kRadiance * emitter.emissive_factor[c];
+    for (int k = 0; k < 9; ++k) {
+      EXPECT_NEAR(sh.coeffs[k][c], l * want[k], 0.005f * l)
+          << "coefficient " << k << ", channel " << c;
+    }
+  }
+  EXPECT_GT(sh.coeffs[0].x(), 0.01f * kRadiance);
+}
+
 }  // namespace sh_baker
