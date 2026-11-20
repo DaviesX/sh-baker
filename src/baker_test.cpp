@@ -206,6 +206,46 @@ BakeResult BakePoints(const Scene& scene,
 
 }  // namespace
 
+TEST(BakerTest, IndirectOnlySkipsDirectAreaLightAndKeepsItsBounce) {
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  scene.materials.push_back(WhiteMaterial());
+  Material& emitter = scene.materials.back();
+  emitter.emissive_factor = Eigen::Vector3f::Ones();
+  emitter.emissive_strength = 10.0f;
+  AddQ3Map2Surface(RectXY(-4, 4, -4, 4, 0, true, 0), &scene);
+  AddQ3Map2Surface(RectXY(-1, 1, -1, 1, 2, false, 1), &scene);
+
+  Light area;
+  area.type = Light::Type::Area;
+  area.geometry = &scene.geometries.back();
+  area.material = &emitter;
+  area.color = emitter.emissive_factor;
+  area.intensity = emitter.emissive_strength;
+  area.area = SurfaceArea(*area.geometry);
+  area.flux = Flux(area);
+  scene.lights.push_back(area);
+
+  const std::vector<SurfacePoint> points = {
+      PointAt({0, 0, 0}, {0, 0, 1}, 0),
+      PointAt({0, 0, 1}, {0, 0, -1}, 0),
+  };
+  RasterConfig raster_config;
+  raster_config.width = 2;
+  raster_config.height = 1;
+  BakeConfig config;
+  config.bounces = 0;
+  const BakeResult full =
+      BakeSHLightMap(scene, points, raster_config, config);
+  config.indirect_only = true;
+  const BakeResult indirect =
+      BakeSHLightMap(scene, points, raster_config, config);
+
+  EXPECT_GT(full.sh_texture.pixels[0].coeffs[0].x(), 0.0f);
+  EXPECT_EQ(indirect.sh_texture.pixels[0].coeffs[0], Eigen::Vector3f::Zero());
+  EXPECT_GT(indirect.sh_texture.pixels[1].coeffs[0].x(), 0.0f);
+}
+
 // Caller-supplied points from different surfaces bake in one call, each result
 // at its point's index, with no lightmap UVs and no rasterization.
 TEST(BakerTest, BakesPointsFromDifferentSurfacesInOneCall) {

@@ -24,10 +24,7 @@ DEFINE_double(confidence_threshold, 0.01,
               "SEM falls below this fraction of its mean luminance. Smaller = "
               "more samples / less noise.");
 DEFINE_bool(indirect_only, false,
-            "Remove PUNCTUAL direct contributions from the bake (for the "
-            "real-time punctual-direct + baked-indirect solution). Area lights "
-            "(flames/glows) have no real-time path, so their DIRECT term is "
-            "always baked regardless of this flag.");
+            "Bake only bounced light from punctual and area lights.");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");

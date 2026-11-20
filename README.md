@@ -57,6 +57,7 @@ Arguments:
 - `--width`, `--height`: Lightmap resolution.
 - `--samples`: Rays per texel.
 - `--bounces`: Light bounces (default 3).
+- `--indirect_only`: Skip direct lighting from punctual and area lights at baked points. Both light types still contribute to bounces.
 - `--dilation`: Dilation passes (default 0).
 - `--split_channels`: If set, outputs 9 separate EXR files for SH coefficients (for Blender Viz).
 
