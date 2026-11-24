@@ -55,6 +55,13 @@ struct BakeConfig {
 
 struct BakeResult {
   SHTexture sh_texture;
+  // One value per point in [0, 1]: how much of the point's view the sky fills,
+  // from the point's first (sensor) rays, where a ray "escapes" if it hits
+  // nothing. An alpha cut-out still blocks. For a surface point it is
+  // cosine-weighted about the normal, sum(e_i cos_i) / sum(cos_i) with e_i 1
+  // for an escaping ray, the weight a runtime needs to scale the sky's
+  // irradiance at the normal (0 if every cos_i is 0). For a full-sphere point
+  // it is the uniform fraction of rays that escape. Skipped points hold -1.
   Texture32F environment_visibility_texture;
   // True when cancel_fn returned true, even if every point had already
   // started. Points that were not baked keep the not-baked marker, as invalid

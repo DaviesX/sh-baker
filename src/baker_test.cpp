@@ -843,6 +843,13 @@ uint32_t FloatBits(float f) {
 // SurfacePoint::full_sphere existed. Point 3 is skipped (material_id -1). They
 // pin the default bake's output. Never regenerate them from a later commit.
 //
+// One exception: the `visibility` words of every baked point (all surface
+// points) were re-recorded, the same way, from the commit that made surface
+// points' environment visibility cosine-weighted (sum(e_i cos_i) /
+// sum(cos_i) instead of the uniform fraction of first rays that escape). That
+// commit changed nothing else in the bake, so the SH and irradiance words are
+// still those of 046ff2e and keep pinning everything it must not change.
+//
 // The bits are those of one host's Release build (-march=native, -flto, -O3,
 // GCC 15.2), so ExpectMatchesReference compares them bit for bit only when
 // configured with -DSH_BAKER_BIT_EXACT_TESTS=ON on that host and toolchain;
@@ -863,21 +870,21 @@ constexpr DefaultsReference kDefaultsFull[] = {
       0x3f4f0696, 0x3f3d6d4f, 0x3f2bd274, 0x3e8fb33c, 0x3e712080, 0x3e44245b,
       0xbe6f5206, 0xbe5aad83, 0xbe463156},
      {0x4010bca1, 0x400306fd, 0x3feaf33c},
-     0x3f480000},
+     0x3f21fbdd},
     {{0x3fca8b63, 0x3fc18b44, 0x3fc4c6b7, 0x3f2ede9b, 0x3f3fbde6, 0x3f6369ef,
       0x400f7c0a, 0x4008b6b8, 0x400a942a, 0xbe04ad7a, 0xbdc18317, 0xbcb78a57,
       0x3da8207e, 0x3e0b9ec9, 0x3e67b52e, 0x3f9bdc30, 0x3fab2274, 0x3fcb0e7e,
       0x3fe8d45e, 0x3fdb6bdb, 0x3fdbb85e, 0xbeb10602, 0xbe89e459, 0xbe013b60,
       0x3d7be022, 0xbca6e673, 0xbe10fd68},
      {0x4092d4d8, 0x408be715, 0x408dcfab},
-     0x3f1d5556},
+     0x3ec287a9},
     {{0x3fc5f19e, 0x3fb497b2, 0x3faae10c, 0x3eacd11c, 0x3ec75d7a, 0x3ef8ecab,
       0x40051b63, 0x3ff44e70, 0x3fe9af8e, 0xbc0e6d3d, 0xbd2629fe, 0xbd9066eb,
       0xbd90c3a8, 0xbd3bcb34, 0xbc4ba4a6, 0x3f240503, 0x3f3cca27, 0x3f6b361b,
       0x3fb8f3eb, 0x3faca31b, 0x3faa7528, 0xbdc77918, 0xbe04e158, 0xbe226b81,
       0x3f248974, 0x3efa7153, 0x3e9eac52},
      {0x4088363c, 0x407a0153, 0x406f2300},
-     0x3f22aaab},
+     0x3ec73439},
     {{0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
       0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
       0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
@@ -891,28 +898,28 @@ constexpr DefaultsReference kDefaultsFull[] = {
       0x4000da85, 0x3fcfcf28, 0x3f9de9f6, 0xbebc868b, 0xbe9e9775, 0xbe8487ce,
       0x3d8c8298, 0x3d743256, 0x3d6700ce},
      {0x40731fdb, 0x40446f76, 0x40165ec2},
-     0x3f32aaab},
+     0x3f029950},
     {{0x3ed9ac5e, 0x3eb699b6, 0x3e942698, 0xbed45a5c, 0xbeafa62e, 0xbe8b4b71,
       0x3ede7af8, 0x3eb9417e, 0x3e94f462, 0xbe96b234, 0xbe830e2c, 0xbe5fa790,
       0x3e96ebf7, 0x3e817d6e, 0x3e58b32e, 0xbf083ad2, 0xbee03fb4, 0xbeb0b55c,
       0x3d7d2417, 0x3d3b1904, 0x3cff797b, 0xbeb05170, 0xbe980315, 0xbe807bef,
       0xbdbc9654, 0xbd7b51fa, 0xbcf9d78b},
      {0x3f63ab78, 0x3f3d93b8, 0x3f186dde},
-     0x3f455556},
+     0x3f303240},
     {{0x3fa7886b, 0x3f9c4086, 0x3f97ecea, 0x3e170d76, 0x3e441c4f, 0x3e87de57,
       0xbfc12f73, 0xbfb53ce6, 0xbfb1b5e6, 0x3e49659b, 0x3e14232a, 0x3db9910f,
       0xbe2e79c8, 0xbe215827, 0xbe19b8be, 0xbe45490f, 0xbe81d2ff, 0xbeb46c70,
       0x3f265ac4, 0x3f1f3843, 0x3f2078e3, 0xbe259570, 0xbde36207, 0xbd6b2ee8,
       0x3eb085af, 0x3e9359b9, 0x3e6780a0},
      {0x4045b108, 0x40397723, 0x4035db14},
-     0x3ed55556},
+     0x3e273b4e},
     {{0x3f5ac34e, 0x3f3d1497, 0x3f21d21e, 0x3f39343b, 0x3f213634, 0x3f0b11e5,
       0xbf5a2eea, 0xbf39fe57, 0xbf1d6535, 0xbe89e585, 0xbe882124, 0xbe873216,
       0xbeb4d8b4, 0xbeb184be, 0xbeaf62d4, 0xbf545ae2, 0xbf367322, 0xbf1beca0,
       0x3e4ee85e, 0x3e1d3033, 0x3df1ab93, 0x3c5aa730, 0x3d454b0e, 0x3daf408c,
       0x3cb97dd0, 0x3cb9badf, 0x3c9e55d0},
      {0x3fdf45c7, 0x3fbe54fc, 0x3fa11112},
-     0x3f355556},
+     0x3f033f1a},
 };
 
 constexpr DefaultsReference kDefaultsIndirectOnly[] = {
@@ -922,21 +929,21 @@ constexpr DefaultsReference kDefaultsIndirectOnly[] = {
       0x3f50fe3f, 0x3f3d7014, 0x3f29c446, 0x3ebb140e, 0x3ea2aecc, 0x3e8d4104,
       0xbe2222e7, 0xbe14f044, 0xbe071254},
      {0x3ffa7bc8, 0x3fdfaeb6, 0x3fc614e0},
-     0x3f3aaaab},
+     0x3f1281f0},
     {{0x3f0cde61, 0x3ee3fb1b, 0x3eb94dc2, 0x3d3511c2, 0x3d30100b, 0x3d27526d,
       0x3f52162a, 0x3f2a0ece, 0x3f0a8647, 0x3d123504, 0x3baff998, 0xbc86b8ac,
       0xbd83d2fa, 0xbd6bf85b, 0xbd4f0b02, 0x3dba5f3c, 0x3db50fbf, 0x3dabf97a,
       0x3f43e6ea, 0x3f1ec958, 0x3f0216e5, 0x3cc14f6a, 0xbcdd4cdb, 0xbd7c6328,
       0x3ddaf436, 0x3daff412, 0x3d8aab90},
      {0x3fd6fcaa, 0x3fae0648, 0x3f8dc176},
-     0x3f355556},
+     0x3efa55f2},
     {{0x3f04148a, 0x3ed192f4, 0x3ea4ce4c, 0x3d85b0c7, 0x3d5d7ff2, 0x3d35e4bc,
       0x3f4327fc, 0x3f19aeb2, 0x3ef00730, 0xbdc99050, 0xbdb1da98, 0xbda63dd8,
       0xbcb84ee4, 0xbcae767c, 0xbca752b2, 0x3e02b29a, 0x3dd738eb, 0x3daf8b52,
       0x3f325fff, 0x3f09c68e, 0x3ed33367, 0xbe31c596, 0xbe1ac6ce, 0xbe0fd2fa,
       0x3e071d12, 0x3def8e68, 0x3dcda55a},
      {0x3fc7b554, 0x3f9d4466, 0x3f75a07c},
-     0x3f2d5556},
+     0x3ee2c62d},
     {{0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
       0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
       0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000, 0xbf800000,
@@ -950,28 +957,28 @@ constexpr DefaultsReference kDefaultsIndirectOnly[] = {
       0x3eb7878f, 0x3e9b48aa, 0x3e7d0f6c, 0xbf03423d, 0xbedd07cf, 0xbeb81c24,
       0x3e2d1140, 0x3e0da4ca, 0x3deab36f},
      {0x3f90c7d7, 0x3f72b08b, 0x3f4655ef},
-     0x3f280000},
+     0x3f03ceb9},
     {{0x3e8292e1, 0x3e5d5bb3, 0x3e3830d2, 0xbe32a607, 0xbe18ab14, 0xbe003878,
       0x3ea8b123, 0x3e8e275a, 0x3e6afe2b, 0xbe1fae88, 0xbe086b66, 0xbde4ba4c,
       0x3dbeaf30, 0x3da2f51b, 0x3d87f89d, 0xbe91ebc2, 0xbe78de6c, 0xbe509016,
       0x3e540017, 0x3e2f11de, 0x3e0d44cf, 0xbe73f67f, 0xbe4e6463, 0xbe2b2690,
       0xbbd6ccdf, 0xbb9850d8, 0xbb57d2c0},
      {0x3f2ca076, 0x3f117834, 0x3ef07968},
-     0x3f555556},
+     0x3f445a42},
     {{0x3fb34516, 0x3faaabcf, 0x3faa8834, 0x3ece269b, 0x3ede8afb, 0x3f022a72,
       0xbfde8e83, 0xbfd522a4, 0xbfd720a6, 0x3dd906a7, 0x3db35a74, 0x3d983117,
       0x3dc13528, 0x3ddd7ff6, 0x3e079028, 0xbf1f8569, 0xbf2b80d2, 0xbf4825d6,
       0x3f833bc1, 0x3f7f335b, 0x3f843e18, 0xbe06b284, 0xbddd937b, 0xbdb8efc2,
       0x3d7c6ef3, 0x3cf0b850, 0xbc8f7aec},
      {0x4063bf7a, 0x405a1b5a, 0x405c253e},
-     0x3eaaaaab},
+     0x3df22195},
     {{0x3ef7c4ce, 0x3edd969b, 0x3ec644d8, 0x3e54639b, 0x3e3eea46, 0x3e2eff88,
       0xbf2e6ab3, 0xbf1b9a3f, 0xbf0ac0f6, 0xbcc67eb3, 0xbce0f476, 0xbd002ae2,
       0x3a7be8b0, 0xbb8bd336, 0xbc27f118, 0xbea7b576, 0xbe95e987, 0xbe88c49f,
       0x3f0e24af, 0x3efbe926, 0x3ede90a8, 0x3c92e548, 0x3cd9d050, 0x3d14c0c0,
       0xbd0aded8, 0xbd0bb2f7, 0xbd1bb9d4},
      {0x3fb27c34, 0x3f9f3b68, 0x3f8dfd80},
-     0x3f200000},
+     0x3edb3476},
 };
 
 // Compares a bake with a reference: bit for bit when SH_BAKER_TEST_BIT_EXACT is
@@ -1262,9 +1269,10 @@ TEST(BakerFullSphereTest, ProbeInUniformEmissiveBox) {
 
 // Indirect light at a probe is the sum of the two hemispheres: the full-sphere
 // projection equals the projections of surface points at the same position
-// facing +Z and -Z added together, for every coefficient, and the probe's
-// environment visibility is their mean. This checks the probe's uniform-sphere
-// rays and their 4 pi weight against the hemisphere path.
+// facing +Z and -Z added together, for every coefficient. This checks the
+// probe's uniform-sphere rays and their 4 pi weight against the hemisphere
+// path. (Visibility has no such identity: a surface point's is cosine-
+// weighted and a probe's uniform. BakerVisibilityTest covers both.)
 //
 // Tolerance: each point is baked kCopies times at different indices, which
 // seeds each copy independently, and the tolerance is 5 standard errors of the
@@ -1313,9 +1321,6 @@ TEST(BakerFullSphereTest, IndirectProbeIsSumOfHemispheres) {
                      .c_str());
     }
   }
-  expect_sum(
-      [&](size_t i) { return r.environment_visibility_texture.pixel_data[i]; },
-      0.5, "visibility");
   // Not trivially zero: the floor's bounce light reaches the probe.
   EXPECT_GT(
       stats(0, [&](size_t i) { return r.sh_texture.pixels[i].coeffs[0].x(); })
@@ -1503,6 +1508,113 @@ TEST(BakerFullSphereTest, ProbeWithNormalCountsAreaLightBelow) {
     }
   }
   EXPECT_GT(sh.coeffs[0].x(), 0.01f * kRadiance);
+}
+
+// --- Environment visibility ---
+//
+// Every test here sets confidence_threshold 0 and firefly_clamp 0. "Infinite"
+// floors and ceilings are squares of side 2000 centred on the point, at most
+// 20 units from it: the band they miss lies within about 1.2 degrees of the
+// horizon (under 0.011 of a probe's uniform fraction, about 4e-4 of a surface
+// point's cosine-weighted visibility).
+
+namespace {
+
+BakeConfig VisibilityBake(int samples) {
+  BakeConfig config;
+  config.samples = samples;
+  config.bounces = 1;
+  config.confidence_threshold = 0.0f;
+  config.firefly_clamp = 0.0f;
+  return config;
+}
+
+// A down-facing square ceiling of side 2000 at height z, centred on the
+// origin's XY, with a circular hole of radius r at its centre (a 256-gon
+// inscribed in the circle).
+Q3Map2Surface CeilingWithHole(float z, float r, int material_id) {
+  constexpr int kSegments = 256;
+  constexpr float kHalf = 1000.0f;
+  Q3Map2Surface s;
+  for (int k = 0; k < kSegments; ++k) {
+    const float a = 2.0f * float(M_PI) * k / kSegments;
+    const Eigen::Vector2f d(std::cos(a), std::sin(a));
+    // Where the ray from the centre along d meets the square's boundary.
+    const float t = kHalf / std::max(std::abs(d.x()), std::abs(d.y()));
+    s.positions.push_back(Eigen::Vector3f(r * d.x(), r * d.y(), z));
+    s.positions.push_back(Eigen::Vector3f(t * d.x(), t * d.y(), z));
+  }
+  for (int k = 0; k < kSegments; ++k) {
+    const uint32_t i0 = 2 * k, o0 = 2 * k + 1;
+    const uint32_t i1 = 2 * ((k + 1) % kSegments), o1 = i1 + 1;
+    // Counter-clockwise seen from above: q3map2's front face pointing down,
+    // as RectXY winds a down-facing rectangle.
+    s.indices.insert(s.indices.end(), {i0, o0, o1, i0, o1, i1});
+  }
+  s.normals.assign(s.positions.size(), Eigen::Vector3f(0, 0, -1));
+  s.texture_uvs.assign(s.positions.size(), Eigen::Vector2f::Zero());
+  s.material_id = material_id;
+  return s;
+}
+
+}  // namespace
+
+// An up-facing point under an opaque ceiling 10 units up, with a circular hole
+// above it whose edge is 60 degrees from the normal: the cosine-weighted
+// visibility is sin^2(60) = 0.75, where the uniform fraction would be
+// 1 - cos(60) = 0.5. The ratio estimator's sigma at 4096 samples is about
+// 0.006, so 0.02 is over 3 sigma.
+TEST(BakerVisibilityTest, SkylightHoleIsCosineWeighted) {
+  const float kHeight = 10.0f;
+  const float kRadius = kHeight * std::tan(60.0f * float(M_PI) / 180.0f);
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-1000, 1000, -1000, 1000, 0, /*faces_up=*/true, 0),
+                   &scene);
+  AddQ3Map2Surface(CeilingWithHole(kHeight, kRadius, 0), &scene);
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0)};
+
+  const BakeResult r = BakeWith(scene, points, VisibilityBake(4096));
+  EXPECT_NEAR(r.environment_visibility_texture.pixel_data[0], 0.75f, 0.02f);
+}
+
+// A point with nothing above it has visibility exactly 1, and one inside a
+// closed box exactly 0.
+TEST(BakerVisibilityTest, FullyOpenAndFullyClosed) {
+  Scene open;
+  open.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-1000, 1000, -1000, 1000, 0, /*faces_up=*/true, 0),
+                   &open);
+  Scene closed;
+  closed.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(
+      InwardBox(Eigen::Vector3f(-2, -2, -1), Eigen::Vector3f(2, 2, 3), 0),
+      &closed);
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0)};
+
+  EXPECT_EQ(BakeWith(open, points, VisibilityBake(256))
+                .environment_visibility_texture.pixel_data[0],
+            1.0f);
+  EXPECT_EQ(BakeWith(closed, points, VisibilityBake(256))
+                .environment_visibility_texture.pixel_data[0],
+            0.0f);
+}
+
+// A full-sphere probe 10 units above a floor keeps the uniform fraction of its
+// rays that escape: 0.5, plus at most 0.005 for the band below the horizon
+// that misses the floor. Sigma at 4096 samples is 0.5 / 64 = 0.008; 0.02 is
+// 2.5 sigma, and the bake is deterministic.
+TEST(BakerVisibilityTest, ProbeAboveFloorIsUniform) {
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(RectXY(-1000, 1000, -1000, 1000, 0, /*faces_up=*/true, 0),
+                   &scene);
+  const std::vector<SurfacePoint> points{ProbeAt(Eigen::Vector3f(0, 0, 10))};
+
+  const BakeResult r = BakeWith(scene, points, VisibilityBake(4096));
+  EXPECT_NEAR(r.environment_visibility_texture.pixel_data[0], 0.5f, 0.02f);
 }
 
 }  // namespace sh_baker

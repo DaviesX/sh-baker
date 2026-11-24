@@ -5,6 +5,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -191,7 +192,15 @@ BakeResult BakeSHLightMap(const Scene& scene,
           // 2 pi for a surface point, 4 pi for a full-sphere point.
           const float inv_pdf_uniform = SampleRayInvPdf(sensor);
 
-          float visibility_accum = 0.0f;
+          // Environment visibility. A surface point's is cosine-weighted,
+          // sum(escaped_i cos_i) / sum(cos_i) over its first rays, the weight
+          // irradiance needs (a ratio estimator: exactly 1 fully open, 0
+          // closed, always in [0, 1]). A full-sphere point has no normal, so
+          // its visibility is the uniform fraction of first rays that escape.
+          bool escaped = false;
+          float escapes = 0.0f;
+          float vis_num = 0.0f;
+          float vis_den = 0.0f;
 
           // Loop-invariant for this texel: build once, not per sample (the
           // std::function makes per-iteration construction needlessly costly).
@@ -199,8 +208,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
               rtc_scene, scene, &light_tree, config.bounces,
               config.num_light_samples,
               /*on_direct_hit_sky_fn=*/
-              [&visibility_accum]() { visibility_accum += 1.0f; },
-              config.firefly_clamp);
+              [&escaped]() { escaped = true; }, config.firefly_clamp);
 
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);
@@ -217,8 +225,17 @@ BakeResult BakeSHLightMap(const Scene& scene,
             }
 
             // Indirect lighting.
+            escaped = false;
             Eigen::Vector3f Li_indirect =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
+            if (sp.full_sphere) {
+              if (escaped) escapes += 1.0f;
+            } else {
+              const float cos_theta =
+                  std::max(0.0f, ray->direction.dot(sp.normal));
+              vis_den += cos_theta;
+              if (escaped) vis_num += cos_theta;
+            }
             AccumulateRadiance(Li_indirect, ray->direction, sp.normal,
                                &sample_sh_accum);
 
@@ -226,10 +243,15 @@ BakeResult BakeSHLightMap(const Scene& scene,
           }
 
           result.sh_texture.pixels[idx] = GetEstimation(sensor);
-          float inv_samples =
-              sensor.sample_count > 0 ? (1.0f / sensor.sample_count) : 0.0f;
-          result.environment_visibility_texture.pixel_data[idx] =
-              visibility_accum * inv_samples;
+          float visibility;
+          if (sp.full_sphere) {
+            visibility = sensor.sample_count > 0
+                             ? escapes * (1.0f / sensor.sample_count)
+                             : 0.0f;
+          } else {
+            visibility = vis_den > 0.0f ? vis_num / vis_den : 0.0f;
+          }
+          result.environment_visibility_texture.pixel_data[idx] = visibility;
 
           bake_observer.FinishOneTask();
         }
