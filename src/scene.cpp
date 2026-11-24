@@ -6,6 +6,7 @@
 #include <mikktspace.h>
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -196,6 +197,30 @@ float EvaluatePerez(const Eigen::Vector3f& dir, const Eigen::Vector3f& sunDir) {
   return f_zenith * f_sun;
 }
 
+// The zenith Perez value the Preetham radiance is normalised by.
+float PreethamZenith(const Eigen::Vector3f& sun_dir) {
+  float zenith_val = EvaluatePerez(Eigen::Vector3f(0.0f, 1.0f, 0.0f), sun_dir);
+  if (zenith_val <= 1e-6f) zenith_val = 1.0f;
+  return zenith_val;
+}
+
+// The Preetham sky's radiance in Y-up direction `dir` (above the horizon; the
+// caller handles y < 0): the Perez value capped at 30x the zenith, coloured as
+// a blue sky scaled by luminance / zenith.
+Eigen::Vector3f PreethamRadiance(const Eigen::Vector3f& dir,
+                                 const Eigen::Vector3f& sun_dir,
+                                 float zenith_val) {
+  float raw_luminance = EvaluatePerez(dir, sun_dir);
+
+  // Apply the cap (e.g., 30x zenith) to prevent ringing from sun disk
+  float cap = zenith_val * 30.0f;
+  float luminance = std::min(raw_luminance, cap);
+
+  // Convert luminance to RGB (Simplified: Blue sky color scaled by
+  // luminance)
+  return Eigen::Vector3f(0.2f, 0.5f, 0.9f) * (luminance / zenith_val);
+}
+
 SHCoeffs ProjectPreethamToSH(const Environment& env) {
   SHCoeffs coeffs;
 
@@ -210,8 +235,7 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
   Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
 
   // Zenith luminance for normalization
-  float zenith_val = EvaluatePerez(up, sun_dir);
-  if (zenith_val <= 1e-6f) zenith_val = 1.0f;
+  float zenith_val = PreethamZenith(sun_dir);
 
   for (int t = 0; t < steps_theta; ++t) {
     float theta = (t + 0.5f) * d_theta;  // 0 (North Pole/Up) to PI
@@ -235,16 +259,7 @@ SHCoeffs ProjectPreethamToSH(const Environment& env) {
       if (y < 0.0f) continue;
 
       // 2. Evaluate Radiance using Preetham function
-      float raw_luminance = EvaluatePerez(dir, sun_dir);
-
-      // Apply the cap (e.g., 30x zenith) to prevent ringing from sun disk
-      float cap = zenith_val * 30.0f;
-      float luminance = std::min(raw_luminance, cap);
-
-      // Convert luminance to RGB (Simplified: Blue sky color scaled by
-      // luminance)
-      Eigen::Vector3f radiance =
-          Eigen::Vector3f(0.2f, 0.5f, 0.9f) * (luminance / zenith_val);
+      Eigen::Vector3f radiance = PreethamRadiance(dir, sun_dir, zenith_val);
 
       // 3. Differential solid angle (dA = sin(theta) * dTheta * dPhi)
       float differential_solid_angle = sin_theta * d_theta * d_phi;
@@ -284,6 +299,54 @@ SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
   } else {
     return ProjectPreethamToSH(env);
   }
+}
+
+Eigen::Vector3f EvaluateEnvironment(const Environment& env,
+                                    const Eigen::Vector3f& world_dir) {
+  Eigen::Vector3f dir = env.to_environment * world_dir;
+  float norm = dir.norm();
+  if (!(norm > 0.0f)) return Eigen::Vector3f::Zero();
+  dir /= norm;
+
+  if (env.type == Environment::Type::Preetham) {
+    // Ground is black, as in ProjectPreethamToSH().
+    if (dir.y() < 0.0f) return Eigen::Vector3f::Zero();
+    Eigen::Vector3f sun_dir = env.sun_direction.normalized();
+    return PreethamRadiance(dir, sun_dir, PreethamZenith(sun_dir));
+  }
+
+  // Inverse of ProjectLatLongMap()'s mapping: texel (x, y) holds
+  // theta = (y + 0.5) pi / H from +Y and phi = (x + 0.5) 2 pi / W, with
+  // dir = (sin theta sin phi, cos theta, sin theta cos phi).
+  const Texture32F& tex = env.texture;
+  const int w = static_cast<int>(tex.width);
+  const int h = static_cast<int>(tex.height);
+  if (w <= 0 || h <= 0 || tex.channels < 3) return Eigen::Vector3f::Zero();
+
+  float theta = std::acos(std::clamp(dir.y(), -1.0f, 1.0f));
+  float phi = std::atan2(dir.x(), dir.z());
+  if (phi < 0.0f) phi += kTwoPi;
+
+  float u = phi / kTwoPi * w - 0.5f;
+  float v = theta / kPi * h - 0.5f;
+  float u_floor = std::floor(u);
+  float v_floor = std::floor(v);
+  float fu = u - u_floor;
+  float fv = v - v_floor;
+
+  // Wrap in longitude.
+  int x0 = static_cast<int>(u_floor) % w;
+  if (x0 < 0) x0 += w;
+  int x1 = (x0 + 1) % w;
+  // Clamp in latitude.
+  int y0 = std::clamp(static_cast<int>(v_floor), 0, h - 1);
+  int y1 = std::clamp(static_cast<int>(v_floor) + 1, 0, h - 1);
+
+  Eigen::Vector3f top =
+      (1.0f - fu) * GetPixel(tex, x0, y0) + fu * GetPixel(tex, x1, y0);
+  Eigen::Vector3f bottom =
+      (1.0f - fu) * GetPixel(tex, x0, y1) + fu * GetPixel(tex, x1, y1);
+  return (1.0f - fv) * top + fv * bottom;
 }
 
 void LogSceneStats(const Scene& scene) {

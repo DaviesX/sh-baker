@@ -18,11 +18,13 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
       FindOcclusion(config.rtc_scene, config.scene.materials, visibility_ray);
 
   if (!surface.has_value()) {
-    // Sky is handled by NEE (EvaluateLights() and
-    // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
-    // counting.
+    // The ray escaped. NEE samples only the scene's lights, never the sky, so
+    // the sky's radiance is added here, by escape, and nowhere else.
     if (depth == 0) {
       config.on_direct_hit_sky_fn();
+    }
+    if (config.environment != nullptr) {
+      return EvaluateEnvironment(*config.environment, ray.direction);
     }
     return Eigen::Vector3f::Zero();
   }

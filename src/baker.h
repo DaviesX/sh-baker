@@ -28,6 +28,16 @@ struct BakeConfig {
   // cost, and no early stop for zero-variance points such as ones lit only by
   // unshadowed point lights).
   float confidence_threshold = 0.01f;
+  // Sky light in the full bake: when set, the scene has an environment and
+  // indirect_only is off, a ray that escapes the scene returns the
+  // environment's radiance in its direction (EvaluateEnvironment()), at the
+  // baked point, after bounces and past alpha cut-outs. Escape is the only way
+  // sky light is gathered; it is not part of next-event estimation, so the
+  // environment must not contain a sun a directional light already supplies.
+  // An indirect_only bake never returns sky radiance. Off by default, so a
+  // bake is unchanged whether or not the scene has an environment (the glTF
+  // loader derives one from the brightest directional light).
+  bool environment_light = false;
 
   // Optional progress report: called with (points finished, total points),
   // where finished counts points baked or skipped as invalid. Calls come from

@@ -104,6 +104,12 @@ struct Environment {
 
   // For both types.
   SHCoeffs sh_coeffs;
+
+  // Rotation from world directions to the environment's own Y-up frame, applied
+  // by EvaluateEnvironment() before the lookup. The identity suits Y-up scenes;
+  // a Z-up scene (q3map2) passes a rotation mapping world +Z to +Y. It does not
+  // affect sh_coeffs, which stay in the environment's frame.
+  Eigen::Matrix3f to_environment = Eigen::Matrix3f::Identity();
 };
 
 // --- Scene ---
@@ -144,6 +150,16 @@ float Flux(const Light& light);
 
 // Projects the environment to SH coefficients.
 SHCoeffs ProjectEnvironmentToSH(const Environment& env);
+
+// Returns the environment's radiance arriving from world direction `world_dir`
+// (pointing away from the receiver, toward the sky). The direction is first
+// rotated by env.to_environment. This is the function ProjectEnvironmentToSH()
+// integrates: for a texture, the equirect texel filtered bilinearly (wrapping
+// in longitude, clamped in latitude; channels 0-2, stored values used as is);
+// for Preetham, the projection's capped, coloured Perez value, zero below the
+// horizon. Draws no random numbers.
+Eigen::Vector3f EvaluateEnvironment(const Environment& env,
+                                    const Eigen::Vector3f& world_dir);
 
 // Builds an Embree BVH from the scene geometries.
 RTCScene BuildBVH(const Scene& scene, RTCDevice device);

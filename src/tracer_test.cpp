@@ -117,4 +117,94 @@ TEST_F(TracerTest, TraceThroughTransparentSurface) {
   rtcReleaseScene(rtc_scene);
 }
 
+namespace {
+
+// A uniform texture environment of radiance `value`.
+Environment UniformEnvironment(const Eigen::Vector3f& value) {
+  Environment env;
+  env.type = Environment::Type::Texture;
+  env.texture.width = 8;
+  env.texture.height = 4;
+  env.texture.channels = 3;
+  env.texture.pixel_data.resize(8 * 4 * 3);
+  for (size_t i = 0; i < env.texture.pixel_data.size(); ++i) {
+    env.texture.pixel_data[i] = value[i % 3];
+  }
+  return env;
+}
+
+}  // namespace
+
+TEST_F(TracerTest, TraceSkyReturnsEnvironmentRadiance) {
+  Scene scene;
+  RTCScene rtc_scene = BuildBVH(scene, device);
+  const Environment env = UniformEnvironment(Eigen::Vector3f(0.5f, 1.0f, 2.0f));
+
+  bool sky_hit = false;
+  TraceConfig config(
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; },
+      /*firefly_clamp=*/0.0f, &env);
+  std::mt19937 rng(42);
+  Ray ray;
+  ray.origin = Eigen::Vector3f(0, 0, 0);
+  ray.direction = Eigen::Vector3f(0.6f, 0.0f, 0.8f);
+
+  Eigen::Vector3f result = Trace(config, ray, 0, rng);
+
+  EXPECT_TRUE(result.isApprox(Eigen::Vector3f(0.5f, 1.0f, 2.0f), 1e-6f))
+      << result.transpose();
+  EXPECT_TRUE(sky_hit);
+  rtcReleaseScene(rtc_scene);
+}
+
+TEST_F(TracerTest, TraceSkyWithoutEnvironmentPointerReturnsZero) {
+  // The scene's own environment is not read: only TraceConfig::environment.
+  Scene scene;
+  scene.environment = UniformEnvironment(Eigen::Vector3f::Ones());
+  RTCScene rtc_scene = BuildBVH(scene, device);
+
+  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [] {});
+  std::mt19937 rng(42);
+  Ray ray;
+  ray.origin = Eigen::Vector3f(0, 0, 0);
+  ray.direction = Eigen::Vector3f(0, 0, 1);
+
+  EXPECT_EQ(Trace(config, ray, 0, rng), Eigen::Vector3f::Zero());
+  rtcReleaseScene(rtc_scene);
+}
+
+TEST_F(TracerTest, TraceSkyThroughCutOut) {
+  Scene scene;
+  Material transparent;
+  transparent.albedo.width = transparent.albedo.height = 1;
+  transparent.albedo.channels = 4;
+  transparent.albedo.pixel_data = {255, 255, 255, 0};
+  scene.materials.push_back(transparent);
+
+  Geometry card;
+  card.vertices = {{-1, -1, 1}, {0, 1, 1}, {1, -1, 1}};
+  card.indices = {0, 1, 2};
+  card.material_id = 0;
+  scene.geometries.push_back(card);
+  RTCScene rtc_scene = BuildBVH(scene, device);
+
+  const Environment env = UniformEnvironment(Eigen::Vector3f(3.0f, 2.0f, 1.0f));
+  bool sky_hit = false;
+  TraceConfig config(
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; },
+      /*firefly_clamp=*/0.0f, &env);
+  std::mt19937 rng(42);
+  Ray ray;
+  ray.origin = Eigen::Vector3f::Zero();
+  ray.direction = Eigen::Vector3f(0, 0, 1);
+
+  Eigen::Vector3f result = Trace(config, ray, 0, rng);
+
+  EXPECT_TRUE(result.isApprox(Eigen::Vector3f(3.0f, 2.0f, 1.0f), 1e-6f))
+      << result.transpose();
+  // The cut-out still blocks the first ray for visibility.
+  EXPECT_FALSE(sky_hit);
+  rtcReleaseScene(rtc_scene);
+}
+
 }  // namespace sh_baker

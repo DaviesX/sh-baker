@@ -18,14 +18,16 @@ struct TraceConfig {
   TraceConfig(const RTCScene rtc_scene, const Scene& scene,
               const LightTree* light_tree, int max_depth, int num_light_samples,
               std::function<void()> on_direct_hit_sky_fn,
-              float firefly_clamp = 0.0f)
+              float firefly_clamp = 0.0f,
+              const Environment* environment = nullptr)
       : rtc_scene(rtc_scene),
         scene(scene),
         light_tree(light_tree),
         max_depth(max_depth),
         num_light_samples(num_light_samples),
         on_direct_hit_sky_fn(on_direct_hit_sky_fn),
-        firefly_clamp(firefly_clamp) {}
+        firefly_clamp(firefly_clamp),
+        environment(environment) {}
 
   const RTCScene rtc_scene;
   const Scene& scene;
@@ -37,6 +39,12 @@ struct TraceConfig {
   // suppress fireflies. <= 0 disables clamping (unbiased). Safe to enable here
   // because the output is low-frequency 3rd-order diffuse SH.
   const float firefly_clamp;
+  // The sky a ray that escapes the scene sees, at any depth: Trace() returns
+  // EvaluateEnvironment() in the ray's direction. nullptr means escaped rays
+  // carry no radiance. It is independent of scene.environment, so the caller
+  // decides when sky light applies (BakeSHLightMap sets it only for the full
+  // bake with BakeConfig::environment_light).
+  const Environment* environment;
 };
 
 // Computes a Monte Carlo path and return a radiance sample.
@@ -48,19 +56,24 @@ struct TraceConfig {
 // radiance from the light, and \omega_i is the direction from the light to the
 // surface.
 //
-// To drastically reduce variance, we partition the paths into 2 disjoint sets:
-// 1. Primary rays: see the sky/sun directly
-// 2. Secondary rays: bounce off a surface
+// To drastically reduce variance, the scene's lights (punctual, directional
+// and emissive area lights) are sampled explicitly at every hit with next
+// event estimation (NEE), and the BSDF-sampled continuation ray gathers only
+// light reflected by other surfaces:
 //
-// Formally,
 // L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{A_e} ...Le(x, x')...dA_e(x') +
-// \int_{\Omega \setminus A_e} ...L_i(x, \omega_i)...d\omega_i
+// \int_{\Omega} ...L_i(x, \omega_i)...d\omega_i
 //
-// where Le(x, x') is the radiance from the light, L_i(x, \omega_i) is the
-// radiance from the environment, and \omega_i is the direction from the light
-// to the surface.
+// where Le(x, x') is the radiance from the lights and L_i(x, \omega_i) the
+// radiance arriving from other surfaces or, for a ray that escapes the scene,
+// from the sky.
 //
-// This is also known as a technique called next event estimation (NEE).
+// The sky is not part of NEE. It is reached only by escape: a ray that hits
+// nothing returns EvaluateEnvironment(*config.environment, direction), or zero
+// when config.environment is null. This holds at the baked point (depth 0),
+// after bounces and past alpha cut-outs. An environment must therefore not
+// contain a sun that a directional light already supplies, or it is counted
+// twice.
 Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
                       std::mt19937& rng,
                       Eigen::Vector3f throughput = Eigen::Vector3f::Ones());

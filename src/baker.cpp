@@ -163,6 +163,13 @@ BakeResult BakeSHLightMap(const Scene& scene,
   const size_t total_pixels = surface_points.size();
   BakeObserver bake_observer(config, total_pixels);
 
+  // Escaped rays return sky radiance only in an opted-in full bake.
+  const Environment* environment =
+      (config.environment_light && !config.indirect_only &&
+       scene.environment.has_value())
+          ? &*scene.environment
+          : nullptr;
+
 #if USE_TBB
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, total_pixels),
@@ -200,7 +207,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
               config.num_light_samples,
               /*on_direct_hit_sky_fn=*/
               [&visibility_accum]() { visibility_accum += 1.0f; },
-              config.firefly_clamp);
+              config.firefly_clamp, environment);
 
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);

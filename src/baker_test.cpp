@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "colorspace.h"
 #include "loader_q3map2.h"
 #include "rasterizer.h"
 #include "sh_coeffs.h"
@@ -1503,6 +1504,246 @@ TEST(BakerFullSphereTest, ProbeWithNormalCountsAreaLightBelow) {
     }
   }
   EXPECT_GT(sh.coeffs[0].x(), 0.01f * kRadiance);
+}
+
+// --- Sky radiance on escape (BakeConfig::environment_light) ---
+//
+// Every test here sets confidence_threshold 0 (each point takes exactly
+// `samples` rays, so sky radiance can't change the sample count) and
+// firefly_clamp 0. "Infinite" floors and ceilings are squares of side 2000
+// centred on the point, at most 20 units from it, well inside the first ray's
+// tfar of 1e4: the band they miss lies within about 1.2 degrees of the horizon.
+
+namespace {
+
+constexpr float kSqrtPi = 1.7724538509f;
+constexpr float kPiF = 3.14159265359f;
+
+// A uniform texture environment of radiance `value`.
+Environment UniformSky(const Eigen::Vector3f& value) {
+  Environment env;
+  env.type = Environment::Type::Texture;
+  env.texture.width = 16;
+  env.texture.height = 8;
+  env.texture.channels = 3;
+  env.texture.pixel_data.resize(16 * 8 * 3);
+  for (size_t i = 0; i < env.texture.pixel_data.size(); ++i) {
+    env.texture.pixel_data[i] = value[i % 3];
+  }
+  env.sh_coeffs = ProjectEnvironmentToSH(env);
+  return env;
+}
+
+BakeConfig SkyBake(int samples, bool environment_light) {
+  BakeConfig config;
+  config.samples = samples;
+  config.bounces = 1;
+  config.confidence_threshold = 0.0f;
+  config.firefly_clamp = 0.0f;
+  config.environment_light = environment_light;
+  return config;
+}
+
+// A square of side 2000 centred on the origin's XY at height z.
+Q3Map2Surface BigSquare(float z, bool faces_up, int material_id) {
+  return RectXY(-1000, 1000, -1000, 1000, z, faces_up, material_id);
+}
+
+// A material whose albedo is the sRGB byte `v` in every channel.
+Material GreyMaterial(uint8_t v) {
+  Material mat = WhiteMaterial();
+  mat.name = "grey";
+  mat.albedo.pixel_data = {v, v, v, 255};
+  return mat;
+}
+
+// A fully transparent (alpha 0) material: an alpha cut-out.
+Material CutOutMaterial() {
+  Material mat = WhiteMaterial();
+  mat.name = "cutout";
+  mat.albedo.pixel_data = {255, 255, 255, 0};
+  return mat;
+}
+
+}  // namespace
+
+// An up-facing point on an open floor sees the uniform sky over its whole
+// hemisphere: L0 = L 2 pi Y00 = sqrt(pi) L and irradiance pi L. Every sample's
+// L0 is the same, so L0 has no noise; irradiance per sample is 2 pi L cos,
+// with sigma pi L / sqrt(3) = 1.81 L, so 1024 samples give sigma 0.057 L.
+TEST(BakerSkyTest, OpenFloorUnderUniformSky) {
+  const Eigen::Vector3f kL(0.5f, 1.0f, 2.0f);
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  AddQ3Map2Surface(BigSquare(0, /*faces_up=*/true, 0), &scene);
+  scene.environment = UniformSky(kL);
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0)};
+
+  const BakeResult on = BakeWith(scene, points, SkyBake(1024, true));
+  const SHCoeffs& sh = on.sh_texture.pixels[0];
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NEAR(sh.coeffs[0][c], kSqrtPi * kL[c], 1e-3f * kL[c]) << c;
+    EXPECT_NEAR(sh.irradiance[c], kPiF * kL[c], 0.3f * kL[c]) << c;
+  }
+
+  // Without the opt-in the sky carries nothing.
+  const BakeResult off = BakeWith(scene, points, SkyBake(1024, false));
+  EXPECT_EQ(off.sh_texture.pixels[0].coeffs[0], Eigen::Vector3f::Zero());
+}
+
+// A down-facing point 10 units above a Lambertian floor of albedo a under a
+// uniform sky, with no lights: the floor sees the whole sky, so its radiance
+// is a L, and the point's L0 is sqrt(pi) a L. Each sample that hits the floor
+// gives exactly a L (cosine-sampled bounce, brdf a / pi, cos / pdf = pi), so
+// the only error is the band within atan(10 / 1000) of the horizon that
+// misses the floor and sees L: at most 1% of the samples, adding at most
+// 0.01 (1 - a) / a of L0.
+TEST(BakerSkyTest, BouncedSkyLight) {
+  const Eigen::Vector3f kL(1.0f, 2.0f, 4.0f);
+  const uint8_t kAlbedoByte = 188;
+  const float a = SRGBToLinear(kAlbedoByte);  // about 0.5
+  Scene scene;
+  scene.materials.push_back(GreyMaterial(kAlbedoByte));
+  AddQ3Map2Surface(BigSquare(0, /*faces_up=*/true, 0), &scene);
+  scene.environment = UniformSky(kL);
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 10), Eigen::Vector3f(0, 0, -1), 0)};
+
+  const BakeResult on = BakeWith(scene, points, SkyBake(1024, true));
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NEAR(on.sh_texture.pixels[0].coeffs[0][c], kSqrtPi * a * kL[c],
+                0.02f * kSqrtPi * a * kL[c])
+        << c;
+  }
+
+  const BakeResult off = BakeWith(scene, points, SkyBake(1024, false));
+  for (int k = 0; k < 9; ++k) {
+    EXPECT_EQ(off.sh_texture.pixels[0].coeffs[k], Eigen::Vector3f::Zero()) << k;
+  }
+}
+
+// Sky light passes an alpha-0 quad: an up-facing point under one gets the
+// same L0 as without it. Both are exact (every sample sees L), so they agree
+// to float precision.
+TEST(BakerSkyTest, SkyThroughCutOut) {
+  const Eigen::Vector3f kL(1.0f, 1.0f, 1.0f);
+  Scene open;
+  open.materials.push_back(WhiteMaterial());
+  open.materials.push_back(CutOutMaterial());
+  AddQ3Map2Surface(BigSquare(0, /*faces_up=*/true, 0), &open);
+  open.environment = UniformSky(kL);
+  Scene covered = open;
+  AddQ3Map2Surface(BigSquare(5, /*faces_up=*/false, 1), &covered);
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0)};
+
+  const BakeResult a = BakeWith(open, points, SkyBake(256, true));
+  const BakeResult b = BakeWith(covered, points, SkyBake(256, true));
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NEAR(b.sh_texture.pixels[0].coeffs[0][c],
+                a.sh_texture.pixels[0].coeffs[0][c], 1e-4f)
+        << c;
+  }
+  EXPECT_NEAR(b.sh_texture.pixels[0].coeffs[0].x(), kSqrtPi, 1e-3f);
+}
+
+// An indirect-only bake never returns sky radiance, whatever the opt-in:
+// with the environment and the opt-in set it is bit-identical to the same
+// bake without the environment.
+TEST(BakerSkyTest, IndirectBakeIgnoresEnvironment) {
+  Scene with_env;
+  with_env.materials.push_back(WhiteMaterial());
+  with_env.materials.push_back(CutOutMaterial());
+  AddQ3Map2Surface(BigSquare(0, /*faces_up=*/true, 0), &with_env);
+  AddQ3Map2Surface(RectXY(-2, 2, -2, 2, 3, /*faces_up=*/false, 0), &with_env);
+  AddQ3Map2Surface(RectXY(2, 6, -2, 2, 3, /*faces_up=*/false, 1), &with_env);
+  with_env.lights.push_back(SunFromAbove());
+  Scene without_env = with_env;
+  with_env.environment = UniformSky(Eigen::Vector3f(1, 2, 3));
+  std::vector<SurfacePoint> points;
+  for (int i = 0; i < 8; ++i) {
+    points.push_back(PointAt(Eigen::Vector3f(-3.0f + i, 0.5f, 0),
+                             Eigen::Vector3f(0, 0, 1), 0));
+  }
+  points.push_back(ProbeAt(Eigen::Vector3f(0, 0, 1)));
+
+  BakeConfig config = SkyBake(128, true);
+  config.bounces = 3;
+  config.indirect_only = true;
+  ExpectBitIdentical(BakeWith(with_env, points, config),
+                     BakeWith(without_env, points, config));
+}
+
+// A Z-up scene: an environment bright only near its +Y pole, with a frame
+// mapping world +Z to +Y, lights a point facing world +Z and not one facing
+// world -Z.
+TEST(BakerSkyTest, ZUpSceneUsesEnvironmentFrame) {
+  Environment env;
+  env.type = Environment::Type::Texture;
+  env.texture.width = 16;
+  env.texture.height = 8;
+  env.texture.channels = 3;
+  env.texture.pixel_data.assign(16 * 8 * 3, 0.0f);
+  // Row 0 (theta < pi / 8 from +Y) is bright.
+  for (int i = 0; i < 16 * 3; ++i) env.texture.pixel_data[i] = 10.0f;
+  env.to_environment << 1, 0, 0,  //
+      0, 0, 1,                    //
+      0, -1, 0;
+  env.sh_coeffs = ProjectEnvironmentToSH(env);
+
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  scene.environment = env;
+  const std::vector<SurfacePoint> points{
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, 1), 0),
+      PointAt(Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 0, -1), 0)};
+
+  const BakeResult r = BakeWith(scene, points, SkyBake(1024, true));
+  EXPECT_GT(r.sh_texture.pixels[0].coeffs[0].x(), 0.1f);
+  EXPECT_GT(r.sh_texture.pixels[0].irradiance.x(), 0.1f);
+  EXPECT_EQ(r.sh_texture.pixels[1].coeffs[0], Eigen::Vector3f::Zero());
+  EXPECT_EQ(r.sh_texture.pixels[1].irradiance, Eigen::Vector3f::Zero());
+}
+
+// Visibility doesn't depend on sky radiance: a full bake of a scene with
+// lights, cut-outs and an environment gives bit-identical visibility with the
+// opt-in on and off (and without the environment).
+TEST(BakerSkyTest, VisibilityIndependentOfSkyRadiance) {
+  Scene scene;
+  scene.materials.push_back(WhiteMaterial());
+  scene.materials.push_back(CutOutMaterial());
+  AddQ3Map2Surface(BigSquare(0, /*faces_up=*/true, 0), &scene);
+  AddQ3Map2Surface(RectXY(-2, 2, -2, 2, 3, /*faces_up=*/false, 0), &scene);
+  AddQ3Map2Surface(RectXY(2, 6, -2, 2, 3, /*faces_up=*/false, 1), &scene);
+  scene.lights.push_back(SunFromAbove());
+  Scene no_env = scene;
+  scene.environment = UniformSky(Eigen::Vector3f(1, 2, 3));
+  std::vector<SurfacePoint> points;
+  for (int i = 0; i < 8; ++i) {
+    points.push_back(PointAt(Eigen::Vector3f(-3.0f + i, 0.5f, 0),
+                             Eigen::Vector3f(0, 0, 1), 0));
+  }
+  points.push_back(ProbeAt(Eigen::Vector3f(0, 0, 1)));
+
+  BakeConfig config = SkyBake(128, true);
+  config.bounces = 3;
+  const BakeResult on = BakeWith(scene, points, config);
+  config.environment_light = false;
+  const BakeResult off = BakeWith(scene, points, config);
+  const BakeResult none = BakeWith(no_env, points, config);
+
+  const auto& v_on = on.environment_visibility_texture.pixel_data;
+  const auto& v_off = off.environment_visibility_texture.pixel_data;
+  const auto& v_none = none.environment_visibility_texture.pixel_data;
+  ASSERT_EQ(v_on.size(), v_off.size());
+  EXPECT_EQ(std::memcmp(v_on.data(), v_off.data(), v_on.size() * 4), 0);
+  EXPECT_EQ(std::memcmp(v_on.data(), v_none.data(), v_on.size() * 4), 0);
+  // The sky really did add light where the opt-in was set.
+  EXPECT_GT(on.sh_texture.pixels[0].coeffs[0].x(),
+            off.sh_texture.pixels[0].coeffs[0].x());
+  // And the opt-in off is bit-identical to having no environment at all.
+  ExpectBitIdentical(off, none);
 }
 
 }  // namespace sh_baker
