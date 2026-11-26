@@ -19,7 +19,7 @@ struct TraceConfig {
               const LightTree* light_tree, int max_depth, int num_light_samples,
               std::function<void()> on_direct_hit_sky_fn,
               float firefly_clamp = 0.0f,
-              const Environment* environment = nullptr)
+              bool indirect_only = false)
       : rtc_scene(rtc_scene),
         scene(scene),
         light_tree(light_tree),
@@ -27,7 +27,7 @@ struct TraceConfig {
         num_light_samples(num_light_samples),
         on_direct_hit_sky_fn(on_direct_hit_sky_fn),
         firefly_clamp(firefly_clamp),
-        environment(environment) {}
+        indirect_only(indirect_only) {}
 
   const RTCScene rtc_scene;
   const Scene& scene;
@@ -39,12 +39,8 @@ struct TraceConfig {
   // suppress fireflies. <= 0 disables clamping (unbiased). Safe to enable here
   // because the output is low-frequency 3rd-order diffuse SH.
   const float firefly_clamp;
-  // The sky a ray that escapes the scene sees, at any depth: Trace() returns
-  // EvaluateEnvironment() in the ray's direction. nullptr means escaped rays
-  // carry no radiance. It is independent of scene.environment, so the caller
-  // decides when sky light applies (BakeSHLightMap sets it only for the full
-  // bake with BakeConfig::environment_light).
-  const Environment* environment;
+  // Include sky radiance only after a surface reflection.
+  const bool indirect_only;
 };
 
 // Computes a Monte Carlo path and return a radiance sample.
@@ -58,8 +54,8 @@ struct TraceConfig {
 //
 // To drastically reduce variance, the scene's lights (punctual, directional
 // and emissive area lights) are sampled explicitly at every hit with next
-// event estimation (NEE), and the BSDF-sampled continuation ray gathers only
-// light reflected by other surfaces:
+// event estimation (NEE), and the BSDF-sampled continuation ray gathers
+// light reflected by other surfaces and sky radiance:
 //
 // L_o(x, \omega_o) = L_e(x, \omega_o) + \int_{A_e} ...Le(x, x')...dA_e(x') +
 // \int_{\Omega} ...L_i(x, \omega_i)...d\omega_i
@@ -69,9 +65,9 @@ struct TraceConfig {
 // from the sky.
 //
 // The sky is not part of NEE. It is reached only by escape: a ray that hits
-// nothing returns EvaluateEnvironment(*config.environment, direction), or zero
-// when config.environment is null. This holds at the baked point (depth 0),
-// after bounces and past alpha cut-outs. An environment must therefore not
+// nothing can return radiance from Scene::environment. In indirect_only mode,
+// this requires a surface reflection. Passing through alpha coverage does
+// not count as a reflection. An environment must therefore not
 // contain a sun that a directional light already supplies, or it is counted
 // twice.
 Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,

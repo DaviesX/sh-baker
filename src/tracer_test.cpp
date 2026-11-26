@@ -138,12 +138,11 @@ Environment UniformEnvironment(const Eigen::Vector3f& value) {
 TEST_F(TracerTest, TraceSkyReturnsEnvironmentRadiance) {
   Scene scene;
   RTCScene rtc_scene = BuildBVH(scene, device);
-  const Environment env = UniformEnvironment(Eigen::Vector3f(0.5f, 1.0f, 2.0f));
+  scene.environment = UniformEnvironment(Eigen::Vector3f(0.5f, 1.0f, 2.0f));
 
   bool sky_hit = false;
   TraceConfig config(
-      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; },
-      /*firefly_clamp=*/0.0f, &env);
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; });
   std::mt19937 rng(42);
   Ray ray;
   ray.origin = Eigen::Vector3f(0, 0, 0);
@@ -157,10 +156,8 @@ TEST_F(TracerTest, TraceSkyReturnsEnvironmentRadiance) {
   rtcReleaseScene(rtc_scene);
 }
 
-TEST_F(TracerTest, TraceSkyWithoutEnvironmentPointerReturnsZero) {
-  // The scene's own environment is not read: only TraceConfig::environment.
+TEST_F(TracerTest, TraceSkyWithoutEnvironmentReturnsZero) {
   Scene scene;
-  scene.environment = UniformEnvironment(Eigen::Vector3f::Ones());
   RTCScene rtc_scene = BuildBVH(scene, device);
 
   TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [] {});
@@ -188,11 +185,10 @@ TEST_F(TracerTest, TraceSkyThroughCutOut) {
   scene.geometries.push_back(card);
   RTCScene rtc_scene = BuildBVH(scene, device);
 
-  const Environment env = UniformEnvironment(Eigen::Vector3f(3.0f, 2.0f, 1.0f));
+  scene.environment = UniformEnvironment(Eigen::Vector3f(3.0f, 2.0f, 1.0f));
   bool sky_hit = false;
   TraceConfig config(
-      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; },
-      /*firefly_clamp=*/0.0f, &env);
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; });
   std::mt19937 rng(42);
   Ray ray;
   ray.origin = Eigen::Vector3f::Zero();

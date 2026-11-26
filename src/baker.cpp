@@ -163,13 +163,6 @@ BakeResult BakeSHLightMap(const Scene& scene,
   const size_t total_pixels = surface_points.size();
   BakeObserver bake_observer(config, total_pixels);
 
-  // Escaped rays return sky radiance only in an opted-in full bake.
-  const Environment* environment =
-      (config.environment_light && !config.indirect_only &&
-       scene.environment.has_value())
-          ? &*scene.environment
-          : nullptr;
-
 #if USE_TBB
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, total_pixels),
@@ -207,7 +200,7 @@ BakeResult BakeSHLightMap(const Scene& scene,
               config.num_light_samples,
               /*on_direct_hit_sky_fn=*/
               [&visibility_accum]() { visibility_accum += 1.0f; },
-              config.firefly_clamp, environment);
+              config.firefly_clamp, config.indirect_only);
 
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);
@@ -223,10 +216,10 @@ BakeResult BakeSHLightMap(const Scene& scene,
                   sp.full_sphere);
             }
 
-            // Indirect lighting.
-            Eigen::Vector3f Li_indirect =
+            // Trace incident radiance, including direct sky in a full bake.
+            Eigen::Vector3f Li =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
-            AccumulateRadiance(Li_indirect, ray->direction, sp.normal,
+            AccumulateRadiance(Li, ray->direction, sp.normal,
                                &sample_sh_accum);
 
             AddSample(sample_sh_accum, &sensor);
