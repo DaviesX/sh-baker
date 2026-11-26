@@ -7,6 +7,8 @@
 #include <cmath>
 #include <random>
 
+#include "light.h"
+
 namespace sh_baker {
 
 class SceneTest : public ::testing::Test {

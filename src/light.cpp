@@ -16,6 +16,16 @@
 namespace sh_baker {
 namespace {
 
+constexpr float kPi = 3.14159265359f;
+constexpr float kTwoPi = 6.28318530718f;
+
+// Coefficients for a standard "Clear Sky" (Turbidity ~2.5)
+const float perez_A = -1.0f;   // Darkening of horizon
+const float perez_B = -0.32f;  // Luminance gradient near horizon
+const float perez_C = 10.0f;   // Relative intensity of circumsolar region
+const float perez_D = -3.0f;   // Width of circumsolar region
+const float perez_E = 0.45f;   // Relative backscatter
+
 // World-space surface normal at a barycentric point on a triangle. Uses the
 // interpolated vertex normals when present (matching TransformedNormals'
 // rotation-only convention), else the geometric face normal.
@@ -40,7 +50,210 @@ Eigen::Vector3f InterpolatedWorldNormal(const Geometry& geo, uint32_t i0,
   return (len > 1e-12f) ? Eigen::Vector3f(n / len) : Eigen::Vector3f::UnitZ();
 }
 
+Eigen::Vector3f GetPixel(const Texture32F& tex, int x, int y) {
+  int idx = (y * tex.width + x) * tex.channels;
+  float r = tex.pixel_data[idx + 0];
+  float g = tex.pixel_data[idx + 1];
+  float b = tex.pixel_data[idx + 2];
+  return Eigen::Vector3f(r, g, b);
+}
+
+// Projects an Equirectangular (LatLong) map to SH
+SHCoeffs ProjectLatLongMap(const Texture32F& tex) {
+  SHCoeffs coeffs;
+  int w = tex.width;
+  int h = tex.height;
+
+  // Solid angle of a pixel (approx constant per row y)
+  // d_omega = (2pi / W) * (pi / H) * sin(theta)
+  float d_phi = kTwoPi / w;
+  float d_theta = kPi / h;
+
+  Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
+
+  for (int y = 0; y < h; ++y) {
+    // Theta from 0 (top) to pi (bottom)
+    float theta = (y + 0.5f) * d_theta;
+    float sin_theta = std::sin(theta);
+    float d_omega = d_phi * d_theta * sin_theta;
+
+    // Optimization: if sin_theta is near 0 (poles), weight is near 0.
+    if (sin_theta < 1e-4f) continue;
+
+    for (int x = 0; x < w; ++x) {
+      // Phi from 0 to 2pi
+      // Standard Equirectangular: Center (0.5) is usually +Z or -Z depending on
+      // convention. Here assuming u=0 -> +Z (phi=0), u=0.25 -> +X. Note: glTF
+      // usually assumes +Z is front.
+      float phi = (x + 0.5f) * d_phi;
+
+      // Convert Spherical to Cartesian (Y-up)
+      // y = cos(theta)
+      // x = sin(theta) * sin(phi)
+      // z = sin(theta) * cos(phi)
+      Eigen::Vector3f dir(std::sin(theta) * std::sin(phi), std::cos(theta),
+                          std::sin(theta) * std::cos(phi));
+
+      Eigen::Vector3f radiance = GetPixel(tex, x, y);
+
+      AccumulateRadiance(radiance * d_omega, dir, up, &coeffs);
+    }
+  }
+  return coeffs;
+}
+
+// Corrected Preetham / Perez Sky Evaluation
+// Evaluates the Perez function for a given view direction
+float EvaluatePerez(const Eigen::Vector3f& dir, const Eigen::Vector3f& sunDir) {
+  // 1. Zenith Angle (gamma): Angle between View and Up (Y-axis)
+  float cosThetaZenith = std::max(0.001f, dir.y());  // Clamp to horizon
+
+  // 2. Sun Angle (zeta): Angle between View and Sun
+  float cosThetaSun = dir.dot(sunDir);
+  // Clamp for acos safety
+  float gamma = std::acos(std::clamp(cosThetaSun, -1.0f, 1.0f));
+
+  // Perez Function: F(theta, gamma) = (1 + A*exp(B/cos_theta)) * (1 +
+  // C*exp(D*gamma) + E*cos^2(gamma))
+  float f_zenith = (1.0f + perez_A * std::exp(perez_B / cosThetaZenith));
+  float f_sun = (1.0f + perez_C * std::exp(perez_D * gamma) +
+                 perez_E * cosThetaSun * cosThetaSun);
+
+  return f_zenith * f_sun;
+}
+
+// The zenith Perez value the Preetham radiance is normalised by.
+float PreethamZenith(const Eigen::Vector3f& sun_dir) {
+  float zenith_val = EvaluatePerez(Eigen::Vector3f(0.0f, 1.0f, 0.0f), sun_dir);
+  if (zenith_val <= 1e-6f) zenith_val = 1.0f;
+  return zenith_val;
+}
+
+// The Preetham sky's radiance in Y-up direction `dir` (above the horizon; the
+// caller handles y < 0): the Perez value capped at 30x the zenith, coloured as
+// a blue sky scaled by luminance / zenith.
+Eigen::Vector3f PreethamRadiance(const Eigen::Vector3f& dir,
+                                 const Eigen::Vector3f& sun_dir,
+                                 float zenith_val) {
+  float raw_luminance = EvaluatePerez(dir, sun_dir);
+
+  // Apply the cap (e.g., 30x zenith) to prevent ringing from sun disk
+  float cap = zenith_val * 30.0f;
+  float luminance = std::min(raw_luminance, cap);
+
+  // Convert luminance to RGB (Simplified: Blue sky color scaled by
+  // luminance)
+  return Eigen::Vector3f(0.2f, 0.5f, 0.9f) * (luminance / zenith_val);
+}
+
+SHCoeffs ProjectPreethamToSH(const Environment& env) {
+  SHCoeffs coeffs;
+
+  // Integration resolution (higher = more accurate)
+  const int steps_theta = 64;  // Latitude (0 to PI)
+  const int steps_phi = 128;   // Longitude (0 to 2PI)
+
+  float d_theta = kPi / steps_theta;
+  float d_phi = kTwoPi / steps_phi;
+
+  Eigen::Vector3f sun_dir = env.sun_direction.normalized();
+  Eigen::Vector3f up(0.0f, 1.0f, 0.0f);
+
+  // Zenith luminance for normalization
+  float zenith_val = PreethamZenith(sun_dir);
+
+  for (int t = 0; t < steps_theta; ++t) {
+    float theta = (t + 0.5f) * d_theta;  // 0 (North Pole/Up) to PI
+    float sin_theta = std::sin(theta);
+
+    for (int p = 0; p < steps_phi; ++p) {
+      float phi = (p + 0.5f) * d_phi;
+
+      // 1. Convert Spherical to Cartesian (Y-up)
+      // Note: ProjectLatLongMap convention was:
+      // y = cos(theta)
+      // x = sin(theta) * sin(phi)
+      // z = sin(theta) * cos(phi)
+      // This makes theta=0 -> y=1 (Up). Consistent with Preetham.
+      float y = std::cos(theta);
+      float x = sin_theta * std::sin(phi);
+      float z = sin_theta * std::cos(phi);
+      Eigen::Vector3f dir(x, y, z);
+
+      // Handle Horizon clipping (ground is black)
+      if (y < 0.0f) continue;
+
+      // 2. Evaluate Radiance using Preetham function
+      Eigen::Vector3f radiance = PreethamRadiance(dir, sun_dir, zenith_val);
+
+      // 3. Differential solid angle (dA = sin(theta) * dTheta * dPhi)
+      float differential_solid_angle = sin_theta * d_theta * d_phi;
+
+      // 4. Accumulate
+      AccumulateRadiance(radiance * differential_solid_angle, dir, up, &coeffs);
+    }
+  }
+
+  return coeffs;
+}
+
 }  // namespace
+
+SHCoeffs ProjectEnvironmentToSH(const Environment& env) {
+  if (env.type == Environment::Type::Texture) {
+    return ProjectLatLongMap(env.texture);
+  } else {
+    return ProjectPreethamToSH(env);
+  }
+}
+
+Eigen::Vector3f EvaluateEnvironment(const Environment& env,
+                                    const Eigen::Vector3f& world_dir) {
+  Eigen::Vector3f dir = env.to_environment * world_dir;
+  float norm = dir.norm();
+  if (!(norm > 0.0f)) return Eigen::Vector3f::Zero();
+  dir /= norm;
+
+  if (env.type == Environment::Type::Preetham) {
+    // Ground is black, as in ProjectPreethamToSH().
+    if (dir.y() < 0.0f) return Eigen::Vector3f::Zero();
+    Eigen::Vector3f sun_dir = env.sun_direction.normalized();
+    return PreethamRadiance(dir, sun_dir, PreethamZenith(sun_dir));
+  }
+
+  // Inverse of ProjectLatLongMap()'s mapping: texel (x, y) holds
+  // theta = (y + 0.5) pi / H from +Y and phi = (x + 0.5) 2 pi / W, with
+  // dir = (sin theta sin phi, cos theta, sin theta cos phi).
+  const Texture32F& tex = env.texture;
+  const int w = static_cast<int>(tex.width);
+  const int h = static_cast<int>(tex.height);
+  if (w <= 0 || h <= 0 || tex.channels < 3) return Eigen::Vector3f::Zero();
+
+  float theta = std::acos(std::clamp(dir.y(), -1.0f, 1.0f));
+  float phi = std::atan2(dir.x(), dir.z());
+  if (phi < 0.0f) phi += kTwoPi;
+
+  float u = phi / kTwoPi * w - 0.5f;
+  float v = theta / kPi * h - 0.5f;
+  float u_floor = std::floor(u);
+  float v_floor = std::floor(v);
+  float fu = u - u_floor;
+  float fv = v - v_floor;
+
+  // Wrap in longitude.
+  int x0 = static_cast<int>(u_floor) % w;
+  if (x0 < 0) x0 += w;
+  int x1 = (x0 + 1) % w;
+  // Clamp in latitude.
+  int y0 = std::clamp(static_cast<int>(v_floor), 0, h - 1);
+  int y1 = std::clamp(static_cast<int>(v_floor) + 1, 0, h - 1);
+
+  Eigen::Vector3f top =
+      (1.0f - fu) * GetPixel(tex, x0, y0) + fu * GetPixel(tex, x1, y0);
+  Eigen::Vector3f bottom =
+      (1.0f - fu) * GetPixel(tex, x0, y1) + fu * GetPixel(tex, x1, y1);
+  return (1.0f - fv) * top + fv * bottom;
+}
 
 namespace light_internal {
 
