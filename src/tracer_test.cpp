@@ -23,7 +23,7 @@ TEST_F(TracerTest, TraceSky) {
   RTCScene rtc_scene = BuildBVH(scene, device);
 
   bool sky_hit = false;
-  auto on_sky = [&]() { sky_hit = true; };
+  auto on_sky = [&](const Ray&, bool escaped) { sky_hit = escaped; };
 
   TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, on_sky);
 
@@ -55,10 +55,14 @@ TEST_F(TracerTest, TraceObjectNoLight) {
 
   RTCScene rtc_scene = BuildBVH(scene, device);
 
-  bool sky_hit = false;
-  auto on_sky = [&]() { sky_hit = true; };
+  int first_ray_reports = 0;
+  auto on_first_ray = [&](const Ray&, bool escaped) {
+    ++first_ray_reports;
+    EXPECT_FALSE(escaped);
+  };
 
-  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, on_sky);
+  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1,
+                     on_first_ray);
 
   std::mt19937 rng(42);
   Ray ray;
@@ -69,7 +73,7 @@ TEST_F(TracerTest, TraceObjectNoLight) {
   Eigen::Vector3f result = Trace(config, ray, 0, rng);
 
   EXPECT_EQ(result, Eigen::Vector3f::Zero());
-  EXPECT_FALSE(sky_hit);
+  EXPECT_EQ(first_ray_reports, 1);
 
   rtcReleaseScene(rtc_scene);
 }
@@ -107,7 +111,7 @@ TEST_F(TracerTest, TraceThroughTransparentSurface) {
   std::vector<Light> lights{light};
   LightTree tree;
   tree.Build(lights);
-  TraceConfig config(rtc_scene, scene, &tree, 1, 1, [] {});
+  TraceConfig config(rtc_scene, scene, &tree, 1, 1, {});
   Ray ray;
   ray.origin = Eigen::Vector3f::Zero();
   ray.direction = Eigen::Vector3f(0, 0, 1);
@@ -142,7 +146,8 @@ TEST_F(TracerTest, TraceSkyReturnsEnvironmentRadiance) {
 
   bool sky_hit = false;
   TraceConfig config(
-      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; });
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1,
+      [&](const Ray&, bool escaped) { sky_hit = escaped; });
   std::mt19937 rng(42);
   Ray ray;
   ray.origin = Eigen::Vector3f(0, 0, 0);
@@ -160,7 +165,7 @@ TEST_F(TracerTest, TraceSkyWithoutEnvironmentReturnsZero) {
   Scene scene;
   RTCScene rtc_scene = BuildBVH(scene, device);
 
-  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [] {});
+  TraceConfig config(rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, {});
   std::mt19937 rng(42);
   Ray ray;
   ray.origin = Eigen::Vector3f(0, 0, 0);
@@ -188,7 +193,8 @@ TEST_F(TracerTest, TraceSkyThroughCutOut) {
   scene.environment = UniformEnvironment(Eigen::Vector3f(3.0f, 2.0f, 1.0f));
   bool sky_hit = false;
   TraceConfig config(
-      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1, [&]() { sky_hit = true; });
+      rtc_scene, scene, /*light_tree=*/nullptr, 1, 1,
+      [&](const Ray&, bool escaped) { sky_hit = escaped; });
   std::mt19937 rng(42);
   Ray ray;
   ray.origin = Eigen::Vector3f::Zero();

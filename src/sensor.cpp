@@ -50,12 +50,28 @@ void AddSample(const SHCoeffs& sample, Sensor* sensor) {
   sensor->m2_luminance += delta * delta2;
 }
 
+void AddVisibilitySample(float weight, bool escaped, Sensor* sensor) {
+  sensor->total_weight += weight;
+  if (escaped) sensor->escaped_weight += weight;
+}
+
 SHCoeffs GetEstimation(const Sensor& sensor) {
   if (sensor.sample_count == 0) {
     return SHCoeffs(0);
   }
   return sensor.sh_coeffs_sum *
          (1.0f / static_cast<float>(sensor.sample_count));
+}
+
+float GetVisibility(const Sensor& sensor) {
+  if (sensor.sp.full_sphere) {
+    return sensor.sample_count > 0
+               ? sensor.escaped_weight * (1.0f / sensor.sample_count)
+               : 0.0f;
+  }
+  return sensor.total_weight > 0.0f
+             ? sensor.escaped_weight / sensor.total_weight
+             : 0.0f;
 }
 
 std::optional<Ray> SampleRay(const Sensor& sensor, std::mt19937& rng) {

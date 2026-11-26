@@ -23,12 +23,13 @@ Eigen::Vector3f TracePath(const TraceConfig& config, const Ray& ray, int depth,
   std::optional<OcclusionWithAlpha> surface =
       FindOcclusion(config.rtc_scene, config.scene.materials, visibility_ray);
 
+  if (depth == 0 && config.on_first_ray_fn) {
+    config.on_first_ray_fn(ray, /*escaped=*/!surface.has_value());
+  }
+
   if (!surface.has_value()) {
     // The ray escaped. NEE samples only the scene's lights, never the sky, so
     // the sky's radiance is added here, by escape, and nowhere else.
-    if (depth == 0) {
-      config.on_direct_hit_sky_fn();
-    }
     if (include_sky && config.scene.environment) {
       return EvaluateEnvironment(*config.scene.environment, ray.direction);
     }

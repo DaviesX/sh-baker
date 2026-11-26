@@ -5,6 +5,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -191,15 +192,19 @@ BakeResult BakeSHLightMap(const Scene& scene,
           // 2 pi for a surface point, 4 pi for a full-sphere point.
           const float inv_pdf_uniform = SampleRayInvPdf(sensor);
 
-          float visibility_accum = 0.0f;
-
           // Loop-invariant for this texel: build once, not per sample (the
           // std::function makes per-iteration construction needlessly costly).
           TraceConfig trace_config(
               rtc_scene, scene, &light_tree, config.bounces,
               config.num_light_samples,
-              /*on_direct_hit_sky_fn=*/
-              [&visibility_accum]() { visibility_accum += 1.0f; },
+              /*on_first_ray_fn=*/
+              [&sp, &sensor](const Ray& ray, bool escaped) {
+                const float weight =
+                    sp.full_sphere
+                        ? 1.0f
+                        : std::max(0.0f, ray.direction.dot(sp.normal));
+                AddVisibilitySample(weight, escaped, &sensor);
+              },
               config.firefly_clamp, config.indirect_only);
 
           while (true) {
@@ -219,17 +224,14 @@ BakeResult BakeSHLightMap(const Scene& scene,
             // Trace incident radiance, including direct sky in a full bake.
             Eigen::Vector3f Li =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
-            AccumulateRadiance(Li, ray->direction, sp.normal,
-                               &sample_sh_accum);
+            AccumulateRadiance(Li, ray->direction, sp.normal, &sample_sh_accum);
 
             AddSample(sample_sh_accum, &sensor);
           }
 
           result.sh_texture.pixels[idx] = GetEstimation(sensor);
-          float inv_samples =
-              sensor.sample_count > 0 ? (1.0f / sensor.sample_count) : 0.0f;
           result.environment_visibility_texture.pixel_data[idx] =
-              visibility_accum * inv_samples;
+              GetVisibility(sensor);
 
           bake_observer.FinishOneTask();
         }

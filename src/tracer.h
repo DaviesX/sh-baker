@@ -17,15 +17,14 @@ class LightTree;
 struct TraceConfig {
   TraceConfig(const RTCScene rtc_scene, const Scene& scene,
               const LightTree* light_tree, int max_depth, int num_light_samples,
-              std::function<void()> on_direct_hit_sky_fn,
-              float firefly_clamp = 0.0f,
-              bool indirect_only = false)
+              std::function<void(const Ray&, bool escaped)> on_first_ray_fn,
+              float firefly_clamp = 0.0f, bool indirect_only = false)
       : rtc_scene(rtc_scene),
         scene(scene),
         light_tree(light_tree),
         max_depth(max_depth),
         num_light_samples(num_light_samples),
-        on_direct_hit_sky_fn(on_direct_hit_sky_fn),
+        on_first_ray_fn(on_first_ray_fn),
         firefly_clamp(firefly_clamp),
         indirect_only(indirect_only) {}
 
@@ -34,7 +33,8 @@ struct TraceConfig {
   const LightTree* light_tree;
   const int max_depth;
   const int num_light_samples;
-  const std::function<void()> on_direct_hit_sky_fn;
+  // Reports whether the first ray escaped without any intersections.
+  const std::function<void(const Ray&, bool escaped)> on_first_ray_fn;
   // Max per-sample indirect luminance. Values above this are scaled down to
   // suppress fireflies. <= 0 disables clamping (unbiased). Safe to enable here
   // because the output is low-frequency 3rd-order diffuse SH.
