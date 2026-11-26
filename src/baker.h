@@ -17,7 +17,7 @@ struct BakeConfig {
   int samples = 128;           // Rays per texel
   int bounces = 5;             // Max path depth
   int num_light_samples = 1;   // Number of light samples for NEE
-  bool indirect_only = false;  // Skip direct lighting at baked points.
+  bool indirect_only = false;  // Skip direct lighting, including sky, at baked points.
   // Max per-sample indirect luminance; over-bright samples are scaled down to
   // suppress fireflies. <= 0 disables (unbiased).
   float firefly_clamp = 0.0f;
@@ -28,7 +28,6 @@ struct BakeConfig {
   // cost, and no early stop for zero-variance points such as ones lit only by
   // unshadowed point lights).
   float confidence_threshold = 0.01f;
-
   // Optional progress report: called with (points finished, total points),
   // where finished counts points baked or skipped as invalid. Calls come from
   // bake worker threads but never overlap; `done` strictly increases, at most
@@ -59,8 +58,7 @@ struct BakeResult {
   // from the point's first (sensor) rays, where a ray "escapes" if it hits
   // nothing. An alpha cut-out still blocks. For a surface point it is
   // cosine-weighted about the normal, sum(e_i cos_i) / sum(cos_i) with e_i 1
-  // for an escaping ray, the weight a runtime needs to scale the sky's
-  // irradiance at the normal (0 if every cos_i is 0). For a full-sphere point
+  // for an escaping ray (0 if every cos_i is 0). For a full-sphere point
   // it is the uniform fraction of rays that escape. Skipped points hold -1.
   Texture32F environment_visibility_texture;
   // True when cancel_fn returned true, even if every point had already
