@@ -35,16 +35,24 @@ struct Sensor {
   const float confidence_threshold;
 
   SHCoeffs sh_coeffs_sum;
+  float escaped_weight = 0.f;
+  float total_weight = 0.f;
   unsigned sample_count = 0;
   float mean_luminance = 0.0f;
   float m2_luminance = 0.0f;
 };
 
-// Add a sample to the sensor.
+// Add an SH sample to the sensor.
 void AddSample(const SHCoeffs& sample, Sensor* sensor);
+
+// Add a visibility sample to the sensor.
+void AddVisibilitySample(float weight, bool escaped, Sensor* sensor);
 
 // Get the sample-averaged SH coefficients from the sensor.
 SHCoeffs GetEstimation(const Sensor& sensor);
+
+// Get the estimated visibility factor from the sensor.
+float GetVisibility(const Sensor& sensor);
 
 // Sample a ray from the sensor if we need more samples (sample count <
 // max_samples and, when confidence_threshold > 0, the adaptive stop has not

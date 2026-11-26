@@ -192,24 +192,20 @@ BakeResult BakeSHLightMap(const Scene& scene,
           // 2 pi for a surface point, 4 pi for a full-sphere point.
           const float inv_pdf_uniform = SampleRayInvPdf(sensor);
 
-          // Environment visibility. A surface point's is cosine-weighted,
-          // sum(escaped_i cos_i) / sum(cos_i) over its first rays, the weight
-          // irradiance needs (a ratio estimator: exactly 1 fully open, 0
-          // closed, always in [0, 1]). A full-sphere point has no normal, so
-          // its visibility is the uniform fraction of first rays that escape.
-          bool escaped = false;
-          float escapes = 0.0f;
-          float vis_num = 0.0f;
-          float vis_den = 0.0f;
-
           // Loop-invariant for this texel: build once, not per sample (the
           // std::function makes per-iteration construction needlessly costly).
           TraceConfig trace_config(
               rtc_scene, scene, &light_tree, config.bounces,
               config.num_light_samples,
-              /*on_direct_hit_sky_fn=*/
-              [&escaped]() { escaped = true; }, config.firefly_clamp,
-              config.indirect_only);
+              /*on_first_ray_fn=*/
+              [&sp, &sensor](const Ray& ray, bool escaped) {
+                const float weight =
+                    sp.full_sphere
+                        ? 1.0f
+                        : std::max(0.0f, ray.direction.dot(sp.normal));
+                AddVisibilitySample(weight, escaped, &sensor);
+              },
+              config.firefly_clamp, config.indirect_only);
 
           while (true) {
             std::optional<Ray> ray = SampleRay(sensor, rng);
@@ -226,33 +222,16 @@ BakeResult BakeSHLightMap(const Scene& scene,
             }
 
             // Trace incident radiance, including direct sky in a full bake.
-            escaped = false;
             Eigen::Vector3f Li =
                 Trace(trace_config, *ray, /*depth=*/0, rng) * inv_pdf_uniform;
-            if (sp.full_sphere) {
-              if (escaped) escapes += 1.0f;
-            } else {
-              const float cos_theta =
-                  std::max(0.0f, ray->direction.dot(sp.normal));
-              vis_den += cos_theta;
-              if (escaped) vis_num += cos_theta;
-            }
-            AccumulateRadiance(Li, ray->direction, sp.normal,
-                               &sample_sh_accum);
+            AccumulateRadiance(Li, ray->direction, sp.normal, &sample_sh_accum);
 
             AddSample(sample_sh_accum, &sensor);
           }
 
           result.sh_texture.pixels[idx] = GetEstimation(sensor);
-          float visibility;
-          if (sp.full_sphere) {
-            visibility = sensor.sample_count > 0
-                             ? escapes * (1.0f / sensor.sample_count)
-                             : 0.0f;
-          } else {
-            visibility = vis_den > 0.0f ? vis_num / vis_den : 0.0f;
-          }
-          result.environment_visibility_texture.pixel_data[idx] = visibility;
+          result.environment_visibility_texture.pixel_data[idx] =
+              GetVisibility(sensor);
 
           bake_observer.FinishOneTask();
         }
