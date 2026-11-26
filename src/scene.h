@@ -104,6 +104,12 @@ struct Environment {
 
   // For both types.
   SHCoeffs sh_coeffs;
+
+  // Rotation from world directions to the environment's own Y-up frame, applied
+  // by EvaluateEnvironment() before the lookup. The identity suits Y-up scenes;
+  // a Z-up scene (q3map2) passes a rotation mapping world +Z to +Y. It does not
+  // affect sh_coeffs, which stay in the environment's frame.
+  Eigen::Matrix3f to_environment = Eigen::Matrix3f::Identity();
 };
 
 // --- Scene ---

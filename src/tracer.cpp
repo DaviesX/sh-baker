@@ -3,14 +3,20 @@
 #include "light.h"
 #include "material.h"
 #include "occlusion.h"
+#include "scene.h"
 
 namespace sh_baker {
 
-Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
-                      std::mt19937& rng, Eigen::Vector3f throughput) {
+namespace {
+
+Eigen::Vector3f TracePath(const TraceConfig& config, const Ray& ray, int depth,
+                          std::mt19937& rng, Eigen::Vector3f throughput,
+                          bool include_sky) {
   // Hard depth limit to prevent infinite recursion, but we rely on RR for
   // unbiased early termination.
-  if (depth > config.max_depth) return Eigen::Vector3f::Zero();
+  if (depth > config.max_depth) {
+    return Eigen::Vector3f::Zero();
+  }
 
   Ray visibility_ray = ray;
   visibility_ray.tnear = 0.001f;
@@ -18,11 +24,13 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
       FindOcclusion(config.rtc_scene, config.scene.materials, visibility_ray);
 
   if (!surface.has_value()) {
-    // Sky is handled by NEE (EvaluateLights() and
-    // EvaluateIncomingLightSamples()), so we excluded it here to avoid double
-    // counting.
+    // The ray escaped. NEE samples only the scene's lights, never the sky, so
+    // the sky's radiance is added here, by escape, and nowhere else.
     if (depth == 0) {
       config.on_direct_hit_sky_fn();
+    }
+    if (include_sky && config.scene.environment) {
+      return EvaluateEnvironment(*config.scene.environment, ray.direction);
     }
     return Eigen::Vector3f::Zero();
   }
@@ -42,8 +50,8 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
     // Transmission
     Ray transmission_ray = NewPastOcclusion(ray, surface->hit);
     Eigen::Vector3f transmission =
-        Trace(config, transmission_ray, depth + 1, rng,
-              throughput * (1.0f - surface->alpha));
+        TracePath(config, transmission_ray, depth + 1, rng,
+                  throughput * (1.0f - surface->alpha), include_sky);
 
     color += (1.0f - surface->alpha) * transmission;
     if (surface->alpha < 0.1f) {
@@ -111,7 +119,8 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
     next_throughput /= q;
   }
   Eigen::Vector3f incoming =
-      Trace(config, next_ray, depth + 1, rng, next_throughput);
+      TracePath(config, next_ray, depth + 1, rng, next_throughput,
+                /*include_sky=*/true);
   Eigen::Vector3f L_indirect =
       incoming.cwiseProduct(brdf) * (cosine_term / sample.pdf);
 
@@ -127,6 +136,13 @@ Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
   color += surface->alpha * L_indirect;
 
   return color;
+}
+
+}  // namespace
+
+Eigen::Vector3f Trace(const TraceConfig& config, const Ray& ray, int depth,
+                      std::mt19937& rng, Eigen::Vector3f throughput) {
+  return TracePath(config, ray, depth, rng, throughput, !config.indirect_only);
 }
 
 }  // namespace sh_baker

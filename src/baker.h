@@ -17,7 +17,7 @@ struct BakeConfig {
   int samples = 128;           // Rays per texel
   int bounces = 5;             // Max path depth
   int num_light_samples = 1;   // Number of light samples for NEE
-  bool indirect_only = false;  // Skip direct lighting at baked points.
+  bool indirect_only = false;  // Skip direct lighting, including sky, at baked points.
   // Max per-sample indirect luminance; over-bright samples are scaled down to
   // suppress fireflies. <= 0 disables (unbiased).
   float firefly_clamp = 0.0f;
@@ -28,7 +28,6 @@ struct BakeConfig {
   // cost, and no early stop for zero-variance points such as ones lit only by
   // unshadowed point lights).
   float confidence_threshold = 0.01f;
-
   // Optional progress report: called with (points finished, total points),
   // where finished counts points baked or skipped as invalid. Calls come from
   // bake worker threads but never overlap; `done` strictly increases, at most

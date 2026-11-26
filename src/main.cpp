@@ -26,7 +26,7 @@ DEFINE_double(
     "more samples / less noise. <= 0 disables adaptive stopping, so "
     "every texel takes exactly --samples rays.");
 DEFINE_bool(indirect_only, false,
-            "Bake only bounced light from punctual and area lights.");
+            "Bake only bounced light from scene lights and the sky.");
 DEFINE_int32(dilation, 16, "Number of dilation passes.");
 DEFINE_string(output, "",
               "Folder to contain the output lightmap and glTF file.");
